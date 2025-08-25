@@ -31,30 +31,31 @@ jobs:
 
       - name: Build Envoy AMD64
         run: |
-          # Envoy için resmi build yöntemi
+          # Use official Envoy build environment
+          mkdir -p releases/${{ github.event.inputs.version }}
+          
+          # Clone Envoy repository
+          git clone https://github.com/envoyproxy/envoy.git
+          cd envoy
+          git checkout ${{ github.event.inputs.version }}
+          
+          # Use official Envoy Docker build image
           docker run --rm \
-            -v $(pwd)/releases:/output \
+            -v $(pwd):/envoy \
+            -v $(pwd)/../releases/${{ github.event.inputs.version }}:/output \
             -w /envoy \
-            ubuntu:22.04 bash -c "
-              apt-get update && apt-get install -y git build-essential curl python3 python3-pip
-              git clone https://github.com/envoyproxy/envoy.git .
-              git checkout ${{ github.event.inputs.version }}
-              
-              # Install Bazel
-              curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel.gpg
-              mv bazel.gpg /etc/apt/trusted.gpg.d/
-              echo 'deb [arch=amd64] https://storage.googleapis.com/bazel-apt stable jdk1.8' > /etc/apt/sources.list.d/bazel.list
-              apt-get update && apt-get install -y bazel
-              
-              # Build Envoy without contrib
+            envoyproxy/envoy-build-ubuntu:mobile-a633eaf7c682374de324e01dc56f5ee7cf661c6e \
+            bash -c "
+              # Build optimized static binary
               bazel build -c opt --copt=-g0 --strip=always //source/exe:envoy-static
               
-              # Copy binary and calculate hash
-              mkdir -p /output/${{ github.event.inputs.version }}
-              cp bazel-bin/source/exe/envoy-static /output/${{ github.event.inputs.version }}/envoy-linux-amd64
-              cd /output/${{ github.event.inputs.version }}
-              sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
+              # Copy binary to output
+              cp bazel-bin/source/exe/envoy-static /output/envoy-linux-amd64
             "
+          
+          # Calculate hash
+          cd releases/${{ github.event.inputs.version }}
+          sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
 
       - name: Upload AMD64 artifacts
         uses: actions/upload-artifact@v4
@@ -80,7 +81,14 @@ jobs:
           cd envoy
           git checkout ${{ github.event.inputs.version }}
           
-          # Build with Bazel (without contrib)
+          # Install bazelisk if not available
+          if ! command -v bazel &> /dev/null; then
+              curl -Lo bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-arm64
+              chmod +x bazel
+              sudo mv bazel /usr/local/bin/
+          fi
+          
+          # Build with official build script (optimized static binary)
           bazel build -c opt --copt=-g0 --strip=always //source/exe:envoy-static
           
           # Copy binary
