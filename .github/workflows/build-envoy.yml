@@ -1,10 +1,10 @@
-name: Build Envoy Binary
+name: Download Envoy Binary
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Envoy version to build (e.g., v1.30.0)'
+        description: 'Envoy version to download (e.g., 1.34.2)'
         required: true
         type: string
 
@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-amd64:
+  download-binaries:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,79 +26,89 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Envoy AMD64
+      - name: Download Envoy Binaries
         run: |
-          # Use official Envoy build environment
-          mkdir -p releases/${{ github.event.inputs.version }}
+          # Fetch Envoy versions JSON
+          curl -o envoy-versions.json https://archive.tetratelabs.io/envoy/envoy-versions.json
           
-          # Clone Envoy repository
-          git clone https://github.com/envoyproxy/envoy.git
-          cd envoy
-          git checkout ${{ github.event.inputs.version }}
+          # Extract download URLs and checksums using Python
+          python3 << 'EOF'
+          import json
+          import os
           
-          # Use official Envoy build script with Docker
-          ./ci/run_envoy_docker.sh './ci/do_ci.sh bazel.release.server_only'
+          version = "${{ github.event.inputs.version }}"
           
-          # Copy built binary to releases
-          mkdir -p ../releases/${{ github.event.inputs.version }}
-          cp bazel-bin/source/exe/envoy-static ../releases/${{ github.event.inputs.version }}/envoy-linux-amd64
+          with open('envoy-versions.json', 'r') as f:
+              data = json.load(f)
           
-          # Calculate hash
-          cd ../releases/${{ github.event.inputs.version }}
-          sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
+          if version not in data['versions']:
+              print(f"Version {version} not found in available versions")
+              exit(1)
+          
+          version_data = data['versions'][version]
+          
+          # Get URLs for Linux AMD64 and ARM64
+          amd64_url = version_data['tarballs'].get('linux/amd64')
+          arm64_url = version_data['tarballs'].get('linux/arm64')
+          
+          if not amd64_url or not arm64_url:
+              print(f"Missing binaries for version {version}")
+              exit(1)
+          
+          # Get checksums
+          amd64_filename = amd64_url.split('/')[-1]
+          arm64_filename = arm64_url.split('/')[-1]
+          amd64_checksum = data['sha256sums'].get(amd64_filename, '')
+          arm64_checksum = data['sha256sums'].get(arm64_filename, '')
+          
+          # Save to environment variables
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f"AMD64_URL={amd64_url}\n")
+              f.write(f"ARM64_URL={arm64_url}\n")
+              f.write(f"AMD64_CHECKSUM={amd64_checksum}\n")
+              f.write(f"ARM64_CHECKSUM={arm64_checksum}\n")
+              f.write(f"RELEASE_DATE={version_data['releaseDate']}\n")
+          EOF
 
-      - name: Upload AMD64 artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: envoy-amd64-${{ github.event.inputs.version }}
-          path: releases/${{ github.event.inputs.version }}/envoy-linux-amd64*
-
-  build-arm64:
-    runs-on: self-hosted
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build Envoy ARM64
+      - name: Download and Extract Binaries
         run: |
-          # Build on self-hosted ARM64 machine
-          mkdir -p releases/${{ github.event.inputs.version }}
-          cd /tmp
+          mkdir -p releases/v${{ github.event.inputs.version }}
+          cd releases/v${{ github.event.inputs.version }}
           
-          # Clone Envoy repository
+          # Download AMD64 tarball
+          curl -L -o envoy-amd64.tar.xz "$AMD64_URL"
+          
+          # Download ARM64 tarball  
+          curl -L -o envoy-arm64.tar.xz "$ARM64_URL"
+          
+          # Verify checksums
+          echo "$AMD64_CHECKSUM  envoy-amd64.tar.xz" | sha256sum -c
+          echo "$ARM64_CHECKSUM  envoy-arm64.tar.xz" | sha256sum -c
+          
+          # Extract binaries
+          tar -xf envoy-amd64.tar.xz --strip-components=1 envoy/bin/envoy
+          mv envoy/bin/envoy envoy-linux-amd64
           rm -rf envoy
-          git clone https://github.com/envoyproxy/envoy.git
-          cd envoy
-          git checkout ${{ github.event.inputs.version }}
           
-          # Install bazelisk if not available
-          if ! command -v bazel &> /dev/null; then
-              curl -Lo bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-arm64
-              chmod +x bazel
-              sudo mv bazel /usr/local/bin/
-          fi
+          tar -xf envoy-arm64.tar.xz --strip-components=1 envoy/bin/envoy
+          mv envoy/bin/envoy envoy-linux-arm64
+          rm -rf envoy
           
-          # Build with official build script (optimized static binary)
-          bazel build -c opt --copt=-g0 --strip=always //source/exe:envoy-static
+          # Clean up tarballs
+          rm envoy-amd64.tar.xz envoy-arm64.tar.xz
           
-          # Copy binary
-          cp bazel-bin/source/exe/envoy-static ${{ github.workspace }}/releases/${{ github.event.inputs.version }}/envoy-linux-arm64
-          
-          # Calculate hash
-          cd ${{ github.workspace }}/releases/${{ github.event.inputs.version }}
+          # Generate checksums for binaries
+          sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
           sha256sum envoy-linux-arm64 > envoy-linux-arm64.sha256
 
-      - name: Upload ARM64 artifacts  
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: envoy-arm64-${{ github.event.inputs.version }}
-          path: releases/${{ github.event.inputs.version }}/envoy-linux-arm64*
+          name: envoy-binaries-v${{ github.event.inputs.version }}
+          path: releases/v${{ github.event.inputs.version }}/*
 
   update-index:
-    needs: [build-amd64, build-arm64]
+    needs: download-binaries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -106,35 +116,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
-
-      - name: Move artifacts to releases
-        run: |
-          mkdir -p releases/${{ github.event.inputs.version }}
-          mv envoy-amd64-${{ github.event.inputs.version }}/* releases/${{ github.event.inputs.version }}/
-          mv envoy-arm64-${{ github.event.inputs.version }}/* releases/${{ github.event.inputs.version }}/
+        with:
+          name: envoy-binaries-v${{ github.event.inputs.version }}
+          path: releases/v${{ github.event.inputs.version }}
 
       - name: Update index.json
         run: |
-          # Read hashes
-          AMD64_SHA256=$(cat releases/${{ github.event.inputs.version }}/envoy-linux-amd64.sha256 | cut -d' ' -f1)
-          ARM64_SHA256=$(cat releases/${{ github.event.inputs.version }}/envoy-linux-arm64.sha256 | cut -d' ' -f1)
+          # Read hashes from downloaded artifacts
+          AMD64_SHA256=$(cat releases/v${{ github.event.inputs.version }}/envoy-linux-amd64.sha256 | cut -d' ' -f1)
+          ARM64_SHA256=$(cat releases/v${{ github.event.inputs.version }}/envoy-linux-arm64.sha256 | cut -d' ' -f1)
           
           # Update JSON
           cat > temp_release.json << EOF
           {
-            "version": "${{ github.event.inputs.version }}",
+            "version": "v${{ github.event.inputs.version }}",
             "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "binaries": [
               {
                 "arch": "linux-amd64",
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/envoy-linux-amd64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/envoy-linux-amd64",
                 "sha256": "$AMD64_SHA256"
               },
               {
                 "arch": "linux-arm64", 
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/envoy-linux-arm64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/envoy-linux-arm64",
                 "sha256": "$ARM64_SHA256"
               }
             ]
@@ -178,12 +185,12 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Envoy ${{ github.event.inputs.version }}
+          tag_name: v${{ github.event.inputs.version }}
+          name: Envoy v${{ github.event.inputs.version }}
           files: |
-            releases/${{ github.event.inputs.version }}/envoy-linux-amd64
-            releases/${{ github.event.inputs.version }}/envoy-linux-arm64
-            releases/${{ github.event.inputs.version }}/*.sha256
+            releases/v${{ github.event.inputs.version }}/envoy-linux-amd64
+            releases/v${{ github.event.inputs.version }}/envoy-linux-arm64
+            releases/v${{ github.event.inputs.version }}/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -192,7 +199,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add index.json
-          git commit -m "Add Envoy ${{ github.event.inputs.version }}" || exit 0
+          git commit -m "Add Envoy v${{ github.event.inputs.version }}" || exit 0
           git push
 
   deploy:
