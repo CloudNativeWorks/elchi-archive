@@ -39,22 +39,15 @@ jobs:
           cd envoy
           git checkout ${{ github.event.inputs.version }}
           
-          # Use official Envoy Docker build image
-          docker run --rm \
-            -v $(pwd):/envoy \
-            -v $(pwd)/../releases/${{ github.event.inputs.version }}:/output \
-            -w /envoy \
-            envoyproxy/envoy-build-ubuntu:mobile-a633eaf7c682374de324e01dc56f5ee7cf661c6e \
-            bash -c "
-              # Build optimized static binary
-              bazel build -c opt --copt=-g0 --strip=always //source/exe:envoy-static
-              
-              # Copy binary to output
-              cp bazel-bin/source/exe/envoy-static /output/envoy-linux-amd64
-            "
+          # Use official Envoy build script with Docker
+          ./ci/run_envoy_docker.sh './ci/do_ci.sh bazel.release.server_only'
+          
+          # Copy built binary to releases
+          mkdir -p ../releases/${{ github.event.inputs.version }}
+          cp bazel-bin/source/exe/envoy-static ../releases/${{ github.event.inputs.version }}/envoy-linux-amd64
           
           # Calculate hash
-          cd releases/${{ github.event.inputs.version }}
+          cd ../releases/${{ github.event.inputs.version }}
           sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
 
       - name: Upload AMD64 artifacts
