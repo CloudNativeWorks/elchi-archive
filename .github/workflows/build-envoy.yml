@@ -85,14 +85,14 @@ jobs:
           echo "$AMD64_CHECKSUM  envoy-amd64.tar.xz" | sha256sum -c
           echo "$ARM64_CHECKSUM  envoy-arm64.tar.xz" | sha256sum -c
           
-          # Extract binaries
-          tar -xf envoy-amd64.tar.xz bin/envoy
-          mv bin/envoy envoy-linux-amd64
-          rm -rf bin
+          # Extract binaries dynamically
+          tar -xf envoy-amd64.tar.xz
+          find . -name envoy -type f -exec mv {} envoy-linux-amd64 \;
+          rm -rf envoy-v*
           
-          tar -xf envoy-arm64.tar.xz bin/envoy
-          mv bin/envoy envoy-linux-arm64
-          rm -rf bin
+          tar -xf envoy-arm64.tar.xz
+          find . -name envoy -type f -exec mv {} envoy-linux-arm64 \;
+          rm -rf envoy-v*
           
           # Clean up tarballs
           rm envoy-amd64.tar.xz envoy-arm64.tar.xz
