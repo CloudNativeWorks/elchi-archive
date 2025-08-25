@@ -1,0 +1,216 @@
+name: Build Envoy Binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Envoy version to build (e.g., v1.30.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Envoy AMD64
+        run: |
+          # Envoy için resmi build yöntemi
+          docker run --rm \
+            -v $(pwd)/releases:/output \
+            -w /envoy \
+            ubuntu:22.04 bash -c "
+              apt-get update && apt-get install -y git build-essential curl python3 python3-pip
+              git clone https://github.com/envoyproxy/envoy.git .
+              git checkout ${{ github.event.inputs.version }}
+              
+              # Install Bazel
+              curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel.gpg
+              mv bazel.gpg /etc/apt/trusted.gpg.d/
+              echo 'deb [arch=amd64] https://storage.googleapis.com/bazel-apt stable jdk1.8' > /etc/apt/sources.list.d/bazel.list
+              apt-get update && apt-get install -y bazel
+              
+              # Build Envoy without contrib
+              bazel build -c opt --copt=-g0 --strip=always //source/exe:envoy-static
+              
+              # Copy binary and calculate hash
+              mkdir -p /output/${{ github.event.inputs.version }}
+              cp bazel-bin/source/exe/envoy-static /output/${{ github.event.inputs.version }}/envoy-linux-amd64
+              cd /output/${{ github.event.inputs.version }}
+              sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
+            "
+
+      - name: Upload AMD64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: envoy-amd64-${{ github.event.inputs.version }}
+          path: releases/${{ github.event.inputs.version }}/envoy-linux-amd64*
+
+  build-arm64:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Envoy ARM64
+        run: |
+          # Build on self-hosted ARM64 machine
+          mkdir -p releases/${{ github.event.inputs.version }}
+          cd /tmp
+          
+          # Clone Envoy repository
+          rm -rf envoy
+          git clone https://github.com/envoyproxy/envoy.git
+          cd envoy
+          git checkout ${{ github.event.inputs.version }}
+          
+          # Build with Bazel (without contrib)
+          bazel build -c opt --copt=-g0 --strip=always //source/exe:envoy-static
+          
+          # Copy binary
+          cp bazel-bin/source/exe/envoy-static ${{ github.workspace }}/releases/${{ github.event.inputs.version }}/envoy-linux-arm64
+          
+          # Calculate hash
+          cd ${{ github.workspace }}/releases/${{ github.event.inputs.version }}
+          sha256sum envoy-linux-arm64 > envoy-linux-arm64.sha256
+
+      - name: Upload ARM64 artifacts  
+        uses: actions/upload-artifact@v4
+        with:
+          name: envoy-arm64-${{ github.event.inputs.version }}
+          path: releases/${{ github.event.inputs.version }}/envoy-linux-arm64*
+
+  update-index:
+    needs: [build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Move artifacts to releases
+        run: |
+          mkdir -p releases/${{ github.event.inputs.version }}
+          mv envoy-amd64-${{ github.event.inputs.version }}/* releases/${{ github.event.inputs.version }}/
+          mv envoy-arm64-${{ github.event.inputs.version }}/* releases/${{ github.event.inputs.version }}/
+
+      - name: Update index.json
+        run: |
+          # Read hashes
+          AMD64_SHA256=$(cat releases/${{ github.event.inputs.version }}/envoy-linux-amd64.sha256 | cut -d' ' -f1)
+          ARM64_SHA256=$(cat releases/${{ github.event.inputs.version }}/envoy-linux-arm64.sha256 | cut -d' ' -f1)
+          
+          # Update JSON
+          cat > temp_release.json << EOF
+          {
+            "version": "${{ github.event.inputs.version }}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "binaries": [
+              {
+                "arch": "linux-amd64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/envoy-linux-amd64",
+                "sha256": "$AMD64_SHA256"
+              },
+              {
+                "arch": "linux-arm64", 
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/envoy-linux-arm64",
+                "sha256": "$ARM64_SHA256"
+              }
+            ]
+          }
+          EOF
+          
+          # Update existing index.json
+          python3 << 'EOF'
+          import json
+          
+          # Read existing index
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+          
+          # Read new release
+          with open('temp_release.json', 'r') as f:
+              new_release = json.load(f)
+          
+          # Update if same version exists, otherwise add
+          existing = False
+          for i, release in enumerate(index['releases']):
+              if release['version'] == new_release['version']:
+                  index['releases'][i] = new_release
+                  existing = True
+                  break
+          
+          if not existing:
+              index['releases'].append(new_release)
+          
+          # Sort by version (newest to oldest)
+          index['releases'].sort(key=lambda x: x['version'], reverse=True)
+          
+          # Save
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Envoy ${{ github.event.inputs.version }}
+          files: |
+            releases/${{ github.event.inputs.version }}/envoy-linux-amd64
+            releases/${{ github.event.inputs.version }}/envoy-linux-arm64
+            releases/${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Envoy ${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
