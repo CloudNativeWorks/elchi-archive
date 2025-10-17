@@ -21,11 +21,19 @@ jobs:
   build-amd64:
     runs-on: ubuntu-latest
     steps:
+      - name: Normalize version
+        id: normalize
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          # Remove 'v' prefix if present
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Checkout Coraza Proxy WASM
         uses: actions/checkout@v4
         with:
           repository: corazawaf/coraza-proxy-wasm
-          ref: ${{ github.event.inputs.version }}
+          ref: ${{ steps.normalize.outputs.version }}
           path: coraza-proxy-wasm
 
       - name: Setup Go
@@ -54,15 +62,23 @@ jobs:
             coraza-proxy-wasm/coraza-amd64.wasm.sha256
 
   build-arm64:
-    runs-on: [self-hosted]
+    runs-on: self-hosted
     container:
       image: golang:1.23-bookworm
     steps:
+      - name: Normalize version
+        id: normalize
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          # Remove 'v' prefix if present
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Checkout Coraza Proxy WASM
         uses: actions/checkout@v4
         with:
           repository: corazawaf/coraza-proxy-wasm
-          ref: ${{ github.event.inputs.version }}
+          ref: ${{ steps.normalize.outputs.version }}
           path: coraza-proxy-wasm
 
       - name: Install dependencies
