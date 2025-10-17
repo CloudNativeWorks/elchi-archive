@@ -63,8 +63,6 @@ jobs:
 
   build-arm64:
     runs-on: self-hosted
-    container:
-      image: golang:1.23-bookworm
     steps:
       - name: Normalize version
         id: normalize
@@ -81,23 +79,21 @@ jobs:
           ref: ${{ steps.normalize.outputs.version }}
           path: coraza-proxy-wasm
 
-      - name: Install dependencies
+      - name: Build in Docker
         run: |
-          apt-get update
-          apt-get install -y wget curl
-
-      - name: Install TinyGo 0.34.0
-        run: |
-          wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo_0.34.0_arm64.deb
-          dpkg -i tinygo_0.34.0_arm64.deb || true
-          apt-get install -f -y
-
-      - name: Build WASM (ARM64)
-        run: |
-          cd coraza-proxy-wasm
-          go run mage.go build
-          mv build/main.wasm coraza-arm64.wasm
-          sha256sum coraza-arm64.wasm > coraza-arm64.wasm.sha256
+          docker run --rm \
+            -v $(pwd)/coraza-proxy-wasm:/workspace \
+            -w /workspace \
+            golang:1.23-bookworm \
+            bash -c "
+              apt-get update && apt-get install -y wget && \
+              wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo_0.34.0_arm64.deb && \
+              dpkg -i tinygo_0.34.0_arm64.deb || true && \
+              apt-get install -f -y && \
+              go run mage.go build && \
+              mv build/main.wasm coraza-arm64.wasm && \
+              sha256sum coraza-arm64.wasm > coraza-arm64.wasm.sha256
+            "
 
       - name: Upload ARM64 artifact
         uses: actions/upload-artifact@v4
