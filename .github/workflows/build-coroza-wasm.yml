@@ -1,0 +1,218 @@
+name: Build Coraza WASM
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Coraza Proxy WASM version to build (e.g., 0.6.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "coroza-wasm-build"
+  cancel-in-progress: false
+
+jobs:
+  build-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Coraza Proxy WASM
+        uses: actions/checkout@v4
+        with:
+          repository: corazawaf/coraza-proxy-wasm
+          ref: v${{ github.event.inputs.version }}
+          path: coraza-proxy-wasm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install TinyGo 0.34.0
+        run: |
+          wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo_0.34.0_amd64.deb
+          sudo dpkg -i tinygo_0.34.0_amd64.deb
+
+      - name: Build WASM (AMD64)
+        run: |
+          cd coraza-proxy-wasm
+          go run mage.go build
+          mv build/main.wasm coraza-proxy-wasm-amd64.wasm
+          sha256sum coraza-proxy-wasm-amd64.wasm > coraza-proxy-wasm-amd64.wasm.sha256
+
+      - name: Upload AMD64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coraza-wasm-amd64
+          path: |
+            coraza-proxy-wasm/coraza-proxy-wasm-amd64.wasm
+            coraza-proxy-wasm/coraza-proxy-wasm-amd64.wasm.sha256
+
+  build-arm64:
+    runs-on: [self-hosted, linux, arm64]
+    container:
+      image: golang:1.23-bookworm
+    steps:
+      - name: Checkout Coraza Proxy WASM
+        uses: actions/checkout@v4
+        with:
+          repository: corazawaf/coraza-proxy-wasm
+          ref: v${{ github.event.inputs.version }}
+          path: coraza-proxy-wasm
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y wget curl
+
+      - name: Install TinyGo 0.34.0
+        run: |
+          wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo_0.34.0_arm64.deb
+          dpkg -i tinygo_0.34.0_arm64.deb || true
+          apt-get install -f -y
+
+      - name: Build WASM (ARM64)
+        run: |
+          cd coraza-proxy-wasm
+          go run mage.go build
+          mv build/main.wasm coraza-proxy-wasm-arm64.wasm
+          sha256sum coraza-proxy-wasm-arm64.wasm > coraza-proxy-wasm-arm64.wasm.sha256
+
+      - name: Upload ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coraza-wasm-arm64
+          path: |
+            coraza-proxy-wasm/coraza-proxy-wasm-arm64.wasm
+            coraza-proxy-wasm/coraza-proxy-wasm-arm64.wasm.sha256
+
+  update-index:
+    needs: [build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout archive repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download AMD64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coraza-wasm-amd64
+          path: releases/coraza-v${{ github.event.inputs.version }}
+
+      - name: Download ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coraza-wasm-arm64
+          path: releases/coraza-v${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        run: |
+          # Read hashes
+          AMD64_SHA256=$(cat releases/coraza-v${{ github.event.inputs.version }}/coraza-amd64.wasm.sha256 | cut -d' ' -f1)
+          ARM64_SHA256=$(cat releases/coraza-v${{ github.event.inputs.version }}/coraza-arm64.wasm.sha256 | cut -d' ' -f1)
+
+          # Create new Coraza release entry
+          cat > temp_coroza_release.json << EOF
+          {
+            "version": "v${{ github.event.inputs.version }}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "binaries": [
+              {
+                "arch": "wasm-amd64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-v${{ github.event.inputs.version }}/coroza-amd64.wasm",
+                "sha256": "$AMD64_SHA256"
+              },
+              {
+                "arch": "wasm-arm64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-v${{ github.event.inputs.version }}/coroza-arm64.wasm",
+                "sha256": "$ARM64_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with separate Coroza releases section
+          python3 << 'EOF'
+          import json
+
+          # Read existing index
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+
+          # Ensure coroza_releases key exists
+          if 'coroza_releases' not in index:
+              index['coroza_releases'] = []
+
+          # Read new Coroza release
+          with open('temp_coroza_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          # Update if same version exists, otherwise add
+          existing = False
+          for i, release in enumerate(index['coroza_releases']):
+              if release['version'] == new_release['version']:
+                  index['coroza_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['coroza_releases'].append(new_release)
+
+          # Sort by version (newest to oldest)
+          index['coroza_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          # Save
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: coroza-v${{ github.event.inputs.version }}
+          name: Coroza WASM v${{ github.event.inputs.version }}
+          files: |
+            releases/coroza-v${{ github.event.inputs.version }}/coroza-amd64.wasm
+            releases/coroza-v${{ github.event.inputs.version }}/coroza-arm64.wasm
+            releases/coroza-v${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Coroza WASM v${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
