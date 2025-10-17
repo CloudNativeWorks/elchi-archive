@@ -3,10 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Envoy Binary Archive</title>
+    <title>Binary Archive - Envoy & Coraza WASM</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; }
         .container { max-width: 1200px; margin: 0 auto; }
+        .tabs { display: flex; border-bottom: 2px solid #e1e4e8; margin-bottom: 20px; }
+        .tab { padding: 12px 24px; cursor: pointer; border: none; background: none; font-size: 16px; font-weight: 500; color: #656d76; transition: all 0.2s; }
+        .tab:hover { color: #0969da; }
+        .tab.active { color: #0969da; border-bottom: 2px solid #0969da; margin-bottom: -2px; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
         .release { border: 1px solid #e1e4e8; border-radius: 6px; margin: 20px 0; padding: 20px; }
         .version { font-size: 24px; font-weight: 600; color: #0969da; margin-bottom: 10px; }
         .binary { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f6f8fa; }
@@ -15,45 +21,78 @@
         .download { background: #238636; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; }
         .hash { font-family: monospace; font-size: 12px; color: #656d76; margin-top: 5px; }
         .loading { text-align: center; padding: 40px; }
+        .date { color: #656d76; font-size: 14px; margin-bottom: 15px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Envoy Binary Archive</h1>
-        <p>Pre-compiled Envoy binaries for Linux AMD64 and ARM64 architectures.</p>
-        
-        <div id="releases" class="loading">Loading releases...</div>
+        <h1>Binary Archive</h1>
+        <p>Pre-compiled binaries for Envoy and Coraza WASM</p>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('envoy')">Envoy Binaries</button>
+            <button class="tab" onclick="switchTab('coroza')">Coroza WASM</button>
+        </div>
+
+        <div id="envoy-content" class="tab-content active">
+            <h2>Envoy Binaries</h2>
+            <p>Pre-compiled Envoy binaries for Linux AMD64 and ARM64 architectures.</p>
+            <div id="envoy-releases" class="loading">Loading Envoy releases...</div>
+        </div>
+
+        <div id="coroza-content" class="tab-content">
+            <h2>Coroza Proxy WASM</h2>
+            <p>Compiled WASM modules for Coraza Web Application Firewall.</p>
+            <div id="coroza-releases" class="loading">Loading Coroza WASM releases...</div>
+        </div>
     </div>
 
     <script>
+        function switchTab(tab) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(tab + '-content').classList.add('active');
+        }
+
+        function renderReleases(releases, containerId, type) {
+            const container = document.getElementById(containerId);
+
+            if (!releases || releases.length === 0) {
+                container.innerHTML = '<p>No releases available yet.</p>';
+                return;
+            }
+
+            container.innerHTML = releases.map(release => `
+                <div class="release">
+                    <div class="version">${release.version}</div>
+                    <div class="date">Released: ${new Date(release.date).toLocaleDateString()}</div>
+                    ${release.binaries.map(binary => `
+                        <div class="binary">
+                            <div>
+                                <div class="arch">${binary.arch}</div>
+                                <div class="hash">SHA256: ${binary.sha256}</div>
+                            </div>
+                            <a href="${binary.download_url}" class="download">Download</a>
+                        </div>
+                    `).join('')}
+                </div>
+            `).join('');
+        }
+
+        // Load data
         fetch('index.json')
             .then(response => response.json())
             .then(data => {
-                const container = document.getElementById('releases');
-                
-                if (data.releases.length === 0) {
-                    container.innerHTML = '<p>No releases available yet.</p>';
-                    return;
-                }
-                
-                container.innerHTML = data.releases.map(release => `
-                    <div class="release">
-                        <div class="version">${release.version}</div>
-                        <div class="date">Released: ${new Date(release.date).toLocaleDateString()}</div>
-                        ${release.binaries.map(binary => `
-                            <div class="binary">
-                                <div>
-                                    <div class="arch">${binary.arch}</div>
-                                    <div class="hash">SHA256: ${binary.sha256}</div>
-                                </div>
-                                <a href="${binary.download_url}" class="download">Download</a>
-                            </div>
-                        `).join('')}
-                    </div>
-                `).join('');
+                renderReleases(data.releases, 'envoy-releases', 'envoy');
+                renderReleases(data.coroza_releases, 'coroza-releases', 'coroza');
             })
             .catch(error => {
-                document.getElementById('releases').innerHTML = '<p>Error loading releases.</p>';
+                document.getElementById('envoy-releases').innerHTML = '<p>Error loading releases.</p>';
+                document.getElementById('coroza-releases').innerHTML = '<p>Error loading releases.</p>';
                 console.error('Error:', error);
             });
     </script>
