@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Coraza Proxy WASM version to build (e.g., 0.6.0)'
+        description: 'Coraza Proxy WASM version tag to build (e.g., v0.6.0)'
         required: true
         type: string
 
@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: corazawaf/coraza-proxy-wasm
-          ref: v${{ github.event.inputs.version }}
+          ref: ${{ github.event.inputs.version }}
           path: coraza-proxy-wasm
 
       - name: Setup Go
@@ -42,19 +42,19 @@ jobs:
         run: |
           cd coraza-proxy-wasm
           go run mage.go build
-          mv build/main.wasm coraza-proxy-wasm-amd64.wasm
-          sha256sum coraza-proxy-wasm-amd64.wasm > coraza-proxy-wasm-amd64.wasm.sha256
+          mv build/main.wasm coraza-amd64.wasm
+          sha256sum coraza-amd64.wasm > coraza-amd64.wasm.sha256
 
       - name: Upload AMD64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: coraza-wasm-amd64
           path: |
-            coraza-proxy-wasm/coraza-proxy-wasm-amd64.wasm
-            coraza-proxy-wasm/coraza-proxy-wasm-amd64.wasm.sha256
+            coraza-proxy-wasm/coraza-amd64.wasm
+            coraza-proxy-wasm/coraza-amd64.wasm.sha256
 
   build-arm64:
-    runs-on: [self-hosted, linux, arm64]
+    runs-on: [self-hosted]
     container:
       image: golang:1.23-bookworm
     steps:
@@ -62,7 +62,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: corazawaf/coraza-proxy-wasm
-          ref: v${{ github.event.inputs.version }}
+          ref: ${{ github.event.inputs.version }}
           path: coraza-proxy-wasm
 
       - name: Install dependencies
@@ -80,16 +80,16 @@ jobs:
         run: |
           cd coraza-proxy-wasm
           go run mage.go build
-          mv build/main.wasm coraza-proxy-wasm-arm64.wasm
-          sha256sum coraza-proxy-wasm-arm64.wasm > coraza-proxy-wasm-arm64.wasm.sha256
+          mv build/main.wasm coraza-arm64.wasm
+          sha256sum coraza-arm64.wasm > coraza-arm64.wasm.sha256
 
       - name: Upload ARM64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: coraza-wasm-arm64
           path: |
-            coraza-proxy-wasm/coraza-proxy-wasm-arm64.wasm
-            coraza-proxy-wasm/coraza-proxy-wasm-arm64.wasm.sha256
+            coraza-proxy-wasm/coraza-arm64.wasm
+            coraza-proxy-wasm/coraza-arm64.wasm.sha256
 
   update-index:
     needs: [build-amd64, build-arm64]
@@ -104,34 +104,34 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: coraza-wasm-amd64
-          path: releases/coraza-v${{ github.event.inputs.version }}
+          path: releases/coroza-${{ github.event.inputs.version }}
 
       - name: Download ARM64 artifact
         uses: actions/download-artifact@v4
         with:
           name: coraza-wasm-arm64
-          path: releases/coraza-v${{ github.event.inputs.version }}
+          path: releases/coroza-${{ github.event.inputs.version }}
 
       - name: Update index.json
         run: |
           # Read hashes
-          AMD64_SHA256=$(cat releases/coraza-v${{ github.event.inputs.version }}/coraza-amd64.wasm.sha256 | cut -d' ' -f1)
-          ARM64_SHA256=$(cat releases/coraza-v${{ github.event.inputs.version }}/coraza-arm64.wasm.sha256 | cut -d' ' -f1)
+          AMD64_SHA256=$(cat releases/coroza-${{ github.event.inputs.version }}/coraza-amd64.wasm.sha256 | cut -d' ' -f1)
+          ARM64_SHA256=$(cat releases/coroza-${{ github.event.inputs.version }}/coraza-arm64.wasm.sha256 | cut -d' ' -f1)
 
-          # Create new Coraza release entry
+          # Create new Coroza release entry
           cat > temp_coroza_release.json << EOF
           {
-            "version": "v${{ github.event.inputs.version }}",
+            "version": "${{ github.event.inputs.version }}",
             "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "binaries": [
               {
                 "arch": "wasm-amd64",
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-v${{ github.event.inputs.version }}/coroza-amd64.wasm",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-${{ github.event.inputs.version }}/coraza-amd64.wasm",
                 "sha256": "$AMD64_SHA256"
               },
               {
                 "arch": "wasm-arm64",
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-v${{ github.event.inputs.version }}/coroza-arm64.wasm",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-${{ github.event.inputs.version }}/coraza-arm64.wasm",
                 "sha256": "$ARM64_SHA256"
               }
             ]
@@ -179,12 +179,12 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: coroza-v${{ github.event.inputs.version }}
-          name: Coroza WASM v${{ github.event.inputs.version }}
+          tag_name: coroza-${{ github.event.inputs.version }}
+          name: Coroza WASM ${{ github.event.inputs.version }}
           files: |
-            releases/coroza-v${{ github.event.inputs.version }}/coroza-amd64.wasm
-            releases/coroza-v${{ github.event.inputs.version }}/coroza-arm64.wasm
-            releases/coroza-v${{ github.event.inputs.version }}/*.sha256
+            releases/coroza-${{ github.event.inputs.version }}/coraza-amd64.wasm
+            releases/coroza-${{ github.event.inputs.version }}/coraza-arm64.wasm
+            releases/coroza-${{ github.event.inputs.version }}/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -193,7 +193,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add index.json
-          git commit -m "Add Coroza WASM v${{ github.event.inputs.version }}" || exit 0
+          git commit -m "Add Coroza WASM ${{ github.event.inputs.version }}" || exit 0
           git push
 
   deploy:
