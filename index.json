@@ -65,5 +65,22 @@
       ]
     }
   ],
-  "coroza_releases": []
+  "coroza_releases": [
+    {
+      "version": "v0.6.0",
+      "date": "2025-10-17T12:23:49Z",
+      "binaries": [
+        {
+          "arch": "wasm-amd64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/coroza-v0.6.0/coraza-amd64.wasm",
+          "sha256": "9e3bf6417170824173cbf9d9a7b9fa585d061019d51a7c828193785cfe7cca00"
+        },
+        {
+          "arch": "wasm-arm64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/coroza-v0.6.0/coraza-arm64.wasm",
+          "sha256": "0fe9bf2289ba1fbe836791d38eaee29d88b6c7b54ab080d1e036c8c0395dc7e7"
+        }
+      ]
+    }
+  ]
 }
