@@ -32,6 +32,7 @@
         <div class="tabs">
             <button class="tab active" onclick="switchTab('envoy')">Envoy Binaries</button>
             <button class="tab" onclick="switchTab('coroza')">Coroza WASM</button>
+            <button class="tab" onclick="switchTab('elchi')">Elchi Client</button>
         </div>
 
         <div id="envoy-content" class="tab-content active">
@@ -44,6 +45,12 @@
             <h2>Coroza Proxy WASM</h2>
             <p>Compiled WASM modules for Coraza Web Application Firewall.</p>
             <div id="coroza-releases" class="loading">Loading Coroza WASM releases...</div>
+        </div>
+
+        <div id="elchi-content" class="tab-content">
+            <h2>Elchi Client</h2>
+            <p>Pre-built Elchi Client binaries and installation scripts.</p>
+            <div id="elchi-releases" class="loading">Loading Elchi Client releases...</div>
         </div>
     </div>
 
@@ -70,13 +77,13 @@
                 <div class="release">
                     <div class="version">${release.version}</div>
                     <div class="date">Released: ${new Date(release.date).toLocaleDateString()}</div>
-                    ${release.binaries.map(binary => `
+                    ${(release.binaries || release.files || []).map(item => `
                         <div class="binary">
                             <div>
-                                <div class="arch">${binary.arch}</div>
-                                <div class="hash">SHA256: ${binary.sha256}</div>
+                                <div class="arch">${item.arch || item.name}</div>
+                                <div class="hash">SHA256: ${item.sha256}</div>
                             </div>
-                            <a href="${binary.download_url}" class="download">Download</a>
+                            <a href="${item.download_url}" class="download">Download</a>
                         </div>
                     `).join('')}
                 </div>
@@ -89,10 +96,12 @@
             .then(data => {
                 renderReleases(data.releases, 'envoy-releases', 'envoy');
                 renderReleases(data.coroza_releases, 'coroza-releases', 'coroza');
+                renderReleases(data.elchi_client_releases, 'elchi-releases', 'elchi');
             })
             .catch(error => {
                 document.getElementById('envoy-releases').innerHTML = '<p>Error loading releases.</p>';
                 document.getElementById('coroza-releases').innerHTML = '<p>Error loading releases.</p>';
+                document.getElementById('elchi-releases').innerHTML = '<p>Error loading releases.</p>';
                 console.error('Error:', error);
             });
     </script>

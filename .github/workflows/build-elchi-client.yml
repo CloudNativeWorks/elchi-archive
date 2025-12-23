@@ -1,0 +1,213 @@
+name: Download Elchi Client
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Elchi Client version to download (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-client-download"
+  cancel-in-progress: false
+
+jobs:
+  download-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Elchi Client Files
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          REPO="CloudNativeWorks/elchi-client"
+          BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+          # Create release directory
+          mkdir -p releases/elchi-client-${VERSION}
+          cd releases/elchi-client-${VERSION}
+
+          # Download binary
+          echo "Downloading elchi-client-linux-amd64..."
+          curl -L -o elchi-client-linux-amd64 "${BASE_URL}/elchi-client-linux-amd64"
+
+          # Download install script
+          echo "Downloading elchi-install.sh..."
+          curl -L -o elchi-install.sh "${BASE_URL}/elchi-install.sh"
+
+          # Download original checksums if available
+          curl -L -o elchi-client-linux-amd64.sha256.original "${BASE_URL}/elchi-client-linux-amd64.sha256" || true
+
+          # Generate our own checksums
+          sha256sum elchi-client-linux-amd64 > elchi-client-linux-amd64.sha256
+          sha256sum elchi-install.sh > elchi-install.sh.sha256
+
+          # Make files executable
+          chmod +x elchi-client-linux-amd64
+          chmod +x elchi-install.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: elchi-client-${{ github.event.inputs.version }}
+          path: releases/elchi-client-${{ github.event.inputs.version }}/*
+
+  update-index:
+    needs: download-files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: elchi-client-${{ github.event.inputs.version }}
+          path: releases/elchi-client-${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+
+          # Read checksums
+          BINARY_SHA256=$(cat releases/elchi-client-${VERSION}/elchi-client-linux-amd64.sha256 | cut -d' ' -f1)
+          SCRIPT_SHA256=$(cat releases/elchi-client-${VERSION}/elchi-install.sh.sha256 | cut -d' ' -f1)
+
+          # Create new Elchi Client release entry
+          cat > temp_elchi_release.json << EOF
+          {
+            "version": "${{ github.event.inputs.version }}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "elchi-client-linux-amd64",
+                "type": "binary",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-client-linux-amd64",
+                "sha256": "$BINARY_SHA256"
+              },
+              {
+                "name": "elchi-install.sh",
+                "type": "script",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-install.sh",
+                "sha256": "$SCRIPT_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with separate Elchi Client releases section
+          python3 << 'EOF'
+          import json
+
+          # Read existing index
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+
+          # Ensure elchi_client_releases key exists
+          if 'elchi_client_releases' not in index:
+              index['elchi_client_releases'] = []
+
+          # Read new Elchi Client release
+          with open('temp_elchi_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          # Update if same version exists, otherwise add
+          existing = False
+          for i, release in enumerate(index['elchi_client_releases']):
+              if release['version'] == new_release['version']:
+                  index['elchi_client_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['elchi_client_releases'].append(new_release)
+
+          # Sort by version (newest to oldest)
+          index['elchi_client_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          # Save
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: elchi-client-${{ github.event.inputs.version }}
+          name: Elchi Client ${{ github.event.inputs.version }}
+          body: |
+            Elchi Client ${{ github.event.inputs.version }}
+
+            Downloaded from: https://github.com/CloudNativeWorks/elchi-client/releases/tag/${{ github.event.inputs.version }}
+
+            ## Quick Install
+
+            ```bash
+            # Download installer
+            wget https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-install.sh
+
+            # Run with your configuration
+            sudo bash elchi-install.sh \
+              --name=web-server-01 \
+              --host=backend.elchi.io \
+              --port=443 \
+              --tls=true \
+              --token=your-auth-token
+            ```
+
+            ## Manual Installation
+
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-client-linux-amd64
+            sudo mv elchi-client-linux-amd64 /usr/local/bin/elchi-client
+            sudo chmod +x /usr/local/bin/elchi-client
+            ```
+          files: |
+            releases/elchi-client-${{ github.event.inputs.version }}/elchi-client-linux-amd64
+            releases/elchi-client-${{ github.event.inputs.version }}/elchi-install.sh
+            releases/elchi-client-${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi Client ${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
