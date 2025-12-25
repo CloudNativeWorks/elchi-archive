@@ -114,6 +114,21 @@
         <h1>Elchi Archive</h1>
         <p>Pre-compiled binaries for Envoy, Coraza WASM, and Elchi Client</p>
 
+        <!-- Quick Install Section -->
+        <div id="install-section" style="background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
+            <h3 style="margin-top: 0; color: #0969da;">🚀 Quick Install Elchi Stack</h3>
+            <p style="margin-bottom: 12px;">One-command installation for Ubuntu 24.04:</p>
+            <div id="install-command" style="background: #24292f; color: #e6edf3; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 14px; overflow-x: auto;">
+                Loading latest install script...
+            </div>
+            <p style="margin-top: 12px; font-size: 14px; color: #656d76;">
+                Example: <code id="install-example" style="background: #f6f8fa; padding: 2px 6px; border-radius: 3px;">Loading...</code>
+            </p>
+            <div id="install-download" style="margin-top: 8px;">
+                <span style="color: #656d76;">Loading download link...</span>
+            </div>
+        </div>
+
         <div class="tabs">
             <button class="tab active" onclick="switchTab('envoy')">Envoy</button>
             <button class="tab" onclick="switchTab('coraza')">Coraza WASM</button>
@@ -175,6 +190,34 @@
             `).join('');
         }
 
+        // Update install section with latest release
+        function updateInstallSection(installScriptReleases) {
+            if (!installScriptReleases || installScriptReleases.length === 0) {
+                document.getElementById('install-command').textContent = 'No install script available yet.';
+                document.getElementById('install-example').textContent = 'Not available';
+                document.getElementById('install-download').innerHTML = '<span style="color: #656d76;">Not available</span>';
+                return;
+            }
+
+            const latest = installScriptReleases[0];
+            const downloadUrl = latest.files[0].download_url;
+
+            document.getElementById('install-command').textContent =
+                `curl -fsSL ${downloadUrl} | bash -s -- <mainAddress> <port>`;
+
+            document.getElementById('install-example').textContent =
+                `curl -fsSL ${downloadUrl} | bash -s -- elchi.example.com 8080`;
+
+            document.getElementById('install-download').innerHTML = `
+                <a href="${downloadUrl}" download style="display: inline-block; background: #238636; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none;">
+                    📥 Download install.sh ${latest.version}
+                </a>
+                <span style="margin-left: 12px; font-size: 12px; color: #656d76;">
+                    SHA256: ${latest.files[0].sha256.substring(0, 16)}...
+                </span>
+            `;
+        }
+
         // Load data
         fetch('index.json')
             .then(response => response.json())
@@ -182,11 +225,15 @@
                 renderReleases(data.releases, 'envoy-releases', 'envoy');
                 renderReleases(data.coroza_releases, 'coroza-releases', 'coroza');
                 renderReleases(data.elchi_client_releases, 'elchi-releases', 'elchi');
+                updateInstallSection(data.install_script_releases);
             })
             .catch(error => {
                 document.getElementById('envoy-releases').innerHTML = '<p>Error loading releases.</p>';
                 document.getElementById('coroza-releases').innerHTML = '<p>Error loading releases.</p>';
                 document.getElementById('elchi-releases').innerHTML = '<p>Error loading releases.</p>';
+                document.getElementById('install-command').textContent = 'Error loading install script.';
+                document.getElementById('install-example').textContent = 'Error';
+                document.getElementById('install-download').innerHTML = '<span style="color: #656d76;">Error loading</span>';
                 console.error('Error:', error);
             });
     </script>

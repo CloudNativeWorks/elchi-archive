@@ -1,0 +1,224 @@
+name: Publish Install Script
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for install.sh (e.g., v1.0.0)'
+        required: true
+        type: string
+  push:
+    paths:
+      - 'install.sh'
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "install-script-publish"
+  cancel-in-progress: false
+
+jobs:
+  publish-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Auto-version based on date for push events
+            VERSION="v$(date -u +%Y.%m.%d)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
+
+      - name: Prepare release files
+        run: |
+          mkdir -p releases/install-script-${{ steps.version.outputs.version }}
+          cp install.sh releases/install-script-${{ steps.version.outputs.version }}/
+
+          # Generate checksum
+          cd releases/install-script-${{ steps.version.outputs.version }}
+          sha256sum install.sh > install.sh.sha256
+
+          # Make executable
+          chmod +x install.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-script-${{ steps.version.outputs.version }}
+          path: releases/install-script-${{ steps.version.outputs.version }}/*
+
+  update-index:
+    needs: publish-script
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v$(date -u +%Y.%m.%d)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: install-script-${{ steps.version.outputs.version }}
+          path: releases/install-script-${{ steps.version.outputs.version }}
+
+      - name: Update index.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Read checksum
+          SCRIPT_SHA256=$(cat releases/install-script-${VERSION}/install.sh.sha256 | cut -d' ' -f1)
+
+          # Create new install script release entry
+          cat > temp_install_script_release.json << EOF
+          {
+            "version": "$VERSION",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "install.sh",
+                "type": "script",
+                "description": "Elchi Stack installation script for Ubuntu 24.04",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/install-script-$VERSION/install.sh",
+                "sha256": "$SCRIPT_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with install script releases section
+          python3 << 'EOF'
+          import json
+
+          # Read existing index
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+
+          # Ensure install_script_releases key exists
+          if 'install_script_releases' not in index:
+              index['install_script_releases'] = []
+
+          # Read new install script release
+          with open('temp_install_script_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          # Update if same version exists, otherwise add
+          existing = False
+          for i, release in enumerate(index['install_script_releases']):
+              if release['version'] == new_release['version']:
+                  index['install_script_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['install_script_releases'].append(new_release)
+
+          # Sort by version (newest to oldest)
+          index['install_script_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          # Save
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: install-script-${{ steps.version.outputs.version }}
+          name: Install Script ${{ steps.version.outputs.version }}
+          body: |
+            Elchi Stack Installation Script ${{ steps.version.outputs.version }}
+
+            ## Quick Install
+
+            ```bash
+            # Download and run
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/install-script-${{ steps.version.outputs.version }}/install.sh | bash -s -- <mainAddress> <port>
+            ```
+
+            ## Download Only
+
+            ```bash
+            # Download the script
+            wget https://github.com/${{ github.repository }}/releases/download/install-script-${{ steps.version.outputs.version }}/install.sh
+
+            # Make it executable
+            chmod +x install.sh
+
+            # Run with your configuration
+            ./install.sh elchi.example.com 8080
+            ```
+
+            ## Requirements
+            - Ubuntu 24.04 (recommended)
+            - Root or sudo privileges
+            - At least 15GB disk space
+            - Internet connectivity
+
+            ## What it installs
+            - Docker
+            - kubectl
+            - kind (Kubernetes in Docker)
+            - Helm
+            - Elchi Stack via Helm chart
+          files: |
+            releases/install-script-${{ steps.version.outputs.version }}/install.sh
+            releases/install-script-${{ steps.version.outputs.version }}/install.sh.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Install Script ${{ steps.version.outputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
