@@ -47,13 +47,15 @@ jobs:
         run: |
           mkdir -p releases/install-script-${{ steps.version.outputs.version }}
           cp install.sh releases/install-script-${{ steps.version.outputs.version }}/
+          cp uninstall.sh releases/install-script-${{ steps.version.outputs.version }}/
 
-          # Generate checksum
+          # Generate checksums
           cd releases/install-script-${{ steps.version.outputs.version }}
           sha256sum install.sh > install.sh.sha256
+          sha256sum uninstall.sh > uninstall.sh.sha256
 
           # Make executable
-          chmod +x install.sh
+          chmod +x install.sh uninstall.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -90,8 +92,9 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          # Read checksum
-          SCRIPT_SHA256=$(cat releases/install-script-${VERSION}/install.sh.sha256 | cut -d' ' -f1)
+          # Read checksums
+          INSTALL_SHA256=$(cat releases/install-script-${VERSION}/install.sh.sha256 | cut -d' ' -f1)
+          UNINSTALL_SHA256=$(cat releases/install-script-${VERSION}/uninstall.sh.sha256 | cut -d' ' -f1)
 
           # Create new install script release entry
           cat > temp_install_script_release.json << EOF
@@ -104,7 +107,14 @@ jobs:
                 "type": "script",
                 "description": "Elchi Stack installation script for Ubuntu 24.04",
                 "download_url": "https://github.com/${{ github.repository }}/releases/download/install-script-$VERSION/install.sh",
-                "sha256": "$SCRIPT_SHA256"
+                "sha256": "$INSTALL_SHA256"
+              },
+              {
+                "name": "uninstall.sh",
+                "type": "script",
+                "description": "Elchi Stack uninstallation script",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/install-script-$VERSION/uninstall.sh",
+                "sha256": "$UNINSTALL_SHA256"
               }
             ]
           }
@@ -190,7 +200,8 @@ jobs:
             - Elchi Stack via Helm chart
           files: |
             releases/install-script-${{ steps.version.outputs.version }}/install.sh
-            releases/install-script-${{ steps.version.outputs.version }}/install.sh.sha256
+            releases/install-script-${{ steps.version.outputs.version }}/uninstall.sh
+            releases/install-script-${{ steps.version.outputs.version }}/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

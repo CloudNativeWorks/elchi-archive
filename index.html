@@ -205,22 +205,38 @@
             }
 
             const latest = installScriptReleases[0];
-            const downloadUrl = latest.files[0].download_url;
+            const installFile = latest.files.find(f => f.name === 'install.sh');
+            const uninstallFile = latest.files.find(f => f.name === 'uninstall.sh');
+
+            if (!installFile) {
+                document.getElementById('install-command').textContent = 'Install script not found.';
+                return;
+            }
 
             document.getElementById('install-command').textContent =
-                `curl -fsSL ${downloadUrl} | bash -s -- <mainAddress> <port>`;
+                `curl -fsSL ${installFile.download_url} | bash -s -- <mainAddress> <port>`;
 
             document.getElementById('install-example').textContent =
-                `curl -fsSL ${downloadUrl} | bash -s -- elchi.example.com 8080`;
+                `curl -fsSL ${installFile.download_url} | bash -s -- elchi.example.com 8080`;
 
-            document.getElementById('install-download').innerHTML = `
-                <a href="${downloadUrl}" download style="display: inline-block; background: #238636; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none;">
+            let downloadHtml = `
+                <a href="${installFile.download_url}" download style="display: inline-block; background: #238636; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; margin-right: 8px;">
                     📥 Download install.sh ${latest.version}
-                </a>
-                <span style="margin-left: 12px; font-size: 12px; color: #656d76;">
-                    SHA256: ${latest.files[0].sha256.substring(0, 16)}...
-                </span>
-            `;
+                </a>`;
+
+            if (uninstallFile) {
+                downloadHtml += `
+                <a href="${uninstallFile.download_url}" download style="display: inline-block; background: #d73a49; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; margin-right: 8px;">
+                    🗑️ Download uninstall.sh
+                </a>`;
+            }
+
+            downloadHtml += `
+                <span style="margin-left: 4px; font-size: 12px; color: #656d76;">
+                    SHA256: ${installFile.sha256.substring(0, 16)}...
+                </span>`;
+
+            document.getElementById('install-download').innerHTML = downloadHtml;
         }
 
         // Load data
