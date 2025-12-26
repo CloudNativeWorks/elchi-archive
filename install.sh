@@ -16,6 +16,44 @@
 #
 # Author: Elchi Team
 # License: MIT
+#
+# External access dependencies
+# GitHub
+# - github.com
+# - api.github.com
+# - release-assets.githubusercontent.com
+# - raw.githubusercontent.com
+#
+# Docker
+# - download.docker.com
+# - registry-1.docker.io
+# - auth.docker.io
+# - production.cloudflare.docker.com
+# - docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com
+#
+# Kubernetes / Kind / Kubectl
+# - dl.k8s.io
+# - cdn.dl.k8s.io
+# - kind.sigs.k8s.io
+#
+# Helm
+# - get.helm.sh
+# - charts.elchi.io
+#
+# Ubuntu APT
+# - ports.ubuntu.com
+#
+# Grafana
+# - grafana.com
+#
+# Google Cloud Storage
+# - storage.googleapis.com
+#
+# MongoDB
+# - downloads.mongodb.com
+#
+# Elastic
+# - artifacts.elastic.co
 #################################################################################
 
 set -euo pipefail  # Exit on error, undefined variables, and pipe failures
