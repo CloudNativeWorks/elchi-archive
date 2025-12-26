@@ -168,12 +168,6 @@ check_prerequisites() {
 
     log_success "Sufficient disk space available"
 
-    # Check internet connectivity
-    log_info "Testing internet connectivity..."
-    if ! ping -c 1 -W 2 google.com &>/dev/null && ! ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
-        error_exit "No internet connectivity detected"
-    fi
-
     log_success "Prerequisites check completed"
 }
 
