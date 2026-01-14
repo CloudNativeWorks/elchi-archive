@@ -136,6 +136,7 @@
             <button class="tab active" onclick="switchTab('envoy', event)">Envoy</button>
             <button class="tab" onclick="switchTab('coroza', event)">Coraza WASM</button>
             <button class="tab" onclick="switchTab('elchi', event)">Elchi Client</button>
+            <button class="tab" onclick="switchTab('gslb', event)">Elchi GSLB</button>
         </div>
 
         <div id="envoy-content" class="tab-content active">
@@ -154,6 +155,12 @@
             <h2>Elchi Client</h2>
             <p>Pre-built Elchi Client binaries and installation scripts.</p>
             <div id="elchi-releases" class="loading">Loading Elchi Client releases...</div>
+        </div>
+
+        <div id="gslb-content" class="tab-content">
+            <h2>Elchi GSLB</h2>
+            <p>CoreDNS with Elchi GSLB plugin - GSLB-like DNS resolution with in-memory caching and webhook-based updates.</p>
+            <div id="gslb-releases" class="loading">Loading Elchi GSLB releases...</div>
         </div>
     </div>
 
@@ -246,12 +253,14 @@
                 renderReleases(data.releases, 'envoy-releases', 'envoy');
                 renderReleases(data.coroza_releases, 'coroza-releases', 'coroza');
                 renderReleases(data.elchi_client_releases, 'elchi-releases', 'elchi');
+                renderReleases(data.elchi_gslb_releases, 'gslb-releases', 'gslb');
                 updateInstallSection(data.install_script_releases);
             })
             .catch(error => {
                 document.getElementById('envoy-releases').innerHTML = '<p>Error loading releases.</p>';
                 document.getElementById('coroza-releases').innerHTML = '<p>Error loading releases.</p>';
                 document.getElementById('elchi-releases').innerHTML = '<p>Error loading releases.</p>';
+                document.getElementById('gslb-releases').innerHTML = '<p>Error loading releases.</p>';
                 document.getElementById('install-command').textContent = 'Error loading install script.';
                 document.getElementById('install-example').textContent = 'Error';
                 document.getElementById('install-download').innerHTML = '<span style="color: #656d76;">Error loading</span>';

@@ -1,0 +1,210 @@
+name: Download Elchi GSLB
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Elchi GSLB version to download (e.g., v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-gslb-download"
+  cancel-in-progress: false
+
+jobs:
+  download-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Elchi GSLB Files
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          REPO="CloudNativeWorks/elchi-gslb"
+          BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+          # Create release directory
+          mkdir -p releases/elchi-gslb-${VERSION}
+          cd releases/elchi-gslb-${VERSION}
+
+          # Download CoreDNS binary (linux-amd64)
+          echo "Downloading coredns-elchi-linux-amd64-${VERSION}..."
+          curl -L -o coredns-elchi-linux-amd64 "${BASE_URL}/coredns-elchi-linux-amd64-${VERSION}"
+
+          # Download source tarball
+          echo "Downloading elchi-gslb-${VERSION}.tar.gz..."
+          curl -L -o elchi-gslb-${VERSION}.tar.gz "${BASE_URL}/elchi-gslb-${VERSION}.tar.gz"
+
+          # Generate checksums
+          sha256sum coredns-elchi-linux-amd64 > coredns-elchi-linux-amd64.sha256
+          sha256sum elchi-gslb-${VERSION}.tar.gz > elchi-gslb-${VERSION}.tar.gz.sha256
+
+          # Make binary executable
+          chmod +x coredns-elchi-linux-amd64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: elchi-gslb-${{ github.event.inputs.version }}
+          path: releases/elchi-gslb-${{ github.event.inputs.version }}/*
+
+  update-index:
+    needs: download-files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: elchi-gslb-${{ github.event.inputs.version }}
+          path: releases/elchi-gslb-${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+
+          # Read checksums
+          BINARY_SHA256=$(cat releases/elchi-gslb-${VERSION}/coredns-elchi-linux-amd64.sha256 | cut -d' ' -f1)
+          TARBALL_SHA256=$(cat releases/elchi-gslb-${VERSION}/elchi-gslb-${VERSION}.tar.gz.sha256 | cut -d' ' -f1)
+
+          # Create new Elchi GSLB release entry
+          cat > temp_elchi_gslb_release.json << EOF
+          {
+            "version": "${VERSION}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "coredns-elchi-linux-amd64",
+                "type": "binary",
+                "arch": "linux-amd64",
+                "description": "CoreDNS with Elchi GSLB plugin for Linux AMD64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-gslb-${VERSION}/coredns-elchi-linux-amd64",
+                "sha256": "$BINARY_SHA256"
+              },
+              {
+                "name": "elchi-gslb-${VERSION}.tar.gz",
+                "type": "source",
+                "description": "Elchi GSLB source code tarball",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-gslb-${VERSION}/elchi-gslb-${VERSION}.tar.gz",
+                "sha256": "$TARBALL_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with Elchi GSLB releases section
+          python3 << 'EOF'
+          import json
+
+          # Read existing index
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+
+          # Ensure elchi_gslb_releases key exists
+          if 'elchi_gslb_releases' not in index:
+              index['elchi_gslb_releases'] = []
+
+          # Read new Elchi GSLB release
+          with open('temp_elchi_gslb_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          # Update if same version exists, otherwise add
+          existing = False
+          for i, release in enumerate(index['elchi_gslb_releases']):
+              if release['version'] == new_release['version']:
+                  index['elchi_gslb_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['elchi_gslb_releases'].append(new_release)
+
+          # Sort by version (newest to oldest)
+          index['elchi_gslb_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          # Save
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: elchi-gslb-${{ github.event.inputs.version }}
+          name: Elchi GSLB ${{ github.event.inputs.version }}
+          body: |
+            ## Elchi GSLB ${{ github.event.inputs.version }}
+
+            CoreDNS with Elchi GSLB plugin - GSLB-like DNS resolution with in-memory caching and webhook-based updates.
+
+            Downloaded from: https://github.com/CloudNativeWorks/elchi-gslb/releases/tag/${{ github.event.inputs.version }}
+
+            ### Installation
+
+            ```bash
+            # Download binary
+            wget https://github.com/${{ github.repository }}/releases/download/elchi-gslb-${{ github.event.inputs.version }}/coredns-elchi-linux-amd64
+
+            # Make executable
+            chmod +x coredns-elchi-linux-amd64
+
+            # Move to system path
+            sudo mv coredns-elchi-linux-amd64 /usr/local/bin/coredns
+            ```
+
+            ### Docker
+
+            ```bash
+            docker pull cloudnativeworks/elchi-coredns:${{ github.event.inputs.version }}
+            ```
+          files: |
+            releases/elchi-gslb-${{ github.event.inputs.version }}/coredns-elchi-linux-amd64
+            releases/elchi-gslb-${{ github.event.inputs.version }}/elchi-gslb-${{ github.event.inputs.version }}.tar.gz
+            releases/elchi-gslb-${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi GSLB ${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
