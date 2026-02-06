@@ -136,7 +136,7 @@
     },
     {
       "version": "v1.0.0",
-      "date": "2025-12-23T19:42:35Z",
+      "date": "2026-02-06T07:45:09Z",
       "files": [
         {
           "name": "elchi-client-linux-amd64",
@@ -148,7 +148,7 @@
           "name": "elchi-install.sh",
           "type": "script",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.0.0/elchi-install.sh",
-          "sha256": "a76d59aef9339a83a5f8261049ca2813b4c249a1c272daf3c708af94c86888fc"
+          "sha256": "9cf22cc134476edea3ff3cb04e0d06d910d1f86ff2a34336c130a0b6f3d9a03d"
         }
       ]
     }
