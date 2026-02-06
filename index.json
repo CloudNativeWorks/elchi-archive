@@ -197,6 +197,27 @@
   ],
   "elchi_gslb_releases": [
     {
+      "version": "v0.1.1",
+      "date": "2026-02-06T07:48:30Z",
+      "files": [
+        {
+          "name": "coredns-elchi-linux-amd64",
+          "type": "binary",
+          "arch": "linux-amd64",
+          "description": "CoreDNS with Elchi GSLB plugin for Linux AMD64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.1/coredns-elchi-linux-amd64",
+          "sha256": "05eb3723fece166b4eb1beab8d2fb180a69e8bed61901c213c63c8b2a3dc54fe"
+        },
+        {
+          "name": "elchi-gslb-v0.1.1.tar.gz",
+          "type": "source",
+          "description": "Elchi GSLB source code tarball",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.1/elchi-gslb-v0.1.1.tar.gz",
+          "sha256": "c85240305f04e75c837eb4155783e269242f67a97c094e3a0c2b6a23cafff03c"
+        }
+      ]
+    },
+    {
       "version": "v0.1.0",
       "date": "2026-01-14T19:44:25Z",
       "files": [
