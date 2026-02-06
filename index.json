@@ -117,6 +117,24 @@
   ],
   "elchi_client_releases": [
     {
+      "version": "v1.1.0",
+      "date": "2026-02-06T07:36:27Z",
+      "files": [
+        {
+          "name": "elchi-client-linux-amd64",
+          "type": "binary",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.1.0/elchi-client-linux-amd64",
+          "sha256": "4debda0456948ab4211b1917c6b2dfff9038b2682d97c63720c46bbf0305dc55"
+        },
+        {
+          "name": "elchi-install.sh",
+          "type": "script",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.1.0/elchi-install.sh",
+          "sha256": "8f7ab8da07a1778784e2a175c51399c7a761c8679c550e99c2d97e638dcd9851"
+        }
+      ]
+    },
+    {
       "version": "v1.0.0",
       "date": "2025-12-23T19:42:35Z",
       "files": [
