@@ -36,14 +36,33 @@ grafana::setup() {
   grafana::render_dashboard_provider
   grafana::copy_dashboards
 
-  # Override the default config + provisioning paths via systemd
-  # drop-in so package upgrades don't fight us over /etc/grafana/.
+  # Override the default ExecStart + paths via systemd drop-in. The
+  # Debian/RHEL grafana package's unit ships an ExecStart line with
+  # `--config=/etc/grafana/grafana.ini` HARD-CODED — and a CLI flag
+  # always wins over GF_PATHS_CONFIG env var, so just setting
+  # Environment=GF_PATHS_CONFIG=... is silently useless. The package's
+  # default config gets loaded, our admin_user / admin_password /
+  # root_url / serve_from_sub_path / plugin auto-install kill all get
+  # ignored, and the operator ends up with admin/admin + Grafana
+  # serving from `/` instead of `/grafana/`.
+  #
+  # `ExecStart=` (empty) clears the inherited ExecStart list; the
+  # second ExecStart= line then sets ours. We keep the package's
+  # --pidfile + --packaging flags so the Debian post-install
+  # heuristics still recognise the binary.
   install -d -m 0755 /etc/systemd/system/grafana-server.service.d
   cat > /etc/systemd/system/grafana-server.service.d/10-elchi.conf <<EOF
 [Service]
 Environment=TZ=${ELCHI_TIMEZONE:-UTC}
 Environment=GF_PATHS_CONFIG=${GRAFANA_INI}
 Environment=GF_PATHS_PROVISIONING=${GRAFANA_PROVISIONING}
+ExecStart=
+ExecStart=/usr/share/grafana/bin/grafana server --config=${GRAFANA_INI} --pidfile=/run/grafana/grafana-server.pid --packaging=deb
+# First-run plugin pre-install on Grafana 13 downloads several Cloud
+# Discovery plugins (lokiexplore, pyroscope, exploretraces, …) and adds
+# 60-90s to startup. Disable it — operator can still install plugins
+# manually via grafana-cli or the UI when --grafana-allow-plugin is set.
+Environment=GF_PLUGINS_PREINSTALL_DISABLED=true
 EOF
 
   # Make config + provisioning + dashboards readable by the grafana
@@ -63,8 +82,12 @@ EOF
     "$GRAFANA_INI" \
     "$GRAFANA_DS" \
     "$GRAFANA_DASH_CFG"
-  wait_for_tcp 127.0.0.1 "$ELCHI_PORT_GRAFANA" 60 \
-    || die "grafana did not come up on :${ELCHI_PORT_GRAFANA}"
+  # 120s timeout — Grafana 13 first-start runs dashboard provisioning,
+  # alerting cache warm-up, and bleve index building before binding the
+  # HTTP listener. 60s was tight on slow disks / first-time package
+  # cache cold paths.
+  wait_for_tcp 127.0.0.1 "$ELCHI_PORT_GRAFANA" 120 \
+    || die "grafana did not come up on :${ELCHI_PORT_GRAFANA} within 120s — check 'journalctl -u grafana-server'"
 
   # Helm uses an emptyDir for /var/lib/grafana — admin password is set
   # fresh on every restart from the env var. We persist /var/lib/grafana,
