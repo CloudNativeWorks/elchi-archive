@@ -48,10 +48,17 @@ verify::wait() {
     fi
   fi
 
-  # Backend instances on this node (read from systemd)
+  # Backend instances on this node (read from systemd). Skip
+  # elchi-watchdog.service — it's a Type=oneshot driven by
+  # elchi-watchdog.timer; outside the brief moment it's running, its
+  # state is "inactive (dead)" by design. The timer is what we actually
+  # check (loop below).
   local unit
   while IFS= read -r unit; do
     [ -z "$unit" ] && continue
+    case "$unit" in
+      elchi-watchdog.service) continue ;;
+    esac
     if systemctl is-active --quiet "$unit"; then
       log::ok "${unit} active"
     else
@@ -61,6 +68,17 @@ verify::wait() {
   done < <(systemctl list-units --no-pager --no-legend --type=service \
             --state=loaded 2>/dev/null \
             | awk '$1 ~ /^elchi-/ {print $1}')
+
+  # Watchdog timer state — a "waiting" timer is healthy.
+  if systemctl list-unit-files --no-pager --no-legend --type=timer 2>/dev/null \
+       | awk '{print $1}' | grep -qx elchi-watchdog.timer; then
+    if systemctl is-active --quiet elchi-watchdog.timer; then
+      log::ok "elchi-watchdog.timer active (oneshot scheduled)"
+    else
+      log::err "elchi-watchdog.timer NOT active"
+      fails=$(( fails + 1 ))
+    fi
+  fi
 
   if [ "$fails" -gt 0 ]; then
     log::warn "${fails} verification check(s) failed"

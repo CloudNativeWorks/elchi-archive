@@ -128,7 +128,15 @@ grafana::render_ini() {
 
 [server]
 http_port = ${ELCHI_PORT_GRAFANA}
-http_addr = 127.0.0.1
+# Bind all interfaces — the front-door Envoy on every node connects to
+# this Grafana instance over /etc/hosts hostname (which resolves to
+# M1's public/LAN IP), so loopback-only would refuse cross-node and
+# even local /etc/hosts-resolved connections. firewall::open does NOT
+# open :3000 to the public, so the operator's external firewall (or
+# the in-host firewalld/ufw rules we leave alone) is what keeps 3000
+# off the internet. Grafana's own auth (admin user + password) is the
+# remaining defense layer.
+http_addr = 0.0.0.0
 domain = ${ELCHI_MAIN_ADDRESS:-localhost}
 root_url = %(protocol)s://%(domain)s:%(http_port)s/grafana/
 serve_from_sub_path = true

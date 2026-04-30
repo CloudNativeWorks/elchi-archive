@@ -89,11 +89,21 @@ nginx::render_vhost() {
 
   cat > "${vhost}.tmp" <<EOF
 # Managed by elchi-stack installer.
-# nginx serves the elchi UI on 127.0.0.1:${ELCHI_PORT_NGINX_UI};
-# Envoy at :443 fans out across all nodes' nginx instances.
+# nginx serves the elchi UI on :${ELCHI_PORT_NGINX_UI} (all interfaces).
+# The front-door Envoy at :443 round-robins requests across every node's
+# nginx by /etc/hosts hostname (which resolves to each node's public/LAN
+# IP), so nginx must be reachable on that interface — loopback-only
+# would leave Envoy unable to connect even to the local box because the
+# UpstreamHost it computes is "<hostname>:8081" → "<host-ip>:8081".
+#
+# What's served here is the static SPA (index.html + hashed assets) and
+# the per-install config.js — no secrets, no API surface, no auth state.
+# All sensitive routes go through Envoy on :443. Operators with
+# infrastructure-level firewalls should still block :${ELCHI_PORT_NGINX_UI}
+# from the public internet (the install firewall::open does NOT open it).
 
 server {
-    listen 127.0.0.1:${ELCHI_PORT_NGINX_UI} default_server;
+    listen ${ELCHI_PORT_NGINX_UI} default_server;
     server_name _;
 
     root ${ELCHI_WEB}/current;
