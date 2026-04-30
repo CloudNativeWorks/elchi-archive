@@ -132,10 +132,17 @@ ui::render_config_js() {
   # AVAILABLE_VERSIONS list — extract envoy version per variant tag.
   # Tighten the awk extractor to columns: `    - <tag>` lines under the
   # `backend_variants:` key, terminated when indentation drops.
+  #
+  # IMPORTANT: declare the loop variable `local` so the read does NOT
+  # clobber the caller's $v (ui::install's UI version). Bash uses
+  # dynamic scoping — without `local` here, `read -r v` writes into
+  # whatever `v` is in scope, and the outer ui::install would see its
+  # version string overwritten with the last variant tag (or empty).
   local -a envoy_versions
-  while IFS= read -r v; do
-    [ -z "$v" ] && continue
-    envoy_versions+=("'$(topology::extract_envoy_version "$v")'")
+  local variant
+  while IFS= read -r variant; do
+    [ -z "$variant" ] && continue
+    envoy_versions+=("'$(topology::extract_envoy_version "$variant")'")
   done < <(awk '/^  backend_variants:/{f=1; next} f && /^    - /{print $2; next}
                  f && /^[a-zA-Z]/{exit}' "${ELCHI_ETC}/topology.full.yaml")
   local versions_list
