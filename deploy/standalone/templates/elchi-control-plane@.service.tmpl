@@ -1,0 +1,56 @@
+[Unit]
+Description=${ELCHI_COMPONENT_DESC}
+Documentation=https://github.com/CloudNativeWorks/elchi-backend
+After=network-online.target mongod.service
+Wants=network-online.target
+PartOf=elchi-stack.target
+
+[Service]
+Type=simple
+User=${ELCHI_USER}
+Group=${ELCHI_GROUP}
+Environment=HOME=${ELCHI_VARIANT_HOME}
+Environment=TZ=${ELCHI_TIMEZONE:-UTC}
+EnvironmentFile=${ELCHI_VARIANT_CONFIG}/common.env
+EnvironmentFile=${ELCHI_VARIANT_CONFIG}/control-plane.env
+ExecStart=${ELCHI_BACKEND_BIN} elchi-control-plane --config ${ELCHI_VARIANT_CONFIG}/config-prod.yaml
+WorkingDirectory=${ELCHI_VARIANT_HOME}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+LimitNOFILE=65536
+MemoryMax=${ELCHI_CONTROL_PLANE_MEMORY_MAX:-4G}
+CPUQuota=${ELCHI_CONTROL_PLANE_CPU_QUOTA:-100%}
+
+# --- Hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${ELCHI_LIB} ${ELCHI_LOG}
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+ProtectKernelLogs=true
+KeyringMode=private
+RemoveIPC=yes
+UMask=0077
+LimitCORE=0
+# Drop ALL capabilities — control-plane binds 1990+ (>1024).
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# --- Logging ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=elchi-control-plane-${ELCHI_BACKEND_VARIANT_SANITIZED}
+
+[Install]
+WantedBy=multi-user.target

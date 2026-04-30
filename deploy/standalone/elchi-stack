@@ -1,0 +1,352 @@
+#!/usr/bin/env bash
+# elchi-stack — operator helper. Installed at /usr/local/bin/elchi-stack
+# during install. Provides cluster-wide control: status, logs,
+# reload-envoy, add-node, init-replica-set, export-bundle.
+
+set -Eeuo pipefail
+
+ELCHI_INSTALLER_ROOT=${ELCHI_INSTALLER_ROOT:-/opt/elchi-installer}
+
+# Source the same lib/ tree the installer used. This is shipped during
+# install (orchestrator copies the installer to /opt/elchi-installer on
+# every node).
+if [ -d "${ELCHI_INSTALLER_ROOT}/lib" ]; then
+  # shellcheck source=lib/common.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/common.sh"
+  # shellcheck source=lib/topology.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/topology.sh"
+  # shellcheck source=lib/ssh.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/ssh.sh"
+  # shellcheck source=lib/envoy.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/envoy.sh"
+  # shellcheck source=lib/mongodb.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/mongodb.sh"
+  # shellcheck source=lib/secrets.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/secrets.sh"
+  # shellcheck source=lib/bundle.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/bundle.sh"
+  # shellcheck source=lib/dirs.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/dirs.sh"
+  # shellcheck source=lib/backend.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/backend.sh"
+else
+  printf 'elchi-stack: installer libs missing (looked under %s)\n' "$ELCHI_INSTALLER_ROOT" >&2
+  exit 1
+fi
+
+usage() {
+  cat <<EOF
+elchi-stack — operator helper
+
+Usage:
+  elchi-stack status                  cluster-wide service summary
+  elchi-stack logs <unit> [-f]        tail journalctl on every node
+  elchi-stack reload-envoy            re-render bootstrap and restart Envoy on every node
+  elchi-stack add-node <ip>           extend the cluster (M1 only)
+  elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
+  elchi-stack export-bundle <out> [--reuse-bundle-key]
+                                      repackage the encrypted cluster bundle.
+                                       --reuse-bundle-key uses the install-time
+                                       key persisted at /etc/elchi/.bundle-key
+                                       so an exported bundle can be reapplied
+                                       to the existing cluster without
+                                       redistributing a fresh decryption key.
+  elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart)
+  elchi-stack verify                  end-to-end cluster health check
+                                       (registration logs, Envoy admin, listener ports)
+
+EOF
+}
+
+cmd_status() {
+  if [ ! -f /etc/elchi/nodes.list ]; then
+    printf 'no /etc/elchi/nodes.list — is this M1?\n' >&2
+    exit 1
+  fi
+  local host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
+    if ssh::is_local "$host"; then
+      systemctl list-units --no-pager --no-legend --type=service 'elchi-*' \
+        | awk '{printf "  %-50s %s\n", $1, $4}'
+    else
+      ssh::run "$host" "systemctl list-units --no-pager --no-legend --type=service 'elchi-*'" \
+        | awk '{printf "  %-50s %s\n", $1, $4}'
+    fi
+  done < /etc/elchi/nodes.list
+}
+
+cmd_logs() {
+  local unit=${1:-}
+  shift || true
+  [ -n "$unit" ] || { printf 'unit name required\n' >&2; exit 2; }
+  local follow=0
+  case "${1:-}" in
+    -f|--follow) follow=1 ;;
+  esac
+
+  local host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    printf '\n%s── %s : %s ──%s\n' "$C_BOLD" "$host" "$unit" "$C_RESET"
+    if [ "$follow" = "1" ]; then
+      if ssh::is_local "$host"; then
+        journalctl -u "$unit" -f --no-pager &
+      else
+        ssh::run "$host" "journalctl -u '$unit' -f --no-pager" &
+      fi
+    else
+      if ssh::is_local "$host"; then
+        journalctl -u "$unit" -n 50 --no-pager
+      else
+        ssh::run "$host" "journalctl -u '$unit' -n 50 --no-pager"
+      fi
+    fi
+  done < /etc/elchi/nodes.list
+
+  if [ "$follow" = "1" ]; then
+    wait
+  fi
+}
+
+cmd_reload_envoy() {
+  if [ -r /etc/elchi/orchestrator.env ]; then
+    # shellcheck disable=SC1091
+    . /etc/elchi/orchestrator.env
+  fi
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+  local host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    log::node "$host" "re-rendering envoy.yaml + restarting"
+    if ssh::is_local "$host"; then
+      envoy::reload
+    else
+      # Render new bootstrap locally (state is identical cluster-wide
+      # since it derives from /etc/elchi/topology.full.yaml + ports.full.json),
+      # then push to the remote and restart over there.
+      envoy::render_bootstrap
+      ssh::scp /etc/elchi/config/envoy.yaml "$host" /etc/elchi/config/envoy.yaml.new
+      ssh::run_sudo "$host" "install -m 0640 -o root -g elchi /etc/elchi/config/envoy.yaml.new /etc/elchi/config/envoy.yaml && rm -f /etc/elchi/config/envoy.yaml.new && systemctl restart elchi-envoy.service"
+    fi
+  done < /etc/elchi/nodes.list
+  log::ok "envoy reloaded cluster-wide"
+}
+
+cmd_add_node() {
+  local new_ip=${1:?new node IP required}
+  if [ ! -f /etc/elchi/nodes.list ]; then
+    die "no /etc/elchi/nodes.list — run install.sh first"
+  fi
+
+  # Append + re-run the orchestrator with the union list. install.sh is
+  # idempotent for existing nodes — only the new one gets bootstrap.
+  local existing
+  existing=$(paste -sd, /etc/elchi/nodes.list)
+  local merged="${existing},${new_ip}"
+
+  log::info "extending cluster: ${existing} → ${merged}"
+  exec bash "${ELCHI_INSTALLER_ROOT}/install.sh" --nodes="$merged" --non-interactive "${@:2}"
+}
+
+cmd_init_rs() {
+  mongodb::initiate_replica_set
+}
+
+cmd_export_bundle() {
+  local out='' reuse_key=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --reuse-bundle-key) reuse_key=1 ;;
+      -*) die "unknown export-bundle flag: $1" ;;
+      *)  [ -z "$out" ] && out=$1 || die "export-bundle takes one positional <out>" ;;
+    esac
+    shift
+  done
+  [ -n "$out" ] || die "output path required: elchi-stack export-bundle <out> [--reuse-bundle-key]"
+
+  local key=''
+  if [ "$reuse_key" = "1" ]; then
+    key=$(bundle::read_persisted_key) \
+      || die "no persisted bundle key at /etc/elchi/.bundle-key — run on M1 of an installed cluster"
+    [ -n "$key" ] || die "persisted bundle key is empty — sealed credential may be unreadable"
+    log::info "reusing install-time bundle key from /etc/elchi/.bundle-key"
+  else
+    key=$(rand_hex 32)
+  fi
+
+  local clear=/tmp/elchi-bundle-$$.tar.gz
+  # Make sure the clear tarball never lingers on a failure mid-encrypt.
+  trap 'rm -f "'"$clear"'"' RETURN
+  bundle::build "$clear"
+  bundle::encrypt "$clear" "$out" "$key"
+  rm -f "$clear"
+
+  printf 'bundle written to %s\n' "$out"
+  if [ "$reuse_key" = "1" ]; then
+    printf 'decryption key: (reused from /etc/elchi/.bundle-key)\n'
+  else
+    printf 'decryption key: %s\n' "$key"
+  fi
+}
+
+cmd_verify() {
+  if [ ! -f /etc/elchi/topology.full.yaml ]; then
+    die "no /etc/elchi/topology.full.yaml — install hasn't completed"
+  fi
+  if [ -r /etc/elchi/orchestrator.env ]; then
+    # shellcheck disable=SC1091
+    . /etc/elchi/orchestrator.env
+  fi
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+
+  local total_fails=0 host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
+
+    local probe='set -e
+      hn=$(hostname -s)
+      fails=0
+
+      # 1. systemd state
+      while read -r unit; do
+        [ -z "$unit" ] && continue
+        case "$unit" in elchi-watchdog*) continue ;; esac
+        if ! systemctl is-active --quiet "$unit"; then
+          echo "  [FAIL] $unit not active"
+          fails=$((fails+1))
+        fi
+      done < <(systemctl list-units --no-legend --type=service "elchi-*" | awk "{print \$1}")
+
+      # 2. Backend registration
+      if systemctl is-active --quiet elchi-controller.service 2>/dev/null; then
+        if journalctl -u elchi-controller.service -n 200 --no-pager 2>/dev/null \
+             | grep -qE "Controller registered.*${hn}-controller"; then
+          echo "  [ OK ] controller registered as ${hn}-controller"
+        else
+          echo "  [WARN] controller registration log not found for ${hn}-controller"
+          fails=$((fails+1))
+        fi
+      fi
+      for u in $(systemctl list-units --no-legend --type=service "elchi-control-plane-*@*" | awk "{print \$1}"); do
+        if journalctl -u "$u" -n 200 --no-pager 2>/dev/null \
+             | grep -qE "Successfully registered control-plane:.*${hn}-controlplane-"; then
+          echo "  [ OK ] $u registered (verified)"
+        else
+          echo "  [WARN] $u registration log missing"
+          fails=$((fails+1))
+        fi
+      done
+
+      # 3. Envoy admin /clusters → registry-cluster healthy member count
+      if command -v curl >/dev/null 2>&1; then
+        cluster_dump=$(curl -sf --max-time 5 http://127.0.0.1:9901/clusters?format=json 2>/dev/null || true)
+        if [ -n "$cluster_dump" ]; then
+          # extract registry-cluster healthy host count via jq if available
+          if command -v jq >/dev/null 2>&1; then
+            healthy=$(echo "$cluster_dump" | jq "[.cluster_statuses[] | select(.name==\"registry-cluster\") | .host_statuses[] | select(.health_status.eds_health_status==\"HEALTHY\")] | length" 2>/dev/null || echo 0)
+            total=$(echo "$cluster_dump" | jq "[.cluster_statuses[] | select(.name==\"registry-cluster\") | .host_statuses[]] | length" 2>/dev/null || echo 0)
+            echo "  [INFO] registry-cluster: ${healthy}/${total} healthy (expect 1 leader serving)"
+          fi
+        else
+          echo "  [WARN] envoy admin :9901 unreachable"
+          fails=$((fails+1))
+        fi
+      fi
+
+      exit $fails
+    '
+    if ssh::is_local "$host"; then
+      bash -c "$probe" || total_fails=$(( total_fails + $? ))
+    else
+      ssh::run "$host" bash -c "$probe" || total_fails=$(( total_fails + $? ))
+    fi
+  done < /etc/elchi/nodes.list
+
+  printf '\n'
+  if [ "$total_fails" = "0" ]; then
+    log::ok "cluster verify: all checks passed"
+  else
+    log::err "cluster verify: ${total_fails} issue(s) found"
+    return 1
+  fi
+}
+
+cmd_rotate_secret() {
+  local name=${1:?secret name required (one of: jwt, gslb, registry)}
+  local key var
+  case "$name" in
+    jwt)  var=ELCHI_JWT_SECRET;  key=$(rand_hex 32) ;;
+    gslb) var=ELCHI_GSLB_SECRET; key=$(rand_alnum 48) ;;
+    *) die "unknown secret: $name (use jwt|gslb)" ;;
+  esac
+
+  log::info "rotating ${var}"
+  sed -i "s|^${var}=.*|${var}=${key}|" /etc/elchi/secrets.env
+
+  # The secret is also baked into every variant's common.env (which is
+  # what the systemd units actually source). secrets.env is the source of
+  # truth, but rotation has to also re-render the per-variant common.env
+  # files and push them to every node — otherwise the restart picks up
+  # the OLD value and the rotation is silently a no-op.
+  log::info "re-rendering per-variant common.env on M1"
+  backend::render_per_version_configs
+
+  # SSH driver — pick credentials from the persisted orchestrator env
+  # (so 'elchi-stack rotate-secret' run later with no flags still works).
+  if [ -r /etc/elchi/orchestrator.env ]; then
+    # shellcheck disable=SC1091
+    . /etc/elchi/orchestrator.env
+  fi
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+
+  # Walk every variant and ship its newly-rendered common.env to every
+  # remote node. Local node is already updated by render_per_version_configs.
+  local -a variants
+  mapfile -t variants < <(
+    awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
+         f && /^[a-zA-Z]/{exit}' /etc/elchi/topology.full.yaml
+  )
+
+  local host v
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    if ssh::is_local "$host"; then
+      # M1: secrets.env + every variant's common.env are already on disk.
+      # Restart everything that consumes them.
+      systemctl restart 'elchi-controller.service' 'elchi-control-plane-*@*.service' 'elchi-registry.service' 2>/dev/null || true
+    else
+      # M2/M3: ship secrets.env (for completeness/future tooling) + every
+      # variant's common.env, then restart.
+      ssh::scp /etc/elchi/secrets.env "$host" /tmp/.elchi-secrets.env.new
+      for v in "${variants[@]}"; do
+        ssh::scp "/etc/elchi/${v}/common.env" "$host" "/tmp/.elchi-${v}.common.env.new"
+      done
+      # Build a single remote command that installs everything atomically.
+      local remote_cmd="install -m 0640 -o root -g elchi /tmp/.elchi-secrets.env.new /etc/elchi/secrets.env && rm -f /tmp/.elchi-secrets.env.new"
+      for v in "${variants[@]}"; do
+        remote_cmd+=" && install -m 0640 -o root -g elchi /tmp/.elchi-${v}.common.env.new /etc/elchi/${v}/common.env"
+        remote_cmd+=" && rm -f /tmp/.elchi-${v}.common.env.new"
+      done
+      remote_cmd+=' && systemctl restart "elchi-controller.service" "elchi-control-plane-*@*.service"'
+      ssh::run_sudo "$host" "$remote_cmd"
+    fi
+  done < /etc/elchi/nodes.list
+  log::ok "${var} rotated and propagated"
+}
+
+# ----- dispatch ----------------------------------------------------------
+case "${1:-}" in
+  status)            shift; cmd_status "$@" ;;
+  logs)              shift; cmd_logs "$@" ;;
+  reload-envoy)      shift; cmd_reload_envoy "$@" ;;
+  add-node)          shift; cmd_add_node "$@" ;;
+  init-replica-set)  shift; cmd_init_rs "$@" ;;
+  export-bundle)     shift; cmd_export_bundle "$@" ;;
+  rotate-secret)     shift; cmd_rotate_secret "$@" ;;
+  verify)            shift; cmd_verify "$@" ;;
+  -h|--help|"")      usage ;;
+  *) printf 'unknown subcommand: %s\n\n' "$1" >&2; usage; exit 2 ;;
+esac

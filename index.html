@@ -106,6 +106,117 @@
             font-size: 14px;
             margin-bottom: 15px;
         }
+
+        /* Standalone install reference styling */
+        .stdl-cmd {
+            background: #24292f;
+            color: #e6edf3;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 13px;
+            overflow-x: auto;
+            white-space: pre;
+        }
+
+        .stdl-section h4 {
+            margin: 18px 0 6px;
+            color: #1a7f37;
+            font-size: 15px;
+        }
+
+        .stdl-section h5 {
+            margin: 12px 0 4px;
+            color: #24292f;
+            font-size: 14px;
+        }
+
+        .stdl-section details {
+            background: #ffffff;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            padding: 8px 14px;
+            margin: 10px 0;
+        }
+
+        .stdl-section details summary {
+            font-weight: 600;
+            cursor: pointer;
+            padding: 6px 0;
+            list-style: none;
+        }
+
+        .stdl-section details summary::-webkit-details-marker { display: none; }
+
+        .stdl-section details summary::before {
+            content: '▸ ';
+            color: #0969da;
+            display: inline-block;
+            width: 1em;
+        }
+
+        .stdl-section details[open] summary::before {
+            content: '▾ ';
+        }
+
+        .flag-table {
+            display: grid;
+            grid-template-columns: minmax(280px, max-content) 1fr;
+            gap: 4px 16px;
+            font-size: 13px;
+            margin: 6px 0 10px;
+        }
+
+        .flag-table code {
+            background: #f6f8fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            white-space: nowrap;
+        }
+
+        .flag-table .desc {
+            color: #24292f;
+            line-height: 1.45;
+        }
+
+        .flag-table .desc .default {
+            color: #656d76;
+            font-size: 12px;
+        }
+
+        .port-table {
+            display: grid;
+            grid-template-columns: max-content max-content 1fr;
+            gap: 4px 16px;
+            font-size: 13px;
+            font-family: monospace;
+            background: #f6f8fa;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .port-table .port-label { font-weight: 600; }
+        .port-table .port-value { color: #0969da; }
+        .port-table .port-note { color: #656d76; font-family: -apple-system, sans-serif; font-size: 13px; }
+
+        .stdl-section .note {
+            background: #fff8c5;
+            border-left: 3px solid #d4a72c;
+            padding: 8px 12px;
+            margin: 10px 0;
+            font-size: 13px;
+            color: #4d2d00;
+        }
+
+        .stdl-section .info {
+            background: #ddf4ff;
+            border-left: 3px solid #0969da;
+            padding: 8px 12px;
+            margin: 10px 0;
+            font-size: 13px;
+            color: #0a3069;
+        }
     </style>
 </head>
 
@@ -114,11 +225,11 @@
         <h1>Elchi Archive</h1>
         <p>Pre-compiled binaries for Envoy, Coraza WASM, and Elchi Client</p>
 
-        <!-- Quick Install Section -->
+        <!-- Quick Install Section (Kubernetes / kind / Helm) -->
         <div id="install-section"
             style="background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #0969da;">🚀 Quick Install Elchi Stack</h3>
-            <p style="margin-bottom: 12px;">One-command installation for Ubuntu 24.04:</p>
+            <h3 style="margin-top: 0; color: #0969da;">🚀 Quick Install Elchi Stack (Kubernetes via kind + Helm)</h3>
+            <p style="margin-bottom: 12px;">Single-VM Ubuntu 24.04 install that brings up a kind cluster and deploys the Helm chart:</p>
             <div id="install-command"
                 style="background: #24292f; color: #e6edf3; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 14px; overflow-x: auto;">
                 Loading latest install script...
@@ -130,6 +241,410 @@
             <div id="install-download" style="margin-top: 8px;">
                 <span style="color: #656d76;">Loading download link...</span>
             </div>
+        </div>
+
+        <!-- Bare-Metal Standalone Install Section -->
+        <div id="standalone-install-section" class="stdl-section"
+            style="background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
+            <h3 style="margin-top: 0; color: #1a7f37;">⚙️ Bare-Metal Standalone Install (no Docker, no Kubernetes)</h3>
+            <p style="margin-bottom: 12px;">
+                Install the entire elchi stack as systemd services on 1, 2, or 3+ Linux VMs.
+                The script runs once on the first node ("M1", the local machine) and SSHes into the
+                rest to provision them. Source lives at
+                <a href="https://github.com/CloudNativeWorks/elchi-archive/tree/main/deploy/standalone">deploy/standalone/</a>;
+                no separate release tarball — the installer is unversioned and always runs from the
+                <code>main</code> branch. Component versions (elchi-backend, UI, envoy, coredns) are
+                pinned per-flag.
+            </p>
+
+            <h4>1. Quick start</h4>
+
+            <h5>Single VM (all-in-one)</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- \
+      --nodes=$(hostname -I | awk '{print $1}') \
+      --main-address=elchi.example.com \
+      --ui-version=v1.1.3 \
+      --backend-version=elchi-v1.1.2-v0.13.4-envoy1.36.2 \
+      --envoy-version=v1.37.0</div>
+
+            <h5>3-VM cluster, multi-version backend, key-based SSH</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- \
+      --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
+      --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
+      --main-address=elchi.example.com \
+      --ui-version=v1.1.3 \
+      --backend-version=elchi-v1.1.2-v0.13.4-envoy1.35.3,elchi-v1.1.2-v0.13.4-envoy1.36.2,elchi-v1.1.2-v0.13.4-envoy1.38.0 \
+      --envoy-version=v1.37.0</div>
+            <p class="info" style="margin-top: 8px;">
+                <strong>Variants &amp; replicas:</strong> each <code>--backend-version</code> entry is
+                ONE variant. The number of variants determines how many backend processes per node:
+                3 variants = 1 controller + 3 control-planes per node (one control-plane per Envoy
+                version). Same variant cannot appear twice — duplicates collide on the registry
+                name <code>&lt;hostname&gt;-controlplane-&lt;X.Y.Z&gt;</code> and the installer rejects
+                them. Capacity scales by adding nodes, not by replicating a variant on the same node.
+            </p>
+
+            <h5>3-VM cluster, no SSH key set up yet (interactive bootstrap)</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- \
+      --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
+      --ssh-bootstrap \
+      --main-address=elchi.example.com \
+      --backend-version=elchi-v1.1.2-v0.13.4-envoy1.36.2</div>
+            <p class="info">
+                <strong>--ssh-bootstrap</strong> mints a fresh ed25519 key on M1, then prompts the
+                operator <em>once per remote node</em> for that node's password. Each password is
+                used only for that node's <code>ssh-copy-id</code> and is discarded immediately
+                after. M1 itself is local — no password prompt for it. Subsequent SSH (orchestration,
+                upgrades, uninstall) all use the generated key.
+            </p>
+
+            <h4>2. <code>install.sh</code> — full flag reference</h4>
+            <p style="font-size: 13px; color: #656d76; margin: 0 0 8px;">
+                Every variant tag in <code>--backend-version</code> is a full release-asset name from
+                <a href="https://github.com/CloudNativeWorks/elchi-backend/releases">elchi-backend releases</a>:
+                <code>elchi-vX.Y.Z-vA.B.C-envoyP.Q.R</code>. Multiple variants are comma-separated and
+                each gets its own systemd template unit + <code>/etc/elchi/&lt;variant&gt;/</code>
+                config dir + <code>/var/lib/elchi/&lt;variant&gt;/</code> HOME dir.
+            </p>
+
+            <details open>
+                <summary>Topology &amp; SSH</summary>
+                <div class="flag-table">
+                    <code>--nodes=&lt;csv&gt;</code><div class="desc">Comma-separated host list, M1 first. <strong>REQUIRED.</strong> M1 is the local machine; M2..Mn are reached over SSH.</div>
+                    <code>--ssh-user=&lt;user&gt;</code><div class="desc">SSH login on M2..Mn. <span class="default">Default: <code>root</code>.</span></div>
+                    <code>--ssh-port=&lt;n&gt;</code><div class="desc">SSH port. <span class="default">Default: <code>22</code>.</span></div>
+                    <code>--ssh-key=&lt;path&gt;</code><div class="desc">Private key for non-interactive auth (recommended for production).</div>
+                    <code>--ssh-password=&lt;pwd&gt;</code><div class="desc">Password fallback (uses <code>sshpass</code>). Avoid for production.</div>
+                    <code>--ssh-bootstrap</code><div class="desc">Mint an ed25519 key on M1 and copy it to every remote node. Prompts INTERACTIVELY for each remote node's password (M1 skipped). Subsequent SSH uses the generated key; passwords are discarded.</div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Versioning</summary>
+                <div class="flag-table">
+                    <code>--backend-version=&lt;csv&gt;</code><div class="desc">One or more variant tags (release-asset basenames). Each variant runs side-by-side. <span class="default">Default: <code>elchi-v1.1.2-v0.13.4-envoy1.36.2</code>. Alias: <code>--backend-variants=</code>.</span></div>
+                    <code>--backend-release=&lt;tag&gt;</code><div class="desc"><strong>Deprecated</strong> — release tag is now derived per variant from the asset name. Accepted but ignored.</div>
+                    <code>--ui-version=&lt;vX.Y.Z&gt;</code><div class="desc">UI bundle version (downloaded from <code>elchi/releases</code> as <code>elchi-dist-vX.Y.Z.tar.gz</code>). <span class="default">Default: <code>v1.1.3</code>.</span></div>
+                    <code>--envoy-version=&lt;vX.Y.Z&gt;</code><div class="desc">Front-door Envoy proxy binary version. <span class="default">Default: <code>v1.37.0</code>.</span></div>
+                    <code>--coredns-version=&lt;vX.Y.Z&gt;</code><div class="desc">Custom CoreDNS-with-elchi-plugin version (used only with <code>--gslb</code>). <span class="default">Default: <code>v0.1.1</code>.</span></div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Backend instance count per node</summary>
+                <p style="font-size: 13px; color: #24292f; margin: 6px 0;">
+                    Replica count is <strong>fixed by design</strong> — there is no flag to tune it:
+                </p>
+                <ul style="font-size: 13px; color: #24292f; margin: 4px 0 8px;">
+                    <li><strong>Controller</strong> — exactly ONE per node. Version-agnostic singleton; uses <code>versions[0]</code>'s binary. Registers as bare <code>&lt;hostname&gt;</code>.</li>
+                    <li><strong>Control-plane</strong> — exactly ONE per (node, variant). Total per node = number of variants. Each registers as <code>&lt;hostname&gt;-controlplane-&lt;envoy-X.Y.Z&gt;</code>.</li>
+                </ul>
+                <p style="font-size: 13px; color: #24292f; margin: 4px 0 0;">
+                    Capacity for a different Envoy version → add another variant tag.
+                    Capacity for the same Envoy version → add another node. Running the same
+                    variant twice on the same host would collide on the registry name and is
+                    rejected by topology compute.
+                </p>
+            </details>
+
+            <details>
+                <summary>Network &amp; TLS</summary>
+                <div class="flag-table">
+                    <code>--main-address=&lt;dns|ip&gt;</code><div class="desc">Public address — <strong>REQUIRED.</strong> Cert SAN. Use a DNS name with A records pointing at every node IP for round-robin, or a single VIP.</div>
+                    <code>--port=&lt;n&gt;</code><div class="desc">Public HTTPS port; Envoy terminates TLS here. <span class="default">Default: <code>443</code>.</span></div>
+                    <code>--hostnames=&lt;csv&gt;</code><div class="desc">Extra cert SANs (e.g. each node's hostname).</div>
+                    <code>--tls=self-signed|provided</code><div class="desc">TLS mode. <span class="default">Default: <code>self-signed</code></span> (10-year ECDSA-P256 generated by openssl).</div>
+                    <code>--cert=&lt;path&gt;</code><div class="desc">PEM cert (with <code>--tls=provided</code>).</div>
+                    <code>--key=&lt;path&gt;</code><div class="desc">PEM private key (with <code>--tls=provided</code>).</div>
+                    <code>--ca=&lt;path&gt;</code><div class="desc">Optional CA bundle for client trust verification.</div>
+                    <code>--timezone=&lt;tz&gt;</code><div class="desc">TZ env var written into every elchi-* unit. <span class="default">Default: <code>UTC</code>.</span></div>
+                </div>
+            </details>
+
+            <details>
+                <summary>MongoDB</summary>
+                <div class="flag-table">
+                    <code>--mongo=local|external</code><div class="desc">Use bundled mongod (1 VM standalone / 2 VM standalone on M1 / 3+ VM RS-3) or operator-supplied URI. <span class="default">Default: <code>local</code>.</span></div>
+                    <code>--mongo-uri=&lt;uri&gt;</code><div class="desc">Full <code>mongodb[+srv]://...</code> for <code>--mongo=external</code>; granular flags below win on conflicts.</div>
+                    <code>--mongo-version=auto|6.0|7.0|8.0</code><div class="desc">Mongo major. <code>auto</code> picks the highest version supported on the detected distro. <span class="default">Default: <code>auto</code>.</span></div>
+                    <code>--mongo-hosts=&lt;csv&gt;</code><div class="desc">External: <code>host1:port1,host2:port2,...</code></div>
+                    <code>--mongo-username=&lt;user&gt;</code><div class="desc">External: app user.</div>
+                    <code>--mongo-password=&lt;pwd&gt;</code><div class="desc">External: app password.</div>
+                    <code>--mongo-database=&lt;name&gt;</code><div class="desc">App DB name. <span class="default">Default: <code>elchi</code>.</span></div>
+                    <code>--mongo-scheme=mongodb|mongodb+srv</code><div class="desc">URI scheme override. <span class="default">Default: <code>mongodb</code>.</span></div>
+                    <code>--mongo-port=&lt;n&gt;</code><div class="desc">Per-host port (used when granular hosts list omits explicit port). <span class="default">Default: <code>27017</code>.</span></div>
+                    <code>--mongo-replicaset=&lt;name&gt;</code><div class="desc">External RS name. Local mode uses <code>elchi-rs</code>.</div>
+                    <code>--mongo-tls=true|false</code><div class="desc">TLS to external mongo. <span class="default">Default: <code>false</code>.</span></div>
+                    <code>--mongo-auth-source=&lt;db&gt;</code><div class="desc"><span class="default">Default: <code>admin</code>.</span></div>
+                    <code>--mongo-auth-mechanism=&lt;mech&gt;</code><div class="desc">e.g. <code>SCRAM-SHA-256</code>. Empty = backend default.</div>
+                    <code>--mongo-timeout-ms=&lt;ms&gt;</code><div class="desc">Server-selection timeout. <span class="default">Default: <code>9000</code>.</span></div>
+                    <code>--mongo-data-dir=&lt;path&gt;</code><div class="desc">Local mode data dir. <span class="default">Default: <code>/var/lib/mongodb</code>.</span></div>
+                </div>
+            </details>
+
+            <details>
+                <summary>VictoriaMetrics</summary>
+                <div class="flag-table">
+                    <code>--vm=local|external</code><div class="desc">Bundle a VM instance on M1 or use external endpoint. <span class="default">Default: <code>local</code>.</span></div>
+                    <code>--vm-endpoint=&lt;url|host:port&gt;</code><div class="desc">Required when <code>--vm=external</code>.</div>
+                    <code>--vm-data-dir=&lt;path&gt;</code><div class="desc">Local TSDB path. <span class="default">Default: <code>/var/lib/elchi/victoriametrics</code>.</span></div>
+                    <code>--vm-retention=&lt;dur&gt;</code><div class="desc">Storage retention period. <span class="default">Default: <code>15d</code>.</span></div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Grafana</summary>
+                <div class="flag-table">
+                    <code>--grafana-user=&lt;user&gt;</code><div class="desc">Admin login. <span class="default">Default: <code>elchi</code>.</span></div>
+                    <code>--grafana-password=&lt;pwd&gt;</code><div class="desc">Admin password. <span class="default">Default: random (printed in summary).</span> Reset is forced via <code>grafana-cli</code> on every install since bare-metal persists <code>/var/lib/grafana</code>.</div>
+                    <code>--grafana-allow-plugin=&lt;csv&gt;</code><div class="desc">Allow-list of unsigned plugin IDs. Pass once per plugin or comma-separated. Locks plugin admin closed by default; passing this flag opens it.</div>
+                </div>
+            </details>
+
+            <details>
+                <summary>GSLB / CoreDNS plugin</summary>
+                <div class="flag-table">
+                    <code>--gslb</code><div class="desc">Enable CoreDNS GSLB on every node (port 53 TCP+UDP, webhook on 8053).</div>
+                    <code>--gslb-zone=&lt;domain&gt;</code><div class="desc">Required with <code>--gslb</code>. Authoritative zone (e.g. <code>gslb.example.com</code>).</div>
+                    <code>--gslb-admin-email=&lt;email&gt;</code><div class="desc">Required. Becomes the SOA RNAME (with <code>@</code> → <code>.</code>).</div>
+                    <code>--gslb-nameservers=&lt;csv&gt;</code><div class="desc"><code>ns1:ip,ns2:ip,...</code> NS records + glue.</div>
+                    <code>--gslb-regions=&lt;csv&gt;</code><div class="desc">Region tags for the regions directive.</div>
+                    <code>--gslb-tls-skip-verify</code><div class="desc">Skip TLS verify when plugin polls backend <code>/dns/snapshot</code> over HTTPS.</div>
+                    <code>--gslb-ttl=&lt;sec&gt;</code><div class="desc">Default record TTL. <span class="default">Default: <code>300</code>.</span></div>
+                    <code>--gslb-sync-interval=&lt;dur&gt;</code><div class="desc">Backend snapshot poll interval. <span class="default">Default: <code>1m</code>.</span></div>
+                    <code>--gslb-timeout=&lt;dur&gt;</code><div class="desc">Snapshot HTTP timeout. <span class="default">Default: <code>4s</code>.</span></div>
+                    <code>--gslb-static-records=&lt;csv&gt;</code><div class="desc">Inline static A/AAAA/CNAME records.</div>
+                    <code>--gslb-secret=&lt;value&gt;</code><div class="desc">Override the auto-generated <code>X-Elchi-Secret</code> shared secret.</div>
+                    <code>--gslb-forwarders=&lt;csv&gt;</code><div class="desc">Recursive resolvers for non-zone queries. <span class="default">Default: <code>8.8.8.8,8.8.4.4</code>.</span></div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Backend behavior &amp; JWT</summary>
+                <div class="flag-table">
+                    <code>--internal-communication=true|false</code><div class="desc">Use internal addresses for inter-service traffic. <span class="default">Default: <code>false</code>.</span></div>
+                    <code>--cors-origins=&lt;csv&gt;</code><div class="desc">Backend CORS allow-list. <span class="default">Default: <code>*</code>.</span></div>
+                    <code>--jwt-access-duration=&lt;dur&gt;</code><div class="desc">Access token lifetime. <span class="default">Default: <code>1h</code>.</span></div>
+                    <code>--jwt-refresh-duration=&lt;dur&gt;</code><div class="desc">Refresh token lifetime. <span class="default">Default: <code>5h</code>.</span></div>
+                    <code>--enable-demo</code><div class="desc">Backend demo mode (read-only sample data).</div>
+                    <code>--log-level=&lt;level&gt;</code><div class="desc">Backend log level. <span class="default">Default: <code>info</code>.</span></div>
+                    <code>--log-format=text|json</code><div class="desc"><span class="default">Default: <code>text</code>.</span></div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Op-mode</summary>
+                <div class="flag-table">
+                    <code>--non-interactive</code><div class="desc">Never prompt; fail if a confirmation would be required.</div>
+                    <code>--no-firewall</code><div class="desc">Skip <code>firewalld</code>/<code>ufw</code> port opening.</div>
+                    <code>--dry-run</code><div class="desc">Render config + topology to <code>/tmp/elchi-dryrun-*</code>; skip every side-effect (no SSH, no SCP, no binary download, no service start).</div>
+                    <code>--force-redownload</code><div class="desc">Bypass sha256 cache; re-download every binary even when local matches upstream.</div>
+                    <code>--keep-bundle</code><div class="desc">Preserve the encrypted handoff bundle artifact at <code>/tmp/</code> after orchestration.</div>
+                    <code>--bundle-key-out=&lt;path&gt;</code><div class="desc">Write the bundle decryption key to a file (mode 0600).</div>
+                    <code>-h | --help</code><div class="desc">Print full usage and exit.</div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Internal (set automatically by the orchestrator)</summary>
+                <div class="flag-table">
+                    <code>--skip-orchestration</code><div class="desc">Run the local-installer path on this single node; topology + secrets must be supplied via <code>--bundle</code>.</div>
+                    <code>--node-index=&lt;n&gt;</code><div class="desc">1-based position of this node in the cluster.</div>
+                    <code>--bundle=&lt;path&gt;</code><div class="desc">Encrypted bundle path on disk.</div>
+                    <code>--bundle-key=&lt;hex&gt;</code><div class="desc">Bundle decryption key.</div>
+                </div>
+            </details>
+
+            <h4>3. <code>upgrade.sh</code> — version-diff upgrade</h4>
+            <p style="font-size: 13px; color: #24292f; margin: 6px 0 8px;">
+                Run on M1. Computes the diff against the running cluster
+                (<code>added</code> / <code>kept</code> / <code>removed</code> variants) and re-runs
+                <code>install.sh</code> with the union. Every <code>elchi-*</code> systemd unit goes
+                through hash-based reconcile (<code>install_and_apply</code> /
+                <code>reconcile_external</code>) so binary or config changes trigger a restart;
+                unchanged services stay running. Single-flight via <code>flock /run/elchi-upgrade.lock</code>.
+            </p>
+
+            <details open>
+                <summary>Flags</summary>
+                <div class="flag-table">
+                    <code>--backend-version=&lt;csv&gt;</code><div class="desc">New variant set. Omit to keep the current set.</div>
+                    <code>--ui-version=&lt;vX.Y.Z&gt;</code><div class="desc">Bump UI bundle.</div>
+                    <code>--envoy-version=&lt;vX.Y.Z&gt;</code><div class="desc">Bump front-door Envoy.</div>
+                    <code>--coredns-version=&lt;vX.Y.Z&gt;</code><div class="desc">Bump CoreDNS plugin (only with GSLB enabled).</div>
+                    <code>--mongo-version=auto|6.0|7.0|8.0</code><div class="desc">Forwarded to install.sh; package upgrade if differs.</div>
+                    <code>--grafana-user=&lt;user&gt;</code><div class="desc">Rotate Grafana admin login.</div>
+                    <code>--grafana-password=&lt;pwd&gt;</code><div class="desc">Rotate Grafana admin password (also resets via grafana-cli).</div>
+                    <code>--prune-version=&lt;tag&gt;</code><div class="desc">Remove this specific variant after install. Repeatable / csv. Mutually exclusive with <code>--prune-missing</code>.</div>
+                    <code>--prune-missing</code><div class="desc">Declarative mode — remove every CURRENT variant that isn't in the new <code>--backend-version</code> list.</div>
+                    <code>--ssh-user=&lt;user&gt;</code><div class="desc">Override SSH credentials saved at install time.</div>
+                    <code>--ssh-key=&lt;path&gt;</code><div class="desc">Override SSH key path.</div>
+                    <code>--ssh-port=&lt;n&gt;</code><div class="desc">Override SSH port.</div>
+                    <code>--skip-health-gate</code><div class="desc">Bypass post-upgrade <code>verify::deep_health</code>. Faster but unsafer; only use when verify itself is the problem.</div>
+                    <code>-h | --help</code><div class="desc">Print full usage and exit.</div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Scenarios &amp; behavior</summary>
+
+                <h5>Add a new variant alongside existing ones</h5>
+                <div class="stdl-cmd">sudo upgrade.sh \
+  --backend-version=elchi-v1.1.2-v0.13.4-envoy1.36.2,elchi-v1.1.3-v0.13.4-envoy1.37.0</div>
+                <p style="font-size: 13px; margin: 4px 0 12px;">
+                    KEPT=[v1.1.2/envoy1.36.2], ADDED=[v1.1.3/envoy1.37.0]. The kept variant's
+                    fingerprint is unchanged → noop. The added variant gets a fresh template unit
+                    + per-instance envs + binary download + start. Port allocations for the kept
+                    variant stay stable (deterministic offset from variant position).
+                </p>
+
+                <h5>Update an existing variant (replace one tag with another)</h5>
+                <div class="stdl-cmd">sudo upgrade.sh \
+  --backend-version=elchi-v1.1.3-v0.13.4-envoy1.37.0 \
+  --prune-version=elchi-v1.1.2-v0.13.4-envoy1.36.2</div>
+                <p style="font-size: 13px; margin: 4px 0 12px;">
+                    install.sh re-runs with [new]; controller's ExecStart now points at new binary →
+                    fingerprint diff → restart. Then prune step removes the old variant's unit,
+                    binary, .prev snapshot, /etc/elchi/&lt;old&gt;/, /var/lib/elchi/&lt;old&gt;/,
+                    fingerprint files, and ports.json entry. <code>/etc/hosts</code> + Envoy
+                    bootstrap are re-rendered with the new variant set.
+                </p>
+
+                <h5>Both at once (declarative)</h5>
+                <div class="stdl-cmd">sudo upgrade.sh \
+  --backend-version=elchi-v1.1.3-v0.13.4-envoy1.37.0,elchi-v1.1.4-v0.13.4-envoy1.38.0 \
+  --prune-missing</div>
+                <p style="font-size: 13px; margin: 4px 0 12px;">
+                    KEPT=∅, ADDED=[v1.1.3, v1.1.4], REMOVED=[everything in CUR not in new list].
+                    Same install→prune flow.
+                </p>
+
+                <h5>Health gate &amp; rollback</h5>
+                <p style="font-size: 13px; margin: 4px 0 12px;">
+                    After install.sh finishes, every node runs <code>verify::deep_health</code>:
+                    systemd state + journalctl registration log + Envoy admin
+                    <code>/listeners</code> bind check. A failure triggers per-binary rollback
+                    on the failed nodes (<code>.prev</code> snapshot → restart). Healthy nodes keep
+                    the new version; the operator retries against the bad node.
+                </p>
+
+                <p class="info">
+                    <strong>Orphan warning:</strong> if you call <code>upgrade.sh --backend-version=B</code>
+                    against a cluster that has [A] running, and you don't pass
+                    <code>--prune-version=A</code> or <code>--prune-missing</code>, the installer
+                    keeps A running and emits a warning. Variants are never silently removed.
+                </p>
+            </details>
+
+            <h4>4. <code>uninstall.sh</code> — remove the stack</h4>
+            <details>
+                <summary>Flags</summary>
+                <div class="flag-table">
+                    <code>--purge</code><div class="desc">Wipe <code>/etc/elchi</code>, <code>/var/lib/elchi</code>, <code>/var/log/elchi</code>, <code>/opt/elchi</code>, system trust-store anchors, and SSH bootstrap material (cluster key, known_hosts.elchi, our authorized_keys entry).</div>
+                    <code>--purge-mongo</code><div class="desc">Also remove mongo packages + <code>/var/lib/mongodb</code> + repo files. Implies <code>--purge</code>.</div>
+                    <code>--purge-vm</code><div class="desc">Wipe VictoriaMetrics data directory. Implies <code>--purge</code>.</div>
+                    <code>--purge-grafana</code><div class="desc">Remove grafana package + <code>/var/lib/grafana</code> + repo files. Implies <code>--purge</code>.</div>
+                    <code>--purge-nginx</code><div class="desc">Remove nginx package + restore the original <code>nginx.conf</code> backup. Implies <code>--purge</code>.</div>
+                    <code>--purge-all</code><div class="desc">All purge flags above.</div>
+                    <code>--all-nodes</code><div class="desc">Fan out to every node from <code>/etc/elchi/nodes.list</code> (M1 last, in reverse, so shared state is dropped last).</div>
+                    <code>--continue-on-error</code><div class="desc">Don't abort on per-node failure; collect errors and print a summary at the end. Non-zero overall exit if any node failed.</div>
+                    <code>--ssh-user=&lt;user&gt; --ssh-key=&lt;path&gt; --ssh-port=&lt;n&gt;</code><div class="desc">Forwarded to ssh::configure for <code>--all-nodes</code>.</div>
+                    <code>--yes-i-mean-it</code><div class="desc">Skip the destructive-action confirmation. Required for <code>--non-interactive</code> purge.</div>
+                    <code>-h | --help</code><div class="desc">Print usage banner extracted from the script header.</div>
+                </div>
+            </details>
+
+            <p class="note" style="margin-top: 8px;">
+                Default uninstall is non-destructive: services stop, unit files / binaries / installer
+                payload / nginx vhost / journald drop-in / firewall ports / managed
+                <code>/etc/hosts</code> block all go. Mongo, VictoriaMetrics, Grafana data + secrets
+                + TLS material are preserved unless you opt in via the matching
+                <code>--purge*</code> flag.
+            </p>
+
+            <h4>5. <code>elchi-stack</code> — operator helper (<code>/usr/local/bin/elchi-stack</code>)</h4>
+            <div class="flag-table">
+                <code>elchi-stack status</code><div class="desc">Cluster-wide service summary (each node's <code>systemctl is-active</code> for every elchi-* unit).</div>
+                <code>elchi-stack logs &lt;unit&gt; [-f]</code><div class="desc">Tail journalctl for the named unit on every node. <code>-f</code> follows.</div>
+                <code>elchi-stack reload-envoy</code><div class="desc">Re-render Envoy bootstrap + restart Envoy on every node (after a topology change).</div>
+                <code>elchi-stack add-node &lt;ip&gt;</code><div class="desc">Extend the cluster: provision the new node with the existing bundle, recompute topology, push updated <code>/etc/hosts</code> + Envoy bootstrap to all peers.</div>
+                <code>elchi-stack init-replica-set</code><div class="desc">Run <code>rs.initiate()</code> on M1 (idempotent — checks <code>rs.status()</code> first).</div>
+                <code>elchi-stack export-bundle &lt;out&gt; [--reuse-bundle-key]</code><div class="desc">Repackage cluster artifacts into an encrypted bundle. <code>--reuse-bundle-key</code> reuses the install-time key persisted via systemd-creds at <code>/etc/elchi/.bundle-key</code> so the bundle can be reapplied without redistributing a fresh key.</div>
+                <code>elchi-stack rotate-secret &lt;jwt|gslb&gt;</code><div class="desc">Mint a new JWT or GSLB secret, restart affected services.</div>
+                <code>elchi-stack verify</code><div class="desc">End-to-end cluster health: registration log evidence + Envoy admin listener probe + service active state on every node.</div>
+            </div>
+
+            <h4>6. Port atlas</h4>
+            <div class="port-table">
+                <span class="port-label">Envoy public</span><span class="port-value">0.0.0.0:443/tcp</span><span class="port-note">TLS, every node (configurable via <code>--port</code>)</span>
+                <span class="port-label">Envoy internal</span><span class="port-value">127.0.0.1:8080</span><span class="port-note">Plaintext loopback (UI/API to backend)</span>
+                <span class="port-label">Envoy admin</span><span class="port-value">127.0.0.1:9901</span><span class="port-note">Hardcoded loopback only</span>
+                <span class="port-label">nginx (UI)</span><span class="port-value">127.0.0.1:8081</span><span class="port-note">SPA + config.js, fronted by Envoy</span>
+                <span class="port-label">Registry gRPC</span><span class="port-value">0.0.0.0:1870</span><span class="port-note">HA peer set on every node; Envoy gRPC HC picks the leader</span>
+                <span class="port-label">Registry metrics</span><span class="port-value">:9091</span><span class="port-note">Hardcoded in backend; OTel scrape target</span>
+                <span class="port-label">Controller REST</span><span class="port-value">:1980</span><span class="port-note">Singleton per node (uses <code>versions[0]</code> binary)</span>
+                <span class="port-label">Controller gRPC</span><span class="port-value">:1960</span><span class="port-note">Singleton per node</span>
+                <span class="port-label">Control-plane</span><span class="port-value">:1990, 1991, …</span><span class="port-note">One port per variant by 0-indexed list position; same variant gets same port on every node</span>
+                <span class="port-label">MongoDB</span><span class="port-value">:27017</span><span class="port-note">Standalone for 1-2 VM topology, RS-3 for 3+</span>
+                <span class="port-label">Grafana</span><span class="port-value">127.0.0.1:3000</span><span class="port-note">M1 only; reverse-proxied at <code>/grafana/</code></span>
+                <span class="port-label">VictoriaMetrics</span><span class="port-value">0.0.0.0:8428</span><span class="port-note">M1 only (with <code>--vm=local</code>)</span>
+                <span class="port-label">OTel gRPC</span><span class="port-value">:4317</span><span class="port-note">M1 only; ingest from backend</span>
+                <span class="port-label">OTel HTTP</span><span class="port-value">:4318</span><span class="port-note">M1 only</span>
+                <span class="port-label">OTel health</span><span class="port-value">:13133</span><span class="port-note">M1 only</span>
+                <span class="port-label">CoreDNS</span><span class="port-value">:53/tcp+udp</span><span class="port-note">Every node (only with <code>--gslb</code>)</span>
+                <span class="port-label">CoreDNS webhook</span><span class="port-value">0.0.0.0:8053</span><span class="port-note">M1 → M2/M3 push notifications (X-Elchi-Secret auth)</span>
+            </div>
+
+            <h4>7. Topology</h4>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <strong>1 VM:</strong> all-in-one. <strong>2 VM:</strong> Mongo standalone on M1; M2
+                connects over LAN. <strong>3+ VM:</strong> Mongo replica set across the first 3 nodes;
+                additional nodes (4+) run no mongod. Registry runs on every node with HA leader
+                election (Mongo lease, TTL 30s, renew 10s). UI/Envoy/backend run on every node — each
+                node's front-door Envoy round-robins UI traffic across all peers' nginx instances and
+                uses ext_proc + the registry to decide which control-plane / controller to route each
+                request to (<code>x-target-cluster</code> header).
+            </p>
+
+            <h4>8. Idempotency &amp; reconcile</h4>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                Every setup module uses hash-based reconcile
+                (<code>systemd::install_and_apply</code> for elchi-* units;
+                <code>systemd::reconcile_external</code> for grafana-server / mongod / nginx).
+                The fingerprint = sha256(unit_file ‖ EnvironmentFile contents ‖ ExecStart binary)
+                and is persisted at <code>/var/lib/elchi/.unit-fingerprint/&lt;unit&gt;</code>.
+                Decision matrix on rerun:
+            </p>
+            <ul style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <li>Fingerprint changed + active → <code>restart</code></li>
+                <li>Fingerprint changed + inactive → <code>start</code></li>
+                <li>Fingerprint same + active → <code>noop</code> (zero downtime)</li>
+                <li>Fingerprint same + inactive → <code>start</code> (crash recovery)</li>
+            </ul>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                Binary downloads keep a <code>.prev</code> snapshot for rollback. <code>upgrade.sh</code>
+                fails closed if any node fails the deep-health gate; per-binary rollback is automatic.
+            </p>
+
+            <h4>9. Supported distros</h4>
+            <p style="margin: 0; font-size: 14px; color: #656d76;">
+                Ubuntu 22.04 + 24.04 · Debian 11 + 12 · RHEL / Rocky / Alma / Oracle 9.
+                amd64 only (arm64 lands when upstream backend ships arm64 binaries).
+            </p>
+
+            <p style="margin-top: 16px;">
+                <a href="https://github.com/CloudNativeWorks/elchi-archive/blob/main/deploy/standalone/README.md"
+                   style="display: inline-block; background: #1a7f37; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none;">
+                    📖 Full README
+                </a>
+                <a href="https://github.com/CloudNativeWorks/elchi-archive/tree/main/deploy/standalone"
+                   style="display: inline-block; background: #0969da; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; margin-left: 4px;">
+                    💻 Source
+                </a>
+            </p>
         </div>
 
         <div class="tabs">
