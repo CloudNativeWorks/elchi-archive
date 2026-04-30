@@ -8,6 +8,12 @@ on:
         required: true
         type: string
 
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20. Drop this block once every
+  # action used here ships a native Node 24 manifest.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   contents: write
   pages: write
@@ -30,7 +36,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Checkout Coraza Proxy WASM
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: corazawaf/coraza-proxy-wasm
           ref: ${{ steps.normalize.outputs.version }}
@@ -54,7 +60,7 @@ jobs:
           sha256sum coraza-amd64.wasm > coraza-amd64.wasm.sha256
 
       - name: Upload AMD64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coraza-wasm-amd64
           path: |
@@ -73,7 +79,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Checkout Coraza Proxy WASM
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: corazawaf/coraza-proxy-wasm
           ref: ${{ steps.normalize.outputs.version }}
@@ -96,7 +102,7 @@ jobs:
             "
 
       - name: Upload ARM64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coraza-wasm-arm64
           path: |
@@ -108,18 +114,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout archive repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download AMD64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: coraza-wasm-amd64
           path: releases/coroza-${{ github.event.inputs.version }}
 
       - name: Download ARM64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: coraza-wasm-arm64
           path: releases/coroza-${{ github.event.inputs.version }}
@@ -213,18 +219,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
 
       - name: Upload to GitHub Pages
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: '.'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

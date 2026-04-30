@@ -35,12 +35,22 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# Quick parse — strip --ref= if the operator passed it inline; everything
-# else is forwarded verbatim to install.sh.
+# Quick parse — strip --ref=, --uninstall, --upgrade if the operator
+# passed them inline; everything else is forwarded verbatim to whichever
+# script ends up being exec'd.
+#
+# Default action: run install.sh. Override with one of:
+#   --uninstall          run uninstall.sh instead
+#   --upgrade            run upgrade.sh instead
+#   --script=<basename>  generic escape hatch (e.g. --script=elchi-stack)
+TARGET_SCRIPT=install.sh
 fwd=()
 for arg in "$@"; do
   case "$arg" in
-    --ref=*)     ELCHI_REF=${arg#*=} ;;
+    --ref=*)        ELCHI_REF=${arg#*=} ;;
+    --uninstall)    TARGET_SCRIPT=uninstall.sh ;;
+    --upgrade)      TARGET_SCRIPT=upgrade.sh ;;
+    --script=*)     TARGET_SCRIPT=${arg#*=} ;;
     --version=*)
       printf 'note: --version is no longer used; the installer is unversioned (main branch).\n' >&2
       printf '      use --backend-version=, --ui-version=, --envoy-version= for component versions.\n' >&2
@@ -79,10 +89,11 @@ ROOT=$(find "$WORKDIR" -maxdepth 1 -mindepth 1 -type d | head -n1)
 [ -n "$ROOT" ] || { printf '[ERR] tarball produced no directory\n' >&2; exit 1; }
 
 INSTALLER_DIR="${ROOT}/deploy/standalone"
-[ -f "${INSTALLER_DIR}/install.sh" ] \
-  || { printf '[ERR] %s missing install.sh — wrong ref?\n' "$INSTALLER_DIR" >&2; exit 1; }
+[ -f "${INSTALLER_DIR}/${TARGET_SCRIPT}" ] \
+  || { printf '[ERR] %s/%s missing — wrong ref or unsupported script?\n' "$INSTALLER_DIR" "$TARGET_SCRIPT" >&2; exit 1; }
 
 chmod +x "${INSTALLER_DIR}"/*.sh "${INSTALLER_DIR}/elchi-stack" 2>/dev/null || true
 
+# Persist the workdir so the target script can keep sourcing lib/ files.
 trap - EXIT
-exec "${INSTALLER_DIR}/install.sh" "${fwd[@]}"
+exec "${INSTALLER_DIR}/${TARGET_SCRIPT}" "${fwd[@]}"

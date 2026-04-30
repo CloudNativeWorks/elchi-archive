@@ -232,8 +232,12 @@ preflight::check_port() {
     ')
   fi
 
+  # Tolerate ports held by binaries we install ourselves — partial
+  # install + rerun is the dominant case here. Process names per `ss
+  # -ltnp` show the actual COMM, not the systemd unit, so we have to
+  # whitelist each binary basename.
   case "$holder" in
-    *elchi*|*envoy*|*mongod*|*nginx*)
+    *elchi*|*envoy*|*mongod*|*nginx*|*otelcol*|*victoria*|*grafana*|*coredns*)
       log::info "port ${port} (${label}) is held by an existing elchi-stack-related process — assuming rerun"
       return 0
       ;;

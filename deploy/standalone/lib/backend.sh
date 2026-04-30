@@ -76,14 +76,27 @@ backend::render_per_version_configs() {
 
 backend::_resolve_mongo_hosts() {
   # Returns "<csv-of-host:port>|<replicaSet>" so callers can split.
+  #
+  # Address selection per topology:
+  #   * external mode               → operator-supplied --mongo-hosts (verbatim)
+  #   * local + cluster_size>=3     → RS member list "n1:27017,n2:27017,n3:27017"
+  #                                   (every node connects to all three, driver
+  #                                   picks the primary)
+  #   * local + cluster_size in {1,2}, this node is M1 (idx=1)
+  #                                 → "127.0.0.1" — mongod is on this same
+  #                                   box. In single-VM mode mongod binds
+  #                                   loopback-only, so the public IP isn't
+  #                                   reachable; in 2-VM mode mongod binds
+  #                                   0.0.0.0 but loopback is faster + safer
+  #                                   (no IP tables traversal).
+  #   * local + cluster_size==2, this node is M2 (idx>=2)
+  #                                 → M1's host (the LAN/public address;
+  #                                   mongod binds 0.0.0.0 in this mode).
   local cluster_size m1_host hosts replset=''
   cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
   m1_host=$(topology::registry_host)
 
   if [ "${ELCHI_MONGO_MODE:-local}" = "external" ]; then
-    # Operator-provided granular fields (set directly via --mongo-hosts /
-    # --mongo-replicaset, OR populated from --mongo-uri parsing in
-    # install.sh). Fail fast if neither was supplied.
     hosts=${ELCHI_MONGO_HOSTS:?external mongo requires --mongo-hosts or --mongo-uri}
     replset=${ELCHI_MONGO_REPLICASET:-}
   elif [ "$cluster_size" -ge 3 ] 2>/dev/null; then
@@ -93,7 +106,11 @@ backend::_resolve_mongo_hosts() {
     n3=$(awk '/^  - index: 3/{f=1; next} f && /^    host:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
     hosts="${n1}:27017,${n2}:27017,${n3}:27017"
     replset="elchi-rs"
+  elif [ "${ELCHI_NODE_INDEX:-1}" = "1" ]; then
+    # M1 (this node) hosts mongo locally — use loopback.
+    hosts="127.0.0.1"
   else
+    # M2 reaches M1's mongod via the LAN/public address.
     hosts="$m1_host"
   fi
   printf '%s|%s' "$hosts" "$replset"

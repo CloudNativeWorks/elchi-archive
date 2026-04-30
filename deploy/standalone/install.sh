@@ -515,6 +515,15 @@ local_install() {
   user::ensure
   dirs::ensure
 
+  # Stage the operator helper + uninstall script BEFORE any service
+  # actually starts. If a later step (registry / envoy / control-plane)
+  # crashes mid-install, the operator can still recover with
+  # `/opt/elchi-installer/uninstall.sh` and `/usr/local/bin/elchi-stack`
+  # — these used to live at the END of local_install which meant a
+  # partial install left the operator with no recovery path beyond
+  # re-downloading the tarball manually.
+  install_helpers
+
   if [ "$ELCHI_SKIP_ORCHESTRATION" = "1" ]; then
     # Remote node — secrets + cluster state come from the bundle.
     [ -n "$ELCHI_BUNDLE_PATH" ] || die "--bundle is required with --skip-orchestration"
@@ -616,9 +625,8 @@ local_install() {
   # GSLB CoreDNS — every node when enabled.
   coredns::setup
 
-  # firewall + verify
+  # firewall + verify (install_helpers ran early in local_install).
   firewall::open
-  install_helpers
   watchdog::install
   verify::wait
 
