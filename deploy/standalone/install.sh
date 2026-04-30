@@ -385,11 +385,13 @@ parse_args() {
     parse_mongo_uri "$ELCHI_MONGO_URI"
   fi
 
-  # Derive a random Grafana password if the operator didn't pick one
-  # (printed in the summary).
-  if [ -z "$ELCHI_GRAFANA_PASSWORD" ]; then
-    ELCHI_GRAFANA_PASSWORD="elchi-$(openssl rand -hex 4 2>/dev/null || head -c4 /dev/urandom | od -An -vtx1 | tr -d ' ')"
-  fi
+  # Grafana password is now persisted in /etc/elchi/secrets.env by
+  # secrets::generate (or imported from the bundle). The random-mint
+  # fallback that used to live here re-rotated the password on every
+  # rerun, breaking idempotency. The operator can still override at
+  # install time via --grafana-password=... — that value flows through
+  # ELCHI_GRAFANA_PASSWORD into secrets::generate's first-run mint and
+  # is then preserved on subsequent runs.
 
   # Export everything for child shells / lib functions.
   export ELCHI_NODES ELCHI_SSH_USER ELCHI_SSH_PORT ELCHI_SSH_KEY ELCHI_SSH_PASSWORD

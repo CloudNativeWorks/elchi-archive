@@ -129,9 +129,14 @@ EOF
 }
 
 grafana::render_ini() {
+  # Read from /etc/elchi/secrets.env first (persistent across reruns),
+  # falling back to env vars if the secrets.env entry is missing
+  # (legacy installs or unit-test paths).
   local user pwd
-  user=${ELCHI_GRAFANA_USER:-elchi}
-  pwd=${ELCHI_GRAFANA_PASSWORD:-elchi}
+  user=$(secrets::value ELCHI_GRAFANA_USER 2>/dev/null)
+  pwd=$(secrets::value ELCHI_GRAFANA_PASSWORD 2>/dev/null)
+  user=${user:-${ELCHI_GRAFANA_USER:-admin}}
+  pwd=${pwd:-${ELCHI_GRAFANA_PASSWORD:-elchi}}
 
   # Plugin admin: locked down by default. When the operator passes
   # --grafana-allow-plugin=<csv>, we open the catalog so they can
@@ -280,8 +285,11 @@ grafana::copy_dashboards() {
 # Bare-metal persists /var/lib/grafana/grafana.db, so a re-run with a
 # new password is silently ignored. Use grafana-cli to force-reset.
 grafana::_reset_admin_password() {
-  local user=${ELCHI_GRAFANA_USER:-elchi}
-  local pwd=${ELCHI_GRAFANA_PASSWORD:-elchi}
+  local user pwd
+  user=$(secrets::value ELCHI_GRAFANA_USER 2>/dev/null)
+  pwd=$(secrets::value ELCHI_GRAFANA_PASSWORD 2>/dev/null)
+  user=${user:-${ELCHI_GRAFANA_USER:-admin}}
+  pwd=${pwd:-${ELCHI_GRAFANA_PASSWORD:-elchi}}
   if ! command -v grafana-cli >/dev/null 2>&1; then
     return 0
   fi

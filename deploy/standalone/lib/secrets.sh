@@ -31,7 +31,7 @@ secrets::generate() {
     log::info "${out} already exists — preserving (no rotation)"
   else
     log::info "minting fresh secrets"
-    local jwt_secret mongo_app_pwd mongo_root_pwd gslb_secret
+    local jwt_secret mongo_app_pwd mongo_root_pwd gslb_secret grafana_pwd
     # 32-byte hex (256 bit) for everything that goes through HMAC / Argon2;
     # alnum form (avoid special chars) for mongo passwords because the
     # mongo URI parser is finicky about embedded `@:/?#%`.
@@ -39,6 +39,9 @@ secrets::generate() {
     mongo_app_pwd=$(rand_alnum 40)
     mongo_root_pwd=$(rand_alnum 40)
     gslb_secret=$(rand_alnum 48)
+    # Grafana admin password — short alnum, easier for operators to type.
+    # Operator can override via --grafana-password=... at install time.
+    grafana_pwd=${ELCHI_GRAFANA_PASSWORD:-elchi-$(rand_hex 4)}
 
     umask 077
     cat > "${out}.tmp" <<EOF
@@ -55,6 +58,14 @@ ELCHI_MONGO_USERNAME=elchi
 ELCHI_MONGO_PASSWORD=${mongo_app_pwd}
 ELCHI_MONGO_ROOT_USERNAME=elchi-admin
 ELCHI_MONGO_ROOT_PASSWORD=${mongo_root_pwd}
+
+# Grafana admin login. Username defaults to "admin" because Grafana
+# initialises the DB user from grafana.ini ONLY on first start; later
+# rerun's admin_user= is ignored. Override at install time with
+# --grafana-user= / --grafana-password= to set the desired values
+# before the DB is initialised.
+ELCHI_GRAFANA_USER=${ELCHI_GRAFANA_USER:-admin}
+ELCHI_GRAFANA_PASSWORD=${grafana_pwd}
 EOF
     chmod 0640 "${out}.tmp"
     chown root:"$ELCHI_GROUP" "${out}.tmp"
