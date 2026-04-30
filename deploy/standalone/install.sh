@@ -869,7 +869,35 @@ orchestrate() {
   done
   export ELCHI_NODE_HOSTNAMES
 
-  # Compute topology + ports + secrets before touching disk on remotes.
+  # M1 prep — runs BEFORE any of the cluster-wide artifact builders so
+  # they have a working tool-belt and an `elchi:elchi` user/group to
+  # chown things to. Each step's *direct* dependency:
+  #
+  #   detect_os         — sets ELCHI_OS_FAMILY (used by install_tools,
+  #                       user::ensure, mongodb pkg flow, ...)
+  #   install_tools     — installs curl/openssl/tar/jq/envsubst on
+  #                       minimal images. secrets::generate (openssl),
+  #                       topology::compute (jq + awk), tls::setup
+  #                       (openssl req), bundle::build (tar+openssl),
+  #                       render_template (envsubst) all hard-depend.
+  #   user::ensure      — creates the elchi user + group. Required
+  #                       before any `install -g elchi` on /etc/elchi
+  #                       subdirs.
+  #   dirs::ensure      — lays down /etc/elchi, /opt/elchi/{bin,web},
+  #                       /var/lib/elchi, /var/log/elchi with the
+  #                       correct ownership.
+  #
+  # All four are idempotent — local_install calls preflight::run +
+  # user::ensure + dirs::ensure again later; second pass is a no-op.
+  preflight::detect_os
+  preflight::install_tools
+  user::ensure
+  dirs::ensure
+
+  # Cluster-wide artifacts. Order matters: topology must be written
+  # before secrets/tls (tls SAN list reads /etc/elchi/nodes.list);
+  # secrets must exist before bundle::build (bundle ships secrets.env);
+  # tls before bundle (bundle ships server.{crt,key,ca.crt}).
   topology::compute
   secrets::generate
   tls::setup
