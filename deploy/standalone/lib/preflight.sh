@@ -361,15 +361,16 @@ preflight::check_cluster_ports() {
     [ -n "$rest_p" ] && preflight::check_port "$rest_p" "controller-rest"
     [ -n "$grpc_p" ] && preflight::check_port "$grpc_p" "controller-grpc"
 
-    # Walk every (variant, idx) control-plane port assigned to THIS host.
+    # Walk each variant's control-plane port assigned to THIS host.
+    # Schema: .control_plane[<variant>][<host>] = <port> (scalar, one
+    # instance per node per variant in the new model).
     while IFS=$'\t' read -r variant port; do
       [ -z "$variant" ] && continue
+      [ -z "$port" ] || [ "$port" = "null" ] && continue
       preflight::check_port "$port" "control-plane(${variant})"
     done < <(jq -r --arg h "$host" '
       .control_plane | to_entries[]
-        | .key as $v
-        | (.value[$h] // [])[]
-        | "\($v)\t\(.port)"
+        | "\(.key)\t\(.value[$h] // "")"
     ' "$ports_json" 2>/dev/null)
   fi
 

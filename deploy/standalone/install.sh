@@ -791,11 +791,11 @@ orchestrate_collect_ports_for() {
     [ -n "$p" ] && printf '%d:controller-rest\n' "$p"
     p=$(jq -r --arg h "$host" '.controller[$h].grpc // empty' "$ports_json")
     [ -n "$p" ] && printf '%d:controller-grpc\n' "$p"
+    # Schema: .control_plane[<variant>][<host>] = <port> (scalar).
     jq -r --arg h "$host" '
       .control_plane | to_entries[]
-        | .key as $v
-        | (.value[$h] // [])[]
-        | "\(.port):control-plane(\($v))"
+        | select(.value[$h] != null)
+        | "\(.value[$h]):control-plane(\(.key))"
     ' "$ports_json" 2>/dev/null
   fi
 }

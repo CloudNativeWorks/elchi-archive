@@ -127,12 +127,23 @@ rand_hex() {
 # rand_alnum <length> — printable token suitable for embedding in URLs
 # and shell args. Avoids ambiguous characters (0/O, 1/l/I) that confuse
 # operators reading bundle keys off a screen.
+#
+# Implementation note: piping `</dev/urandom | tr -dc | head -c N` is
+# the classic short form, but it triggers SIGPIPE on `tr` when `head`
+# closes its stdin after reading N bytes — `set -Eeuo pipefail` then
+# fires the ERR trap mid-loop with misleading "installer aborted"
+# noise even though the subshell produced the right output. Using a
+# fixed-size /dev/urandom read + filter avoids the broken-pipe race.
 rand_alnum() {
   local len=${1:-32}
   local pool='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
   local out=''
-  while [ ${#out} -lt "$len" ]; do
-    out="${out}$(LC_ALL=C tr -dc "$pool" </dev/urandom | head -c "$len")"
+  # /dev/urandom yields ~75% pool-eligible bytes after `tr -dc`. Pull
+  # a generous 4×len each pass to almost always finish in one round.
+  while [ "${#out}" -lt "$len" ]; do
+    local chunk
+    chunk=$(LC_ALL=C tr -dc "$pool" < <(dd if=/dev/urandom bs=$(( len * 4 )) count=1 2>/dev/null) || true)
+    out="${out}${chunk}"
   done
   printf '%s' "${out:0:$len}"
 }
@@ -228,10 +239,48 @@ confirm() {
 }
 
 # ----- error trap --------------------------------------------------------
-# Catches uncaught failures with line + command. Prevents silent exits
-# on `set -e` triggers (a pipeline failure in a deeply-nested module
-# would otherwise just disappear).
-trap 'log::err "installer aborted (line $LINENO, command: $BASH_COMMAND)"' ERR
+# `set -E` (errtrace) propagates the ERR trap into subshells and command
+# substitutions, which means a non-zero exit from `cmd` inside `$(cmd)`
+# fires this trap even when the parent handles the failure (`||`, `if`,
+# captured-but-checked stdout, SIGPIPE on a `tr | head` pair, etc.).
+# Logging "installer aborted" in those cases was misleading — the
+# install kept going after every "abort" message.
+#
+# The trap is now noise-free:
+#   * Skips entirely when running inside a subshell (BASH_SUBSHELL > 0)
+#     because the parent decides whether the failure is fatal.
+#   * Skips when `set -e` is currently disabled (`+e` mode), since the
+#     failure can't trigger an abort anyway.
+#   * Uses neutral wording ("command failed (rc=N)") instead of
+#     "aborted" — only the EXIT trap below knows whether the script
+#     actually exits non-zero.
+#
+# A real abort (die / unhandled non-zero in main shell) still flows
+# through `set -e` → process exits with non-zero rc → EXIT trap prints
+# the final summary line.
+_elchi_err_trap() {
+  local rc=$? line=$1 cmd=$2
+  # Subshell? Parent decides — stay silent.
+  (( BASH_SUBSHELL > 0 )) && return $rc
+  # set -e disabled (e.g. inside `set +e` block)? Caller is handling it.
+  case $- in *e*) ;; *) return $rc ;; esac
+  log::warn "command failed (rc=${rc}) at line ${line}: ${cmd}"
+  return $rc
+}
+# Capture LINENO + BASH_COMMAND at trap fire time — both are reset
+# once execution enters the trap handler function.
+trap '_elchi_err_trap "$LINENO" "$BASH_COMMAND"' ERR
+
+# Final-exit notice. Fires once on script termination. If rc != 0 the
+# operator gets a single, accurate "aborted" line; rc=0 stays silent.
+_elchi_exit_trap() {
+  local rc=$?
+  if (( rc != 0 )) && (( BASH_SUBSHELL == 0 )); then
+    log::err "installer exited with rc=${rc}"
+  fi
+  return $rc
+}
+trap '_elchi_exit_trap' EXIT
 
 # ----- common constants --------------------------------------------------
 # Paths that downstream modules reference. Keep these in one place so
