@@ -283,16 +283,22 @@ ssh::_bootstrap_one_host() {
 # host first and skips both the password prompt AND the ssh-copy-id when
 # the key is already accepted.
 #
-# Requires a controlling TTY — fails fast under --non-interactive or
-# piped stdin so the operator doesn't end up with a half-bootstrapped
-# cluster.
+# Requires a controlling TTY — fails fast under --non-interactive or a
+# detached process (no /dev/tty) so the operator doesn't end up with a
+# half-bootstrapped cluster. We probe /dev/tty directly rather than
+# checking `[ -t 0 ]`: stdin is a pipe whenever the operator runs
+# `curl ... | sudo bash`, but the controlling TTY is still attached and
+# the prompt code below reads/writes /dev/tty regardless of stdin.
 ssh::bootstrap_keys_interactive() {
   local user=$1 port=$2
   shift 2
   local -a hosts=("$@")
 
-  if [ ! -t 0 ] || [ "${ELCHI_NON_INTERACTIVE:-0}" = "1" ]; then
-    die "--ssh-bootstrap requires an interactive TTY (per-host password prompt)"
+  if [ "${ELCHI_NON_INTERACTIVE:-0}" = "1" ]; then
+    die "--ssh-bootstrap requires interactive mode (per-host password prompt); incompatible with --non-interactive"
+  fi
+  if ! { true </dev/tty; } 2>/dev/null; then
+    die "--ssh-bootstrap requires a controlling TTY (per-host password prompt); /dev/tty not accessible — re-run from an interactive shell"
   fi
 
   local key_path

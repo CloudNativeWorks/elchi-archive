@@ -835,6 +835,26 @@ orchestrate() {
   local -a hosts
   mapfile -t hosts < <(topology::parse_nodes "$ELCHI_NODES")
 
+  # Auto-enable --ssh-bootstrap when the operator clearly needs it but
+  # didn't pass it explicitly: multi-node cluster (≥1 remote host), no
+  # --ssh-key, no --ssh-password, interactive TTY available, not under
+  # --non-interactive. Without this, the install would fail at the
+  # "verifying SSH access" step with a cryptic "publickey denied" because
+  # BatchMode=yes blocks the password fallback. Single-VM installs (all
+  # hosts local) skip this — no remote SSH happens.
+  if [ "$ELCHI_SSH_BOOTSTRAP" != "1" ] \
+     && [ -z "$ELCHI_SSH_KEY" ] && [ -z "$ELCHI_SSH_PASSWORD" ] \
+     && [ "${ELCHI_NON_INTERACTIVE:-0}" != "1" ]; then
+    local _has_remote=0 _h
+    for _h in "${hosts[@]}"; do
+      ssh::is_local "$_h" || { _has_remote=1; break; }
+    done
+    if [ "$_has_remote" = "1" ] && { true </dev/tty; } 2>/dev/null; then
+      log::info "no --ssh-key / --ssh-password supplied — auto-enabling --ssh-bootstrap (interactive password prompt per remote node)"
+      ELCHI_SSH_BOOTSTRAP=1
+    fi
+  fi
+
   # Optional one-time SSH bootstrap: M1 mints a fresh ed25519 key, then
   # prompts the operator for EACH remote node's password (M1 itself is
   # local and is never prompted). After ssh-copy-id, all subsequent SSH
