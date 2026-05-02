@@ -202,6 +202,17 @@ disable_signout_menu = false
 [auth.anonymous]
 enabled = false
 
+# Disable Grafana's outbound calls during startup. Defaults are all
+# 'true' and each one synchronously hits stats.grafana.org / grafana.com
+# before the HTTP listener binds — adds 5-30s to first-start when DNS is
+# slow or outbound HTTPS is firewalled (very common on production VMs).
+# Also: no anonymous telemetry leaves the operator's network.
+[analytics]
+reporting_enabled = false
+check_for_updates = false
+check_for_plugin_updates = false
+feedback_links_enabled = false
+
 [log]
 level = info
 

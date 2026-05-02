@@ -179,13 +179,28 @@ ssh::scp() {
 
 # ssh::scp_dir <local-dir> <host> <remote-dir> — recursively copy a
 # whole tree (used to ship the installer bundle to each node).
+#
+# Replace semantics: <remote-dir> ends up holding <local-dir>'s contents
+# regardless of whether <remote-dir> existed before. We wipe + recreate
+# rather than naive `scp -r`, which has a quietly destructive quirk:
+#   * dst MISSING → scp creates dst with src's contents (what we want)
+#   * dst EXISTS  → scp inserts src INSIDE dst, leaving dst/<basename>/...
+# That second branch silently broke the M1→remote installer push because
+# the orchestrator pre-creates /opt/elchi-installer with mkdir -p, so
+# every reinstall (and every fresh install on a host where the parent
+# was made by ANY other step) put files at
+# /opt/elchi-installer/tmp.XXXXXX/install.sh — and the next step's
+# `bash /opt/elchi-installer/install.sh` exited with "No such file".
 ssh::scp_dir() {
   local src=$1 host=$2 dst=$3
   if ssh::is_local "$host"; then
-    mkdir -p "$dst"
-    cp -a "${src%/}/." "${dst%/}/"
+    rm -rf "$dst"
+    mkdir -p "$(dirname "$dst")"
+    cp -a "$src" "$dst"
     return $?
   fi
+  ssh::run_sudo "$host" rm -rf "$dst"
+  ssh::run_sudo "$host" mkdir -p "$(dirname "$dst")"
   local opts=()
   local arg
   for arg in "${_ELCHI_SSH_OPTS[@]}"; do

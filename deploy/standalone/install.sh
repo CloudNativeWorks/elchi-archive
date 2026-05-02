@@ -1043,7 +1043,10 @@ EOF
         continue
       fi
       log::node "$host" "preparing remote install"
-      ssh::run_sudo "$host" mkdir -p /opt/elchi-installer /tmp
+      # ssh::scp_dir handles parent-dir creation and dst-replace
+      # semantics; pre-mkdir-ing /opt/elchi-installer here would cause
+      # scp -r to insert the source INSIDE the existing dst (placing
+      # files at /opt/elchi-installer/tmp.XXXXXX/install.sh).
       ssh::scp_dir "$stage_inst" "$host" /opt/elchi-installer
       ssh::scp     "$bundle_enc" "$host" /tmp/elchi-bundle.tar.gz.enc
 
