@@ -26,6 +26,12 @@ export ELCHI_INSTALLER_ROOT
 
 # ----- defaults ----------------------------------------------------------
 ELCHI_NODES=${ELCHI_NODES:-}
+# Track whether the operator explicitly chose an SSH user (via env var or
+# --ssh-user=...). When NOT explicit and we end up in the interactive
+# bootstrap path, we prompt for the user — defaulting to 'root' on empty
+# input so existing muscle-memory still works.
+_ELCHI_SSH_USER_EXPLICIT=${ELCHI_SSH_USER:+1}
+_ELCHI_SSH_USER_EXPLICIT=${_ELCHI_SSH_USER_EXPLICIT:-0}
 ELCHI_SSH_USER=${ELCHI_SSH_USER:-root}
 ELCHI_SSH_PORT=${ELCHI_SSH_PORT:-22}
 ELCHI_SSH_KEY=${ELCHI_SSH_KEY:-}
@@ -291,7 +297,7 @@ parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --nodes=*)                              ELCHI_NODES=${1#*=} ;;
-      --ssh-user=*)                           ELCHI_SSH_USER=${1#*=} ;;
+      --ssh-user=*)                           ELCHI_SSH_USER=${1#*=}; _ELCHI_SSH_USER_EXPLICIT=1 ;;
       --ssh-port=*)                           ELCHI_SSH_PORT=${1#*=} ;;
       --ssh-key=*)                            ELCHI_SSH_KEY=${1#*=} ;;
       --ssh-password=*)                       ELCHI_SSH_PASSWORD=${1#*=} ;;
@@ -852,6 +858,22 @@ orchestrate() {
     if [ "$_has_remote" = "1" ] && { true </dev/tty; } 2>/dev/null; then
       log::info "no --ssh-key / --ssh-password supplied — auto-enabling --ssh-bootstrap (interactive password prompt per remote node)"
       ELCHI_SSH_BOOTSTRAP=1
+
+      # Prompt for SSH user too if the operator never specified one. The
+      # default ('root') stays correct for the cloud-image baseline, but
+      # silently using it on a hardened host where root login is disabled
+      # gives a confusing "permission denied" later. One free prompt
+      # avoids that whole failure mode.
+      if [ "$_ELCHI_SSH_USER_EXPLICIT" != "1" ]; then
+        local _ssh_user_input=''
+        printf 'SSH user for remote nodes [%s]: ' "$ELCHI_SSH_USER" >/dev/tty
+        IFS= read -r _ssh_user_input </dev/tty || die "failed to read SSH user from /dev/tty"
+        if [ -n "$_ssh_user_input" ]; then
+          ELCHI_SSH_USER=$_ssh_user_input
+          export ELCHI_SSH_USER
+        fi
+        log::info "using SSH user: ${ELCHI_SSH_USER}"
+      fi
     fi
   fi
 
