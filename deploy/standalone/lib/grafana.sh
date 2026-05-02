@@ -71,7 +71,25 @@ EOF
     chown -R root:grafana "${ELCHI_CONFIG}/grafana" 2>/dev/null || true
     find "${ELCHI_CONFIG}/grafana" -type d -exec chmod 0750 {} +
     find "${ELCHI_CONFIG}/grafana" -type f -exec chmod 0640 {} +
+
+    # Ensure Grafana's data + log dirs exist with grafana ownership BEFORE
+    # the service starts. The package's postinst normally creates these,
+    # but a prior `--purge-grafana` removes /var/lib/grafana and a
+    # subsequent reinstall doesn't always re-run postinst (apt skips when
+    # the package is in 'config-files' state, dpkg may not retrigger the
+    # dir creation). The service then crashes with
+    #   "mkdir /var/lib/grafana: permission denied"
+    # because grafana user can't create dirs under root-owned /var/lib.
+    install -d -m 0750 -o grafana -g grafana /var/lib/grafana
+    install -d -m 0750 -o grafana -g grafana /var/lib/grafana/plugins
+    install -d -m 0755 -o grafana -g grafana /var/log/grafana
   fi
+
+  # Clear any stale "Start request repeated too quickly" state from a
+  # previous failed install attempt. Without this, systemctl restart
+  # fails instantly and wait_for_tcp wastes the full 120s timeout
+  # waiting for a service systemd has refused to start.
+  systemctl reset-failed grafana-server.service 2>/dev/null || true
 
   # Reconcile against grafana-server: restart when our drop-in,
   # grafana.ini, datasources, or dashboard provider change. Dashboard
