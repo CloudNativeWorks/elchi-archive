@@ -59,6 +59,11 @@ ssh::configure() {
   elif [ -n "$ELCHI_SSH_PASSWORD" ]; then
     require_cmd sshpass
     _ELCHI_SSH_OPTS+=(-o "PreferredAuthentications=password")
+  elif [ "${ELCHI_SSH_BOOTSTRAP:-0}" = "1" ]; then
+    # Bootstrap path will mint + push a key in the next step; the
+    # default-identity warning would be misleading here (the operator
+    # didn't pass --ssh-key because they're using bootstrap).
+    :
   else
     # Bare SSH agent / default identity. Fine for dev; warn so operators
     # don't accidentally rely on agent forwarding in production.

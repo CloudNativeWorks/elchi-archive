@@ -835,8 +835,6 @@ orchestrate() {
     log::info "rendered topology + ports go to ${ELCHI_ETC}"
   fi
 
-  ssh::configure "$ELCHI_SSH_USER" "$ELCHI_SSH_PORT" "$ELCHI_SSH_KEY" "$ELCHI_SSH_PASSWORD"
-
   # Pre-flight every remote node before committing any local state.
   local -a hosts
   mapfile -t hosts < <(topology::parse_nodes "$ELCHI_NODES")
@@ -876,6 +874,22 @@ orchestrate() {
       fi
     fi
   fi
+
+  # Install SSH-path-specific tooling BEFORE ssh::configure / any prompt:
+  #   * sshpass — needed for --ssh-password and for the bootstrap
+  #     ssh-copy-id step. Without this preflight, ssh::configure (when
+  #     --ssh-password is set) or ssh::_bootstrap_one_host (when
+  #     bootstrap runs) would die AFTER the operator typed a password,
+  #     forcing a full restart of the install.
+  #   * ssh-keygen / ssh-copy-id — fundamentals of bootstrap; almost
+  #     always already present (openssh-client) but we ensure-install
+  #     defensively for stripped minimal images.
+  local _need_sshpass=0 _need_keygen=0
+  [ -n "$ELCHI_SSH_PASSWORD" ]     && _need_sshpass=1
+  [ "$ELCHI_SSH_BOOTSTRAP" = "1" ] && { _need_sshpass=1; _need_keygen=1; }
+  preflight::ensure_ssh_tools "$_need_sshpass" "$_need_keygen"
+
+  ssh::configure "$ELCHI_SSH_USER" "$ELCHI_SSH_PORT" "$ELCHI_SSH_KEY" "$ELCHI_SSH_PASSWORD"
 
   # Optional one-time SSH bootstrap: M1 mints a fresh ed25519 key, then
   # prompts the operator for EACH remote node's password (M1 itself is

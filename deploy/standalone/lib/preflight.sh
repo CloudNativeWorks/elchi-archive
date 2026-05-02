@@ -155,12 +155,18 @@ preflight::check_time_sync() {
 
 # ----- tooling presence --------------------------------------------------
 # Install the small handful of CLI tools our libs assume on the path.
+# Accepts extra tool names as positional args — callers pass context-
+# specific tools (e.g. 'sshpass' when --ssh-password / --ssh-bootstrap
+# will run) so we surface "package not installed" failures BEFORE the
+# operator types a password we'd then have to throw away.
+#
 # We deliberately install gettext (envsubst) up front — render_template
 # in common.sh hard-depends on it.
 preflight::install_tools() {
+  local -a extras=("$@")
   local missing=()
   local cmd
-  for cmd in curl openssl tar gzip awk sed grep install jq; do
+  for cmd in curl openssl tar gzip awk sed grep install jq "${extras[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
   # envsubst lives in gettext(-base); name varies across families.
@@ -174,12 +180,15 @@ preflight::install_tools() {
   case "$ELCHI_OS_FAMILY" in
     debian)
       apt-get update -qq
-      # Map "envsubst" → gettext-base for apt.
+      # Map binary-name → debian-package-name where they differ.
       local pkgs=()
       for cmd in "${missing[@]}"; do
         case "$cmd" in
-          envsubst) pkgs+=("gettext-base") ;;
-          *)        pkgs+=("$cmd") ;;
+          envsubst)    pkgs+=("gettext-base") ;;
+          ssh-copy-id) pkgs+=("openssh-client") ;;
+          ssh-keygen)  pkgs+=("openssh-client") ;;
+          ssh)         pkgs+=("openssh-client") ;;
+          *)           pkgs+=("$cmd") ;;
         esac
       done
       apt-get install -y -qq "${pkgs[@]}" ca-certificates \
@@ -191,14 +200,45 @@ preflight::install_tools() {
       local pkgs=()
       for cmd in "${missing[@]}"; do
         case "$cmd" in
-          envsubst) pkgs+=("gettext") ;;
-          *)        pkgs+=("$cmd") ;;
+          envsubst)    pkgs+=("gettext") ;;
+          ssh-copy-id) pkgs+=("openssh-clients") ;;
+          ssh-keygen)  pkgs+=("openssh-clients") ;;
+          ssh)         pkgs+=("openssh-clients") ;;
+          # sshpass is in EPEL on RHEL — we install epel-release first when
+          # sshpass is the missing package (no-op if EPEL already enabled).
+          sshpass)
+            "$pm" install -y epel-release >/dev/null 2>&1 || true
+            pkgs+=("sshpass")
+            ;;
+          *)           pkgs+=("$cmd") ;;
         esac
       done
       "$pm" install -y "${pkgs[@]}" ca-certificates \
         || die "failed to install required tools via $pm"
       ;;
   esac
+}
+
+# preflight::ensure_ssh_tools — install tools needed for the chosen SSH
+# auth path BEFORE any prompt or remote SSH invocation. Runs OS detect
+# first if it hasn't already (idempotent). Called early in orchestrate()
+# so a missing 'sshpass' surfaces before the operator types a password.
+preflight::ensure_ssh_tools() {
+  local need_sshpass=${1:-0}
+  local need_keygen=${2:-0}
+
+  local -a extras=()
+  [ "$need_sshpass" = "1" ] && extras+=(sshpass)
+  if [ "$need_keygen" = "1" ]; then
+    extras+=(ssh-keygen ssh-copy-id)
+  fi
+
+  if [ "${#extras[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  [ -n "${ELCHI_OS_FAMILY:-}" ] || preflight::detect_os
+  preflight::install_tools "${extras[@]}"
 }
 
 # ----- port collision check ----------------------------------------------
