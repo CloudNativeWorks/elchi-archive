@@ -153,6 +153,97 @@ preflight::check_time_sync() {
   fi
 }
 
+# preflight::wait_apt_lock <timeout-seconds>
+# Block until the apt/dpkg frontend lock is free. On freshly-imaged
+# cloud VMs, unattended-upgrades or cloud-init's apt phase typically
+# holds /var/lib/dpkg/lock-frontend for the first 1-5 minutes after
+# boot — racing against them yields a cryptic
+#   "E: Could not get lock /var/lib/dpkg/lock-frontend"
+# halfway through our install. We poll once every 2s up to <timeout>
+# (default 600s = 10min), giving cloud-init plenty of room.
+#
+# Probe order: prefer fuser (psmisc, present by default on Debian/Ubuntu
+# server). Fall back to lsof if available. If neither is installed (rare
+# on minimal images), skip the wait — we'll fall back to whatever
+# behaviour apt-get itself produces.
+preflight::wait_apt_lock() {
+  local timeout=${1:-600}
+  local elapsed=0
+  local -a lock_files=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock)
+  local probe=""
+  if command -v fuser >/dev/null 2>&1; then probe=fuser
+  elif command -v lsof >/dev/null 2>&1; then probe=lsof
+  else return 0
+  fi
+
+  _apt_lock_held() {
+    local lf
+    for lf in "${lock_files[@]}"; do
+      [ -e "$lf" ] || continue
+      case "$probe" in
+        fuser) fuser "$lf" >/dev/null 2>&1 && return 0 ;;
+        lsof)  lsof  "$lf" >/dev/null 2>&1 && return 0 ;;
+      esac
+    done
+    return 1
+  }
+
+  if _apt_lock_held; then
+    log::info "apt lock held by another process (likely unattended-upgrades / cloud-init); waiting up to ${timeout}s"
+  fi
+  while _apt_lock_held; do
+    sleep 2
+    elapsed=$(( elapsed + 2 ))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      log::warn "apt lock still held after ${timeout}s; proceeding anyway"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# preflight::upgrade_os — apply pending OS package updates BEFORE any
+# service install runs. Default ON; opt out with --no-upgrade-os when:
+#   * the operator wants reproducible installs against a pinned base image
+#   * the VM has no outbound mirrors / is air-gapped
+#   * iteration speed matters more than security currency (test loops)
+#
+# Notes:
+#   * On debian we use `apt-get -y dist-upgrade` (not `upgrade`) so the
+#     kernel meta-package can pull in newer kernels; --force-confdef +
+#     --force-confold keep modified configs untouched.
+#   * Reboot is NOT auto-triggered — operator must run `reboot` after
+#     install if /var/run/reboot-required exists. We log a warning.
+preflight::upgrade_os() {
+  if [ "${ELCHI_UPGRADE_OS:-1}" != "1" ]; then
+    log::info "skipping OS upgrade (--no-upgrade-os)"
+    return 0
+  fi
+  log::step "Applying OS package updates (security + general)"
+  preflight::wait_apt_lock 600 || true
+  case "$ELCHI_OS_FAMILY" in
+    debian)
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+        || die "apt-get update failed during OS upgrade"
+      DEBIAN_FRONTEND=noninteractive apt-get -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        dist-upgrade \
+        || die "OS upgrade failed via apt-get dist-upgrade"
+      DEBIAN_FRONTEND=noninteractive apt-get -y autoremove >/dev/null 2>&1 || true
+      ;;
+    rhel)
+      local pm
+      pm=$(command -v dnf || command -v yum)
+      "$pm" -y upgrade || die "OS upgrade failed via $pm upgrade"
+      ;;
+  esac
+  if [ -f /var/run/reboot-required ]; then
+    log::warn "OS upgrade installed a kernel/glibc update — reboot recommended after install completes"
+  fi
+  log::ok "OS packages up to date"
+}
+
 # ----- tooling presence --------------------------------------------------
 # Install the small handful of CLI tools our libs assume on the path.
 # Accepts extra tool names as positional args — callers pass context-
@@ -179,6 +270,7 @@ preflight::install_tools() {
 
   case "$ELCHI_OS_FAMILY" in
     debian)
+      preflight::wait_apt_lock 600 || true
       apt-get update -qq
       # Map binary-name → debian-package-name where they differ.
       local pkgs=()
@@ -432,6 +524,10 @@ preflight::run() {
   preflight::detect_arch
   preflight::check_systemd
   preflight::install_tools
+  # OS upgrade after install_tools so jq/curl/etc. exist for downstream
+  # logic, but BEFORE any service install — that way the new kernel /
+  # libssl / openssl etc. are in place before we start mongod/grafana.
+  preflight::upgrade_os
   preflight::check_time_sync
   preflight::check_disk_space 5 /var/lib
   # If a custom Mongo data dir is configured, check its filesystem too.

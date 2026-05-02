@@ -133,6 +133,10 @@ ELCHI_LOG_REPORT_CALLER=${ELCHI_LOG_REPORT_CALLER:-false}
 
 ELCHI_NON_INTERACTIVE=${ELCHI_NON_INTERACTIVE:-0}
 ELCHI_NO_FIREWALL=${ELCHI_NO_FIREWALL:-0}
+# Default: pull latest OS package updates (security + general) before
+# any service install. Operators on pinned base images / air-gapped
+# networks / fast iteration loops can opt out with --no-upgrade-os.
+ELCHI_UPGRADE_OS=${ELCHI_UPGRADE_OS:-1}
 ELCHI_DRY_RUN=${ELCHI_DRY_RUN:-0}
 ELCHI_KEEP_BUNDLE=${ELCHI_KEEP_BUNDLE:-0}
 ELCHI_BUNDLE_KEY_OUT=${ELCHI_BUNDLE_KEY_OUT:-}
@@ -214,6 +218,10 @@ GSLB (optional CoreDNS)
 Op-mode
   --non-interactive                   never prompt
   --no-firewall                       skip firewalld/ufw configuration
+  --no-upgrade-os                     skip the apt/dnf full system upgrade
+                                       step run before any service install
+                                       (default: ON; use this on pinned base
+                                       images / air-gapped / fast iteration)
   --dry-run                           render config; skip SSH/SCP and side-effects
   --keep-bundle                       preserve the bundle artifact (default: deleted)
   --bundle-key-out=<path>             write the bundle decryption key to a file
@@ -364,6 +372,8 @@ parse_args() {
       --force-redownload)                     ELCHI_FORCE_REDOWNLOAD=1 ;;
       --non-interactive)                      ELCHI_NON_INTERACTIVE=1 ;;
       --no-firewall)                          ELCHI_NO_FIREWALL=1 ;;
+      --upgrade-os)                           ELCHI_UPGRADE_OS=1 ;;
+      --no-upgrade-os)                        ELCHI_UPGRADE_OS=0 ;;
       --dry-run)                              ELCHI_DRY_RUN=1 ;;
       --keep-bundle)                          ELCHI_KEEP_BUNDLE=1 ;;
       --bundle-key-out=*)                     ELCHI_BUNDLE_KEY_OUT=${1#*=} ;;
@@ -422,7 +432,7 @@ parse_args() {
   export ELCHI_GSLB_NAMESERVERS ELCHI_GSLB_REGIONS ELCHI_GSLB_TLS_SKIP_VERIFY
   export ELCHI_GSLB_TTL ELCHI_GSLB_SYNC_INTERVAL ELCHI_GSLB_TIMEOUT
   export ELCHI_GSLB_STATIC_RECORDS ELCHI_GSLB_SECRET ELCHI_GSLB_FORWARDERS
-  export ELCHI_NON_INTERACTIVE ELCHI_NO_FIREWALL ELCHI_DRY_RUN
+  export ELCHI_NON_INTERACTIVE ELCHI_NO_FIREWALL ELCHI_UPGRADE_OS ELCHI_DRY_RUN
   export ELCHI_NODE_INDEX ELCHI_NODE_HOST
   export ELCHI_SKIP_ORCHESTRATION
 }
@@ -495,21 +505,36 @@ source_libs() {
 install_helpers() {
   log::step "Installing operator helper + installer payload"
   install -d -m 0755 -o root -g root /opt/elchi-installer
-  # rsync would be cleaner, but we don't want a tooling dependency. cp -a
-  # preserves modes and is idempotent because we wipe the destination
-  # subtrees first to drop any stale files.
-  rm -rf /opt/elchi-installer/lib /opt/elchi-installer/templates
-  cp -a "${SCRIPT_DIR}/lib"        /opt/elchi-installer/lib
-  cp -a "${SCRIPT_DIR}/templates"  /opt/elchi-installer/templates
-  if [ -f "${SCRIPT_DIR}/install.sh" ]; then
-    install -m 0755 "${SCRIPT_DIR}/install.sh"   /opt/elchi-installer/install.sh
+
+  # Self-install guard: on remote nodes M1 scp's the payload to
+  # /opt/elchi-installer THEN invokes `bash /opt/elchi-installer/install.sh`,
+  # so SCRIPT_DIR equals the destination. The naive
+  #   rm -rf /opt/elchi-installer/lib && cp -a SCRIPT_DIR/lib /opt/elchi-installer/lib
+  # would self-destruct (the rm wipes the source the cp is about to read).
+  # When source == dest, the files are already at the right place; just
+  # refresh the operator helper at /usr/local/bin/elchi-stack and exit.
+  if [ "$SCRIPT_DIR" = "/opt/elchi-installer" ]; then
+    log::info "installer payload already staged at /opt/elchi-installer (remote-node mode)"
+  else
+    # rsync would be cleaner, but we don't want a tooling dependency. cp -a
+    # preserves modes and is idempotent because we wipe the destination
+    # subtrees first to drop any stale files.
+    rm -rf /opt/elchi-installer/lib /opt/elchi-installer/templates
+    cp -a "${SCRIPT_DIR}/lib"        /opt/elchi-installer/lib
+    cp -a "${SCRIPT_DIR}/templates"  /opt/elchi-installer/templates
+    if [ -f "${SCRIPT_DIR}/install.sh" ]; then
+      install -m 0755 "${SCRIPT_DIR}/install.sh"   /opt/elchi-installer/install.sh
+    fi
+    if [ -f "${SCRIPT_DIR}/upgrade.sh" ]; then
+      install -m 0755 "${SCRIPT_DIR}/upgrade.sh"   /opt/elchi-installer/upgrade.sh
+    fi
+    if [ -f "${SCRIPT_DIR}/uninstall.sh" ]; then
+      install -m 0755 "${SCRIPT_DIR}/uninstall.sh" /opt/elchi-installer/uninstall.sh
+    fi
   fi
-  if [ -f "${SCRIPT_DIR}/upgrade.sh" ]; then
-    install -m 0755 "${SCRIPT_DIR}/upgrade.sh"   /opt/elchi-installer/upgrade.sh
-  fi
-  if [ -f "${SCRIPT_DIR}/uninstall.sh" ]; then
-    install -m 0755 "${SCRIPT_DIR}/uninstall.sh" /opt/elchi-installer/uninstall.sh
-  fi
+
+  # The /usr/local/bin/elchi-stack helper is OUTSIDE SCRIPT_DIR and
+  # always needs an explicit copy regardless of mode.
   if [ -f "${SCRIPT_DIR}/elchi-stack" ]; then
     install -m 0755 "${SCRIPT_DIR}/elchi-stack" /usr/local/bin/elchi-stack
   fi
@@ -1064,10 +1089,11 @@ EOF
         --main-address="$ELCHI_MAIN_ADDRESS" \
         --port="$ELCHI_PORT" \
         --timezone="$ELCHI_TIMEZONE" \
-        ${ELCHI_INSTALL_GSLB:+--gslb} \
+        $( [ "$ELCHI_INSTALL_GSLB" = "1" ] && echo --gslb ) \
         ${ELCHI_GSLB_ZONE:+--gslb-zone="$ELCHI_GSLB_ZONE"} \
         ${ELCHI_GSLB_ADMIN_EMAIL:+--gslb-admin-email="$ELCHI_GSLB_ADMIN_EMAIL"} \
-        ${ELCHI_NO_FIREWALL:+--no-firewall} \
+        $( [ "$ELCHI_NO_FIREWALL" = "1" ] && echo --no-firewall ) \
+        $( [ "$ELCHI_UPGRADE_OS" = "0" ] && echo --no-upgrade-os ) \
         --non-interactive \
         || die "remote install failed on ${host}"
 
