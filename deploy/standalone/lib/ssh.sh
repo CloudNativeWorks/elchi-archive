@@ -107,13 +107,22 @@ ssh::_wrap() {
 # ssh::run <host> <cmd...> — run a command remotely. Stdout/stderr piped
 # back verbatim so the operator sees real output. Returns the remote exit
 # code on failure.
+#
+# Quoting: OpenSSH joins multiple post-host arguments with single spaces
+# and does NOT re-quote them, so an arg like `bash -c "mkdir -p /a /b"`
+# arrives at the remote login shell as `bash -c mkdir -p /a /b` and bash
+# only takes `mkdir` as the command (`-p`, `/a`, `/b` become $0..$2).
+# We pre-quote each arg with `printf %q` and send a single string; the
+# remote login shell unescapes it back to the original argv.
 ssh::run() {
   local host=$1 ; shift
   if ssh::is_local "$host"; then
     "$@"
     return $?
   fi
-  ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- "$@"
+  local quoted
+  quoted=$(printf '%q ' "$@")
+  ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- "$quoted"
 }
 
 # ssh::run_sudo <host> <cmd...> — run as root via sudo on the remote.
