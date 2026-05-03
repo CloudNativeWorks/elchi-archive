@@ -60,10 +60,26 @@ fi
 
 host_short=$(hostname -s)
 cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "$TOPO")
+# Match against `hostname:` (system hostname like "elchi-client-04"),
+# NOT `host:` which is the IP/dotted-quad. install.sh emits both —
+# host=IP for envoy/etc-hosts addressing, hostname=os-hostname for
+# operator-facing diagnostics.
 my_idx=$(awk -v h="$host_short" '
   $0 ~ "^  - index: "{idx=$3}
-  $0 ~ "^    host: "h"$" {print idx; exit}
+  $0 ~ "^    hostname: "h"$" {print idx; exit}
 ' "$TOPO")
+# Fallback: maybe topology was written with the IP as hostname (single-VM
+# installs where --hostnames wasn't supplied). Try matching against the
+# host: field too before giving up.
+if [ -z "${my_idx:-}" ]; then
+  for ip in $(hostname -I 2>/dev/null); do
+    my_idx=$(awk -v h="$ip" '
+      $0 ~ "^  - index: "{idx=$3}
+      $0 ~ "^    host: "h"$" {print idx; exit}
+    ' "$TOPO")
+    [ -n "${my_idx:-}" ] && break
+  done
+fi
 [ -z "${my_idx:-}" ] && my_idx="?"
 is_m1=0; [ "$my_idx" = "1" ] && is_m1=1
 
@@ -254,6 +270,21 @@ if [ -n "$clusters" ]; then
     total=$(printf   '%s\n' "$clusters" | grep -E "^${cl}::.*health_flags::"        | wc -l | tr -d ' ')
     if [ "$total" -eq 0 ]; then
       info "${cl}: no health-checked endpoints (no health_check{} configured — OK)"
+    elif [ "$cl" = "registry-cluster" ]; then
+      # Registry is an HA peer set: every node runs an instance, but only
+      # the current leader returns gRPC SERVING. Followers report
+      # NOT_SERVING by design so envoy ext_proc traffic pins to the
+      # leader. Therefore healthy < total is the EXPECTED steady state
+      # (typically 1 of N healthy = exactly one leader). The actual
+      # failure modes are: zero healthy (no leader → ext_proc broken)
+      # or all healthy (split-brain — multiple SERVING simultaneously).
+      if [ "$healthy" -eq 0 ]; then
+        fail "${cl}: 0/${total} healthy — no leader (ext_proc broken)"
+      elif [ "$healthy" -eq "$total" ] && [ "$total" -gt 1 ]; then
+        warn "${cl}: ${healthy}/${total} healthy — possible split-brain (only ONE leader expected)"
+      else
+        ok "${cl}: ${healthy}/${total} healthy (HA leader/follower; only leader returns SERVING)"
+      fi
     elif [ "$healthy" -eq "$total" ]; then
       ok   "${cl}: ${healthy}/${total} healthy"
     else

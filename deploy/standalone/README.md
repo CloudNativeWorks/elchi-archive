@@ -47,7 +47,7 @@ shipped to every other node, and applied via a recursive
 sudo bash deploy/standalone/install.sh \
   --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-  --backend-version=elchi-v1.1.2-v0.13.4-envoy1.36.2,elchi-v1.1.2-v0.13.4-envoy1.38.0 \
+  --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.38.0 \
   --ui-version=v1.1.3 \
   --envoy-version=v1.37.0 \
   --main-address=elchi.example.com \
@@ -64,7 +64,7 @@ to the others.
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
   --backend-release=v1.1.2 \
-  --backend-variants=v0.13.4-envoy1.36.2 \
+  --backend-variants=v0.14.0-envoy1.36.2 \
   --ui-version=v1.1.3 \
   --envoy-version=v1.37.0 \
   --main-address=$(hostname -f)
@@ -81,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
       --backend-release=v1.1.2 \
-      --backend-variants=v0.13.4-envoy1.36.2 \
+      --backend-variants=v0.14.0-envoy1.36.2 \
       --ui-version=v1.1.3 \
       --envoy-version=v1.37.0 \
       --main-address=elchi.example.com
@@ -167,7 +167,7 @@ elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart
 ```bash
 # Add a new backend variant to an existing 3-VM cluster:
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-variants=v0.13.4-envoy1.36.2,v0.13.4-envoy1.38.0,v0.13.4-envoy1.40.0 \
+  --backend-variants=v0.14.0-envoy1.36.2,v0.14.0-envoy1.38.0,v0.14.0-envoy1.40.0 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key
 
 # Bump the UI:
@@ -176,8 +176,8 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.2.0 \
 
 # Remove an old variant (use carefully):
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-variants=v0.13.4-envoy1.38.0,v0.13.4-envoy1.40.0 \
-  --prune-version=v0.13.4-envoy1.36.2 \
+  --backend-variants=v0.14.0-envoy1.38.0,v0.14.0-envoy1.40.0 \
+  --prune-version=v0.14.0-envoy1.36.2 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key
 ```
 

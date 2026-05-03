@@ -13,7 +13,7 @@
 #         --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
 #         --main-address=elchi.example.com \
 #         --ui-version=v1.1.3 \
-#         --backend-version=elchi-v1.1.2-v0.13.4-envoy1.35.3,elchi-v1.1.2-v0.13.4-envoy1.36.2,elchi-v1.1.2-v0.13.4-envoy1.38.0 \
+#         --backend-version=elchi-v1.2.0-v0.14.0-envoy1.35.3,elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.38.0 \
 #         --envoy-version=v1.37.0
 #
 # What this script does:
