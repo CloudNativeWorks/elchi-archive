@@ -44,12 +44,23 @@ binary::download_and_verify() {
   fname=$(basename "$url")
 
   log::info "downloading ${fname}"
-  retry 3 5 curl -fL --retry 3 --retry-delay 2 \
+  # Stall detection is critical here: GitHub release CDN can route
+  # cleanly initially and then degrade to ~0 B/s mid-transfer (saw
+  # 80M binary frozen at 79% on a sluggish path). Without --speed-limit,
+  # curl waits forever on a half-open TCP connection and `retry` never
+  # fires. With these flags: drop below 1 KB/s for 30s → abort → outer
+  # retry kicks in. --max-time is a generous 30min hard ceiling.
+  retry 3 5 curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+    --connect-timeout 30 --speed-limit 1024 --speed-time 30 --max-time 1800 \
     -o "${tmpdir}/${fname}" "$url" \
     || die "download failed: $url"
 
   log::info "fetching checksum"
-  retry 3 5 curl -fL --retry 3 --retry-delay 2 \
+  # Checksum is ≤100 bytes — speed-limit unhelpful (file finishes before
+  # the 30s window), but a short max-time still protects against a
+  # connect-then-stall edge case.
+  retry 3 5 curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+    --connect-timeout 15 --max-time 60 \
     -o "${tmpdir}/${fname}.sha256" "$sha_url" \
     || die "checksum download failed: $sha_url"
 
@@ -109,12 +120,20 @@ binary::extract_tarball() {
   fname=$(basename "$url")
 
   log::info "downloading ${fname}"
-  retry 3 5 curl -fL --retry 3 --retry-delay 2 \
+  # Stall detection is critical here: GitHub release CDN can route
+  # cleanly initially and then degrade to ~0 B/s mid-transfer (saw
+  # 80M binary frozen at 79% on a sluggish path). Without --speed-limit,
+  # curl waits forever on a half-open TCP connection and `retry` never
+  # fires. With these flags: drop below 1 KB/s for 30s → abort → outer
+  # retry kicks in. --max-time is a generous 30min hard ceiling.
+  retry 3 5 curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+    --connect-timeout 30 --speed-limit 1024 --speed-time 30 --max-time 1800 \
     -o "${tmpdir}/${fname}" "$url" \
     || die "download failed: $url"
 
   if [ -n "$sha_url" ]; then
-    retry 3 5 curl -fL --retry 3 --retry-delay 2 \
+    retry 3 5 curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+      --connect-timeout 15 --max-time 60 \
       -o "${tmpdir}/${fname}.sha256" "$sha_url" \
       || die "checksum download failed: $sha_url"
     local expected actual
