@@ -83,6 +83,16 @@ fi
 [ -z "${my_idx:-}" ] && my_idx="?"
 is_m1=0; [ "$my_idx" = "1" ] && is_m1=1
 
+# Read this node's runs_coredns flag from topology so port 53 / service
+# checks below only fire when the operator actually opted into GSLB
+# (--gslb-zone supplied). Default install (no zone) → false → skip checks.
+runs_coredns=$(awk -v i="$my_idx" '
+  $0 ~ "^  - index: "i"$" {f=1; next}
+  f && /^    runs_coredns:/ {print $2; exit}
+  f && /^  - index:/{exit}
+' "$TOPO")
+[ "${runs_coredns:-false}" = "true" ] && runs_coredns=1 || runs_coredns=0
+
 info "host:         ${host_short}  (index ${my_idx} of ${cluster_size})"
 info "role:         $([ "$is_m1" = "1" ] && echo "M1 (singletons + control-plane)" || echo "Mn (control-plane only)")"
 
@@ -193,6 +203,19 @@ if [ "$is_m1" = "1" ]; then
   for e in "${expected_m1[@]}"; do check_port "$e" 1; done
 else
   for e in "${expected_m1[@]}"; do check_port "$e" 0; done
+fi
+
+# CoreDNS GSLB ports — only when topology says runs_coredns=true.
+# DNS uses both TCP and UDP on 53; ss -lntp catches the TCP listener.
+# UDP listener is checked separately via `ss -lnup`. 8053 is the
+# webhook (always TCP).
+if [ "$runs_coredns" = "1" ]; then
+  for e in 53:coredns-tcp 8053:coredns-webhook; do check_port "$e" 1; done
+  if ss -H -lnup 2>/dev/null | awk '{ split($4,a,":"); print a[length(a)] }' | grep -qx 53; then
+    ok "53/udp (coredns-udp) listening"
+  else
+    fail "53/udp (coredns-udp) NOT listening"
+  fi
 fi
 
 # Per-variant control-plane ports — read from ports.full.json if jq is around

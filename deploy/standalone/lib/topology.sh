@@ -291,8 +291,16 @@ topology::compute() {
       # VictoriaMetrics + Grafana stay singletons on M1 (storage tier).
       printf '    runs_victoriametrics: %s\n' "$is_m1"
       printf '    runs_grafana: %s\n' "$is_m1"
-      # CoreDNS GSLB runs on every node when --gslb is set (DaemonSet pattern in Helm)
-      printf '    runs_coredns: %s\n' "${ELCHI_INSTALL_GSLB:-0}"
+      # CoreDNS GSLB DaemonSet pattern: every node when GSLB is on AND
+      # operator supplied --gslb-zone. The flag alone (default ON) is
+      # not enough — coredns::setup gracefully skips when zone is empty,
+      # so topology must reflect actual install intent for validate.sh
+      # to flag drift between "topology says yes" and "no port 53 bound".
+      local runs_coredns=false
+      if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ] && [ -n "${ELCHI_GSLB_ZONE:-}" ]; then
+        runs_coredns=true
+      fi
+      printf '    runs_coredns: %s\n' "$runs_coredns"
       # Backend (controller + control_plane), Envoy, nginx/UI run on every node
       printf '    runs_envoy: true\n'
       printf '    runs_nginx_ui: true\n'
