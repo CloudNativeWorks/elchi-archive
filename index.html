@@ -407,9 +407,10 @@
             <details>
                 <summary>GSLB / CoreDNS plugin</summary>
                 <div class="flag-table">
-                    <code>--gslb</code><div class="desc">Enable CoreDNS GSLB on every node (port 53 TCP+UDP, webhook on 8053).</div>
-                    <code>--gslb-zone=&lt;domain&gt;</code><div class="desc">Required with <code>--gslb</code>. Authoritative zone (e.g. <code>gslb.example.com</code>).</div>
-                    <code>--gslb-admin-email=&lt;email&gt;</code><div class="desc">Required. Becomes the SOA RNAME (with <code>@</code> → <code>.</code>).</div>
+                    <code>--gslb</code><div class="desc"><strong>Default: ON.</strong> CoreDNS GSLB plugin will install on every node (port 53 TCP+UDP, webhook on 8053) IF <code>--gslb-zone</code> is supplied. The flag is a no-op when default is already on; kept for explicitness.</div>
+                    <code>--no-gslb</code><div class="desc">Opt out of the GSLB CoreDNS install — use this when you don't want the plugin and don't want the "GSLB skipped" hint in the install log.</div>
+                    <code>--gslb-zone=&lt;domain&gt;</code><div class="desc">Authoritative zone (e.g. <code>gslb.example.com</code>). <strong>Only flag actually required to install GSLB.</strong> Missing → graceful skip.</div>
+                    <code>--gslb-admin-email=&lt;email&gt;</code><div class="desc"><span class="default">Optional. Default: <code>hostmaster@&lt;zone&gt;</code> (RFC 2142 convention).</span> Becomes the SOA RNAME (with <code>@</code> → <code>.</code>). Override if your DNS contact is different.</div>
                     <code>--gslb-nameservers=&lt;csv&gt;</code><div class="desc"><code>ns1:ip,ns2:ip,...</code> NS records + glue.</div>
                     <code>--gslb-regions=&lt;csv&gt;</code><div class="desc">Region tags for the regions directive.</div>
                     <code>--gslb-tls-skip-verify</code><div class="desc">Skip TLS verify when plugin polls backend <code>/dns/snapshot</code> over HTTPS.</div>

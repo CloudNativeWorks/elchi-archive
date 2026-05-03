@@ -97,7 +97,13 @@ mapfile -t role_flags < <(awk -v i="$my_idx" '
 ' "$TOPO")
 if [ "${#role_flags[@]}" -gt 0 ]; then
   printf '  %srole flags:%s\n' "$C_CYN" "$C_RST"
-  printf '    %s%s%s\n' "$C_DIM" "${role_flags[@]}" "$C_RST"
+  # Per-element loop: a single `printf '    %s%s%s\n' "$C_DIM"
+  # "${role_flags[@]}" "$C_RST"` cycles the format string across all
+  # array elements, gluing flags together and shoving color escapes
+  # mid-line. Loop emits one tidy row per flag.
+  for f in "${role_flags[@]}"; do
+    printf '    %s%s%s\n' "$C_DIM" "$f" "$C_RST"
+  done
 fi
 
 # Backend variants in topology (the kept set)

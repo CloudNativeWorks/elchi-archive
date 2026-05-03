@@ -12,6 +12,22 @@ coredns::setup() {
   if [ "${ELCHI_INSTALL_GSLB:-0}" != "1" ]; then
     return 0
   fi
+
+  # Default flag is ON. Zone is the only truly operator-specific value
+  # (which DNS namespace are we authoritative for?). Admin email defaults
+  # to hostmaster@<zone> per RFC 2142 — that's the standard convention
+  # for SOA RNAME when the operator hasn't picked one. Without zone,
+  # gracefully skip — install must NOT fail because of an unconfigured
+  # optional component.
+  if [ -z "${ELCHI_GSLB_ZONE:-}" ]; then
+    log::info "GSLB skipped — pass --gslb-zone=<domain> to enable, or --no-gslb to silence this"
+    return 0
+  fi
+  if [ -z "${ELCHI_GSLB_ADMIN_EMAIL:-}" ]; then
+    ELCHI_GSLB_ADMIN_EMAIL="hostmaster@${ELCHI_GSLB_ZONE}"
+    log::info "GSLB admin email defaulted to ${ELCHI_GSLB_ADMIN_EMAIL} (RFC 2142 convention)"
+  fi
+
   log::step "Installing CoreDNS GSLB plugin"
 
   # GSLB secret is mandatory — the plugin authenticates every API call
@@ -195,7 +211,10 @@ EOF
 # Same structure as Helm's zone.db template, with serial regenerated.
 coredns::render_zone() {
   local zone=$ELCHI_GSLB_ZONE
-  local admin=${ELCHI_GSLB_ADMIN_EMAIL:?--gslb-admin-email is required}
+  # coredns::setup already defaults this to hostmaster@<zone> per
+  # RFC 2142 if the operator didn't set it. Belt-and-braces fallback
+  # in case render_zone is ever called from a different code path.
+  local admin=${ELCHI_GSLB_ADMIN_EMAIL:-hostmaster@${ELCHI_GSLB_ZONE}}
   # SOA admin field uses '.' instead of '@'
   local admin_dot=${admin/@/.}
   local ttl=${ELCHI_GSLB_TTL:-300}

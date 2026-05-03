@@ -125,7 +125,12 @@ ELCHI_TIMEZONE=${ELCHI_TIMEZONE:-UTC}
 # operators who genuinely want plaintext, but no CLI flag advertises it.
 ELCHI_TLS_ENABLED=${ELCHI_TLS_ENABLED:-true}
 
-ELCHI_INSTALL_GSLB=${ELCHI_INSTALL_GSLB:-0}
+# GSLB CoreDNS plugin: default ON. The actual `coredns::setup` is a
+# nezaket-guard — if --gslb-zone or --gslb-admin-email isn't supplied,
+# it logs a warning and skips (no install failure). Operators who want
+# the stack without GSLB pass --no-gslb. Operators who want GSLB pass
+# --gslb-zone=... + --gslb-admin-email=... and get it automatically.
+ELCHI_INSTALL_GSLB=${ELCHI_INSTALL_GSLB:-1}
 ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-}
 ELCHI_GSLB_ADMIN_EMAIL=${ELCHI_GSLB_ADMIN_EMAIL:-}
 ELCHI_GSLB_NAMESERVERS=${ELCHI_GSLB_NAMESERVERS:-}
@@ -369,6 +374,7 @@ parse_args() {
       --grafana-password=*)                   ELCHI_GRAFANA_PASSWORD=${1#*=} ;;
       --grafana-allow-plugin=*)               ELCHI_GRAFANA_ALLOW_PLUGINS="${ELCHI_GRAFANA_ALLOW_PLUGINS}${ELCHI_GRAFANA_ALLOW_PLUGINS:+,}${1#*=}" ;;
       --gslb)                                 ELCHI_INSTALL_GSLB=1 ;;
+      --no-gslb)                              ELCHI_INSTALL_GSLB=0 ;;
       --gslb-zone=*)                          ELCHI_GSLB_ZONE=${1#*=} ;;
       --gslb-admin-email=*)                   ELCHI_GSLB_ADMIN_EMAIL=${1#*=} ;;
       --gslb-nameservers=*)                   ELCHI_GSLB_NAMESERVERS=${1#*=} ;;

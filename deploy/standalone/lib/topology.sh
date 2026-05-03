@@ -353,7 +353,23 @@ topology::print_plan() {
   printf '  main address: %s\n' "${ELCHI_MAIN_ADDRESS:-(unset)}"
   printf '  public port:  %s (TLS=%s)\n' "${ELCHI_PORT:-443}" "${ELCHI_TLS_ENABLED:-true}"
   printf '  envoy internal listener: 127.0.0.1:%s (plaintext)\n' "${ELCHI_PORT_ENVOY_INTERNAL}"
-  printf '  GSLB:         %s\n' "$([ "${ELCHI_INSTALL_GSLB:-0}" = 1 ] && echo enabled || echo disabled)"
+  # GSLB has three states now that it's default-on:
+  #   * enabled — flag on AND zone set → coredns::setup will install
+  #     (admin defaults to hostmaster@<zone> per RFC 2142 if not set)
+  #   * pending — flag on (default) but zone missing → graceful skip
+  #   * disabled — operator passed --no-gslb explicitly
+  local gslb_state
+  if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
+    if [ -n "${ELCHI_GSLB_ZONE:-}" ]; then
+      local admin_display=${ELCHI_GSLB_ADMIN_EMAIL:-hostmaster@${ELCHI_GSLB_ZONE} (auto)}
+      gslb_state="enabled (zone=${ELCHI_GSLB_ZONE}, admin=${admin_display})"
+    else
+      gslb_state="pending — pass --gslb-zone=<domain> to install, or --no-gslb to silence"
+    fi
+  else
+    gslb_state="disabled (--no-gslb)"
+  fi
+  printf '  GSLB:         %s\n' "$gslb_state"
   printf '\n  versions:\n'
   printf '    UI:                   %s\n' "${ELCHI_UI_VERSION:-}"
   printf '    Envoy proxy:          %s\n' "${ELCHI_ENVOY_VERSION:-}"
