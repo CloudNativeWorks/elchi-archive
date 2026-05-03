@@ -19,6 +19,24 @@
 
 set -Eeuo pipefail
 
+# Headless install: every apt-get / dpkg invocation downstream gets a
+# guaranteed-noninteractive frontend AND a sane TERM, so package
+# postinst scripts that try to open a TUI prompt (debconf Dialog/
+# Readline) — or run `clear` / `tput` — don't hang the install.
+# Without these, remote-node installs (where the SSH session has no
+# TTY and an empty TERM) hit:
+#   debconf: (TERM is not set, so the dialog frontend is not usable.)
+#   debconf: (This frontend requires a controlling tty.)
+#   dpkg-preconfigure: unable to re-open stdin
+# The fallback to Teletype currently masks the symptom, but any
+# package that actually needs operator input would deadlock the SSH
+# command. Set both up-front so every child process inherits them.
+export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}
+export DEBIAN_PRIORITY=${DEBIAN_PRIORITY:-critical}
+export TERM=${TERM:-dumb}
+export NEEDRESTART_MODE=${NEEDRESTART_MODE:-a}
+export NEEDRESTART_SUSPEND=${NEEDRESTART_SUSPEND:-1}
+
 # ----- locate ourselves --------------------------------------------------
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd -P)
 ELCHI_INSTALLER_ROOT="$SCRIPT_DIR"

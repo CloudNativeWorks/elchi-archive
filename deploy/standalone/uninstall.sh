@@ -31,6 +31,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd -P)
 ELCHI_INSTALLER_ROOT="$SCRIPT_DIR"
 export ELCHI_INSTALLER_ROOT
 
+# Mirror install.sh — without this, mongodb-org / grafana postrm hooks can
+# block on a debconf prompt during --purge and the run looks frozen.
+export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}
+
 # shellcheck source=lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/preflight.sh
@@ -201,15 +205,17 @@ purge_mongo() {
   preflight::detect_os 2>/dev/null || true
   case "${ELCHI_OS_FAMILY:-}" in
     debian)
-      apt-get purge -y 'mongodb-org*' 'mongodb-mongosh*' 'mongodb-database-tools*' >/dev/null 2>&1 || true
-      apt-get autoremove -y >/dev/null 2>&1 || true
+      preflight::wait_apt_lock 600 || true
+      apt-get -o DPkg::Lock::Timeout=600 purge -y \
+        'mongodb-org*' 'mongodb-mongosh*' 'mongodb-database-tools*' >/dev/null || true
+      apt-get -o DPkg::Lock::Timeout=600 autoremove -y >/dev/null || true
       rm -f /etc/apt/sources.list.d/mongodb-org-*.list /etc/apt/keyrings/mongodb-server-*.gpg
-      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get -o DPkg::Lock::Timeout=600 update -qq >/dev/null || true
       ;;
     rhel)
       local pm
       pm=$(command -v dnf || command -v yum)
-      "$pm" remove -y 'mongodb-org*' >/dev/null 2>&1 || true
+      "$pm" remove -y 'mongodb-org*' >/dev/null || true
       rm -f /etc/yum.repos.d/mongodb-org-*.repo
       ;;
   esac
@@ -228,15 +234,16 @@ purge_grafana() {
   preflight::detect_os 2>/dev/null || true
   case "${ELCHI_OS_FAMILY:-}" in
     debian)
-      apt-get purge -y grafana >/dev/null 2>&1 || true
-      apt-get autoremove -y >/dev/null 2>&1 || true
+      preflight::wait_apt_lock 600 || true
+      apt-get -o DPkg::Lock::Timeout=600 purge -y grafana >/dev/null || true
+      apt-get -o DPkg::Lock::Timeout=600 autoremove -y >/dev/null || true
       rm -f /etc/apt/sources.list.d/grafana.list /etc/apt/keyrings/grafana.gpg
-      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get -o DPkg::Lock::Timeout=600 update -qq >/dev/null || true
       ;;
     rhel)
       local pm
       pm=$(command -v dnf || command -v yum)
-      "$pm" remove -y grafana >/dev/null 2>&1 || true
+      "$pm" remove -y grafana >/dev/null || true
       rm -f /etc/yum.repos.d/grafana.repo
       ;;
   esac
@@ -278,13 +285,15 @@ purge_nginx() {
   preflight::detect_os 2>/dev/null || true
   case "${ELCHI_OS_FAMILY:-}" in
     debian)
-      apt-get purge -y nginx nginx-light nginx-common nginx-core >/dev/null 2>&1 || true
-      apt-get autoremove -y >/dev/null 2>&1 || true
+      preflight::wait_apt_lock 600 || true
+      apt-get -o DPkg::Lock::Timeout=600 purge -y \
+        nginx nginx-light nginx-common nginx-core >/dev/null || true
+      apt-get -o DPkg::Lock::Timeout=600 autoremove -y >/dev/null || true
       ;;
     rhel)
       local pm
       pm=$(command -v dnf || command -v yum)
-      "$pm" remove -y nginx >/dev/null 2>&1 || true
+      "$pm" remove -y nginx >/dev/null || true
       ;;
   esac
   if [ -f /etc/nginx/nginx.conf.elchi.bak ]; then
