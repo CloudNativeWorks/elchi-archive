@@ -468,6 +468,46 @@
                 unchanged services stay running. Single-flight via <code>flock /run/elchi-upgrade.lock</code>.
             </p>
 
+            <p class="info">
+                <strong>No SSH flags needed after install.</strong> install.sh persists
+                <code>ELCHI_SSH_USER / KEY / PORT</code> to <code>/etc/elchi/orchestrator.env</code>
+                (mode 0600 root). Re-run upgrade or uninstall without
+                <code>--ssh-user / --ssh-key / --ssh-port</code> and they'll fall back to the
+                persisted values. Pass a flag explicitly to override (e.g. you switched
+                the deploy user). Password is never persisted — key auth only, since
+                <code>--ssh-bootstrap</code> already distributed the cluster key during install.
+            </p>
+
+            <h5>Add a new variant (curl one-liner from any node)</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --upgrade \
+      --backend-version=elchi-v1.1.2-v0.13.4-envoy1.36.2,elchi-v1.1.3-v0.13.4-envoy1.37.0</div>
+
+            <h5>Replace a variant + drop the old one (declarative)</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --upgrade \
+      --backend-version=elchi-v1.1.3-v0.13.4-envoy1.37.0 \
+      --prune-missing</div>
+
+            <h5>Bump the UI + Envoy proxy together</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --upgrade \
+      --ui-version=v1.1.4 \
+      --envoy-version=v1.38.0</div>
+
+            <h5>Rotate the Grafana admin password</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --upgrade \
+      --grafana-password=$(openssl rand -hex 16)</div>
+            <p style="font-size: 13px; margin: 4px 0 10px;">
+                Each form fans out the new artifacts to every node in
+                <code>/etc/elchi/nodes.list</code> using the persisted SSH credentials,
+                runs the hash-based reconcile, and gates the result through
+                <code>verify::deep_health</code> on every node. A failed health check
+                triggers per-binary rollback to the <code>.prev</code> snapshot on the
+                bad nodes; healthy nodes keep the new version.
+            </p>
+
             <details open>
                 <summary>Flags</summary>
                 <div class="flag-table">
@@ -544,6 +584,16 @@
             <p style="font-size: 13px; color: #24292f; margin: 6px 0 8px;">
                 Two ways to invoke. Both routes hit the same script — pick whichever
                 matches how you installed.
+            </p>
+
+            <p class="info">
+                <strong>No SSH flags needed for <code>--all-nodes</code>.</strong>
+                Same persistence trick as upgrade: <code>/etc/elchi/orchestrator.env</code>
+                holds the <code>ELCHI_SSH_USER / KEY / PORT</code> from install time, and
+                uninstall.sh reads it on startup. The cluster key was distributed at install
+                (or bootstrapped via <code>--ssh-bootstrap</code>), so password auth isn't
+                required. Pass <code>--ssh-user=…</code> only if you want to override
+                the persisted value.
             </p>
 
             <h5>Single node (this machine only)</h5>

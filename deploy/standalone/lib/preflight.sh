@@ -412,7 +412,7 @@ preflight::check_basic_ports() {
   preflight::check_port "${ELCHI_PORT_NGINX_UI:-8081}"          "nginx-ui"
   preflight::check_port "${ELCHI_PORT_ENVOY_ADMIN:-9901}"       "envoy-admin"
   preflight::check_port "${ELCHI_PORT_REGISTRY_GRPC:-1870}"     "registry-grpc"
-  preflight::check_port "${ELCHI_PORT_REGISTRY_METRICS:-1871}"  "registry-metrics"
+  preflight::check_port "${ELCHI_PORT_REGISTRY_METRICS:-9091}"  "registry-metrics"
 }
 
 # preflight::check_cluster_ports — topology-aware port atlas check.

@@ -75,6 +75,38 @@ ssh::configure() {
   rm -f "${HOME}/.ssh/known_hosts.elchi.lock" 2>/dev/null || true
 }
 
+# ssh::load_persisted_creds — fill in ELCHI_SSH_USER / PORT / KEY from
+# /etc/elchi/orchestrator.env when the operator hasn't supplied them on
+# the command line. install.sh writes that file at orchestration time so
+# subsequent upgrade.sh / uninstall.sh runs don't have to re-prompt for
+# --ssh-user / --ssh-key / --ssh-port.
+#
+# Precedence: CLI flag > env var already set in this process > persisted
+# file > built-in default. Anything already non-empty is preserved, so a
+# fresh `--ssh-user=newuser` always wins. Password is intentionally NOT
+# persisted (key-based auth only after install — `--ssh-bootstrap`
+# distributed the key in the first place).
+#
+# Parsing is line-by-line `KEY=VALUE` instead of `source` to keep the
+# loader immune to accidental shell metacharacters in the file (the file
+# is mode 0600 root, but defense in depth costs nothing).
+ssh::load_persisted_creds() {
+  local f=${ELCHI_ETC:-/etc/elchi}/orchestrator.env
+  [ -f "$f" ] || return 0
+  local k v
+  while IFS='=' read -r k v; do
+    case "$k" in '#'*|'') continue ;; esac
+    # Strip surrounding double-quotes if any (the install writer doesn't
+    # add them, but be lenient for hand-edited files).
+    v=${v#\"}; v=${v%\"}
+    case "$k" in
+      ELCHI_SSH_USER) [ -z "${ELCHI_SSH_USER:-}" ] && ELCHI_SSH_USER=$v ;;
+      ELCHI_SSH_KEY)  [ -z "${ELCHI_SSH_KEY:-}"  ] && ELCHI_SSH_KEY=$v  ;;
+      ELCHI_SSH_PORT) [ -z "${ELCHI_SSH_PORT:-}" ] && ELCHI_SSH_PORT=$v ;;
+    esac
+  done < "$f"
+}
+
 # ssh::is_local <host> — short-circuit for "this host is M1 itself".
 # Compares the candidate against the loopback set and the IPs returned
 # by `hostname -I` (Linux) / `ipconfig getifaddr` (mac/dev).

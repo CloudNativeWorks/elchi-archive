@@ -828,7 +828,7 @@ orchestrate_collect_ports_for() {
   printf '%d:envoy-internal\n' "${ELCHI_PORT_ENVOY_INTERNAL:-8080}"
   printf '%d:nginx-ui\n' "${ELCHI_PORT_NGINX_UI:-8081}"
   printf '%d:registry-grpc\n' "${ELCHI_PORT_REGISTRY_GRPC:-1870}"
-  printf '%d:registry-metrics\n' "${ELCHI_PORT_REGISTRY_METRICS:-1871}"
+  printf '%d:registry-metrics\n' "${ELCHI_PORT_REGISTRY_METRICS:-9091}"
 
   # Per-role flags
   local runs_mongo runs_otel runs_vm runs_grafana runs_coredns

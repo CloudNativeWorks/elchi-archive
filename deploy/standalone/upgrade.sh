@@ -149,6 +149,12 @@ done
 
 require_root
 
+# Pull persisted SSH credentials from /etc/elchi/orchestrator.env when the
+# operator hasn't overridden them. Lets the curl one-liner upgrade work
+# without re-supplying --ssh-user / --ssh-key — install.sh already
+# distributed the cluster key and persisted the path.
+ssh::load_persisted_creds
+
 if [ -n "$PRUNE_VERSIONS" ] && [ "$PRUNE_MISSING" = "1" ]; then
   die "--prune-version and --prune-missing are mutually exclusive"
 fi

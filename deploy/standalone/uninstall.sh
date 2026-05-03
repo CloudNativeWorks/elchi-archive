@@ -82,6 +82,11 @@ done
 
 require_root
 
+# Pull persisted SSH credentials from /etc/elchi/orchestrator.env when the
+# operator hasn't overridden them. Lets `--all-nodes` work with just the
+# curl one-liner — install.sh already distributed the cluster key.
+ssh::load_persisted_creds
+
 confirm_destructive() {
   local what=$1
   if [ "$CONFIRMED" = "1" ]; then return 0; fi
