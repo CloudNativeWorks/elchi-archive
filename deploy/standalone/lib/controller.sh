@@ -54,6 +54,8 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
 LimitNOFILE=65536
+LimitNPROC=65536
+LimitMEMLOCK=64M
 MemoryMax=${ELCHI_CONTROLLER_MEMORY_MAX:-2G}
 CPUQuota=${ELCHI_CONTROLLER_CPU_QUOTA:-200%}
 

@@ -282,7 +282,13 @@ topology::compute() {
       # currently advertises SERVING. Leader/follower coordination lives
       # in the registry binary itself.
       printf '    runs_registry: true\n'
-      printf '    runs_otel: %s\n' "$is_m1"
+      # OTEL collector runs on every node — local sink for that node's
+      # envoy + registry-metrics scrape. Each collector exports to the
+      # singleton VictoriaMetrics on M1 (or operator-supplied external
+      # VM via --vm=external). M1 down doesn't drop telemetry on M2/M3:
+      # OTEL's sending_queue buffers + retries.
+      printf '    runs_otel: true\n'
+      # VictoriaMetrics + Grafana stay singletons on M1 (storage tier).
       printf '    runs_victoriametrics: %s\n' "$is_m1"
       printf '    runs_grafana: %s\n' "$is_m1"
       # CoreDNS GSLB runs on every node when --gslb is set (DaemonSet pattern in Helm)

@@ -63,6 +63,37 @@ ExecStart=/usr/share/grafana/bin/grafana server --config=${GRAFANA_INI} --pidfil
 # 60-90s to startup. Disable it — operator can still install plugins
 # manually via grafana-cli or the UI when --grafana-allow-plugin is set.
 Environment=GF_PLUGINS_PREINSTALL_DISABLED=true
+
+# --- Resource limits & hardening (the package's stock unit ships
+# essentially nothing here, so we provide the production floor) ---
+LimitNOFILE=65536
+LimitNPROC=4096
+LimitCORE=0
+MemoryMax=${ELCHI_GRAFANA_MEMORY_MAX:-1G}
+CPUQuota=${ELCHI_GRAFANA_CPU_QUOTA:-100%}
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/grafana /var/log/grafana /run/grafana
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectKernelLogs=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+KeyringMode=private
+RemoveIPC=yes
+UMask=0077
+CapabilityBoundingSet=
+AmbientCapabilities=
 EOF
 
   # Make config + provisioning + dashboards readable by the grafana

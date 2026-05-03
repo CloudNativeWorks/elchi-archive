@@ -141,13 +141,14 @@ mapfile -t listening < <(
     | sort -un
 )
 
-# Every node
+# Every node — OTEL collector now runs on every node (per-node sink
+# for that node's envoy /opentelemetry route).
 expected_every=( 443:envoy-public 8080:envoy-internal 9901:envoy-admin
                  8081:nginx-ui 1870:registry-grpc
-                 1960:controller-grpc 1980:controller-rest 9091:registry-metrics )
-# M1-only singletons
-expected_m1=( 27017:mongod 8428:victoriametrics 3000:grafana
-              4317:otel-grpc 4318:otel-http 13133:otel-health 8888:otel-prom )
+                 1960:controller-grpc 1980:controller-rest 9091:registry-metrics
+                 4317:otel-grpc 4318:otel-http 13133:otel-health 8888:otel-prom )
+# M1-only singletons (storage tier).
+expected_m1=( 27017:mongod 8428:victoriametrics 3000:grafana )
 
 check_port() {
   local entry=$1 must=$2  # must=1 → fail if missing; 0 → warn if present (M2+)
@@ -194,13 +195,22 @@ if [ -f "$ports_json" ] && command -v jq >/dev/null 2>&1; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────
-# 4. Singleton service health (M1 only)
+# 4. Service health
 # ─────────────────────────────────────────────────────────────────────
-if [ "$is_m1" = "1" ]; then
-  section "M1 singleton service health"
+section "Service health"
 
-  # mongod — ping via mongosh (best-effort; mongosh may not be installed
-  # everywhere even when mongod is)
+# OTEL collector — every node now (per-node sink for envoy).
+ot_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
+  'http://127.0.0.1:13133/' 2>/dev/null || echo 000)
+case "$ot_code" in
+  200) ok   "otelcol health: HTTP 200" ;;
+  *)   fail "otelcol health: HTTP ${ot_code}" ;;
+esac
+
+# M1-only singletons (storage tier — VM TSDB + Grafana UI + Mongo
+# standalone. RS members on N≥3 also run mongod but ping/eval works
+# the same against any member.)
+if [ "$is_m1" = "1" ]; then
   if command -v mongosh >/dev/null 2>&1; then
     pong=$(mongosh --quiet --eval 'try { db.runCommand({ping:1}).ok } catch(e) { 0 }' 2>/dev/null | tail -n1 | tr -d '[:space:]')
     if [ "$pong" = "1" ]; then
@@ -212,7 +222,6 @@ if [ "$is_m1" = "1" ]; then
     info "mongod: mongosh not installed — skipping ping (TCP check passed in §3)"
   fi
 
-  # VictoriaMetrics
   vm_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
     'http://127.0.0.1:8428/api/v1/query?query=up' 2>/dev/null || echo 000)
   case "$vm_code" in
@@ -220,20 +229,11 @@ if [ "$is_m1" = "1" ]; then
     *)   fail "VictoriaMetrics /api/v1/query: HTTP ${vm_code}" ;;
   esac
 
-  # Grafana
   gr_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
     'http://127.0.0.1:3000/api/health' 2>/dev/null || echo 000)
   case "$gr_code" in
     200) ok   "Grafana /api/health: HTTP 200" ;;
     *)   fail "Grafana /api/health: HTTP ${gr_code}" ;;
-  esac
-
-  # otelcol — health_check extension on :13133 returns 200 on healthy
-  ot_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
-    'http://127.0.0.1:13133/' 2>/dev/null || echo 000)
-  case "$ot_code" in
-    200) ok   "otelcol health: HTTP 200" ;;
-    *)   fail "otelcol health: HTTP ${ot_code}" ;;
   esac
 fi
 
@@ -369,7 +369,94 @@ done
 [ "$stale_found" = "0" ] && ok "no stale variants — kept set matches disk + units"
 
 # ─────────────────────────────────────────────────────────────────────
-# 8. Summary
+# 8. System tuning (sysctl + THP + swap + mongo drop-in)
+# ─────────────────────────────────────────────────────────────────────
+section "System tuning"
+
+# sysctl — installer drops /etc/sysctl.d/99-elchi-stack.conf and runs
+# `sysctl --system`. Probe a sample of the keys it sets; if they're at
+# default, the file is missing or the apply failed.
+check_sysctl() {
+  local key=$1 want=$2
+  local got
+  got=$(sysctl -n "$key" 2>/dev/null | awk '{print $1}')
+  if [ -z "$got" ]; then
+    warn "sysctl $key: unsupported on this kernel"
+  elif [ "$got" = "$want" ]; then
+    ok "sysctl $key = $got"
+  else
+    fail "sysctl $key = $got (expected $want — /etc/sysctl.d/99-elchi-stack.conf missing?)"
+  fi
+}
+check_sysctl net.core.somaxconn         65535
+check_sysctl vm.max_map_count           262144
+check_sysctl vm.swappiness              1
+check_sysctl fs.file-max                2097152
+check_sysctl fs.inotify.max_user_watches 524288
+check_sysctl fs.inotify.max_user_instances 8192
+
+if [ -f /etc/sysctl.d/99-elchi-stack.conf ]; then
+  ok "/etc/sysctl.d/99-elchi-stack.conf present"
+else
+  fail "/etc/sysctl.d/99-elchi-stack.conf MISSING"
+fi
+
+# THP — disable unit lands on mongo-running nodes (M1 + N≥3 RS members).
+if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
+  thp_state=$(awk -F'[][]' '{print $2}' /sys/kernel/mm/transparent_hugepage/enabled)
+  if [ "$thp_state" = "never" ]; then
+    ok "THP: never"
+  else
+    # If this node doesn't run mongo, THP=madvise/always is fine.
+    if [ -f /etc/systemd/system/elchi-disable-thp.service ]; then
+      fail "THP: $thp_state (disable unit installed but not effective — restart elchi-disable-thp.service)"
+    else
+      info "THP: $thp_state (no mongo on this node — disable unit not installed)"
+    fi
+  fi
+else
+  info "THP: kernel exposes no /sys/kernel/mm/transparent_hugepage/ (likely container)"
+fi
+
+# Swap — mongo prefers off. Warn-only.
+if [ -r /proc/swaps ] && [ "$(wc -l < /proc/swaps)" -gt 1 ]; then
+  warn "swap is enabled (mongo prefers swap=off; vm.swappiness=1 mitigates)"
+else
+  ok "swap: disabled"
+fi
+
+# mongo drop-in — only on nodes that actually run mongod.
+if systemctl is-active --quiet mongod 2>/dev/null; then
+  if [ -f /etc/systemd/system/mongod.service.d/10-elchi.conf ]; then
+    nofile=$(systemctl show mongod -p LimitNOFILE 2>/dev/null | cut -d= -f2)
+    if [ "${nofile:-0}" -ge 64000 ]; then
+      ok "mongod LimitNOFILE: ${nofile}"
+    else
+      fail "mongod LimitNOFILE: ${nofile} (drop-in present but not effective — daemon-reload + restart)"
+    fi
+    memlock=$(systemctl show mongod -p LimitMEMLOCK 2>/dev/null | cut -d= -f2)
+    if [ "$memlock" = "infinity" ] || [ "${memlock:-0}" = "18446744073709551615" ]; then
+      ok "mongod LimitMEMLOCK: infinity"
+    else
+      warn "mongod LimitMEMLOCK: ${memlock} (expected infinity)"
+    fi
+  else
+    fail "mongod drop-in MISSING at /etc/systemd/system/mongod.service.d/10-elchi.conf"
+  fi
+fi
+
+# Envoy LimitNOFILE — should be 1048576 after this hardening round.
+if systemctl is-active --quiet elchi-envoy 2>/dev/null; then
+  envoy_nofile=$(systemctl show elchi-envoy -p LimitNOFILE 2>/dev/null | cut -d= -f2)
+  if [ "${envoy_nofile:-0}" -ge 1048576 ]; then
+    ok "elchi-envoy LimitNOFILE: ${envoy_nofile}"
+  else
+    fail "elchi-envoy LimitNOFILE: ${envoy_nofile} (expected ≥1048576)"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 9. Summary
 # ─────────────────────────────────────────────────────────────────────
 section "Summary"
 printf '  %sPASS%s: %d   %sWARN%s: %d   %sFAIL%s: %d\n\n' \

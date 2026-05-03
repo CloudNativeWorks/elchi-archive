@@ -392,8 +392,14 @@ mongodb::initiate_replica_set() {
 # Called from install.sh on each node based on its topology row.
 mongodb::setup_local_standalone() {
   log::step "Provisioning MongoDB (standalone)"
+  # THP=never + systemd drop-in must land BEFORE first mongod start so
+  # the limits and kernel state are in place from the very first
+  # startup; otherwise mongod logs warnings on initial run + a restart
+  # is needed to pick the new ulimits up.
+  thp::install_disabler
   mongodb::resolve_version
   mongodb::install_package
+  mongodb::write_dropin
   mongodb::_apply_keyfile_perms
   mongodb::start_service
   mongodb::bootstrap_auth standalone
@@ -402,8 +408,10 @@ mongodb::setup_local_standalone() {
 
 mongodb::setup_replica_member() {
   log::step "Provisioning MongoDB (replica set member)"
+  thp::install_disabler
   mongodb::resolve_version
   mongodb::install_package
+  mongodb::write_dropin
   mongodb::_apply_keyfile_perms
   # Configure for RS BEFORE first start so the keyfile is picked up.
   # On the primary (M1) bootstrap_auth runs first to create users; on
@@ -415,7 +423,8 @@ mongodb::setup_replica_member() {
     mongodb::configure_conf rs
     systemd::reconcile_external mongod.service mongod \
       /etc/mongod.conf \
-      "${ELCHI_MONGO}/keyfile"
+      "${ELCHI_MONGO}/keyfile" \
+      /etc/systemd/system/mongod.service.d/10-elchi.conf
     wait_for_tcp 127.0.0.1 27017 60 \
       || die "mongod did not become reachable on 127.0.0.1:27017"
   fi
@@ -427,4 +436,47 @@ mongodb::_apply_keyfile_perms() {
   [ -f "$f" ] || return 0
   chown mongodb:mongodb "$f"
   chmod 0400 "$f"
+}
+
+# mongodb::write_dropin — production-grade resource ceiling for the
+# package-shipped mongod.service. The upstream unit ships almost no
+# limits (LimitNOFILE comes from the distro default — usually 1024-65535
+# depending on systemd version), so we override via drop-in.
+#
+# What this addresses (mongo's own production checklist):
+#   * LimitNOFILE=64000  — mongod opens a file per collection + index +
+#                          oplog cursor + connection. Default 1024 will
+#                          surface as cryptic "too many open files" on
+#                          first cluster of any size.
+#   * LimitNPROC=64000   — wired-tiger uses many threads (one per
+#                          connection + maintenance pool).
+#   * LimitMEMLOCK=infinity — keyfile + journal mlock; without infinity
+#                              they get clamped to 64KB and mongod logs
+#                              "WARNING: ulimit -l ... too low".
+#   * OOMScoreAdjust=-1000 — never let mongod be the OOM victim;
+#                            killing the primary triggers a replicaset
+#                            election storm.
+#   * TasksMax=infinity   — systemd's default cgroup task limit can be
+#                            as low as ~4915 on RHEL — mongod's connection
+#                            pool blows past that on busy clusters.
+mongodb::write_dropin() {
+  install -d -m 0755 /etc/systemd/system/mongod.service.d
+  cat > /etc/systemd/system/mongod.service.d/10-elchi.conf.tmp <<'EOF'
+# Managed by elchi-stack installer. DO NOT EDIT BY HAND.
+# Re-rendered on every install.sh; removed by uninstall.sh --purge-mongo.
+[Service]
+LimitNOFILE=64000
+LimitNPROC=64000
+LimitMEMLOCK=infinity
+LimitFSIZE=infinity
+LimitAS=infinity
+OOMScoreAdjust=-1000
+TasksMax=infinity
+EOF
+  install -m 0644 -o root -g root \
+    /etc/systemd/system/mongod.service.d/10-elchi.conf.tmp \
+    /etc/systemd/system/mongod.service.d/10-elchi.conf
+  rm -f /etc/systemd/system/mongod.service.d/10-elchi.conf.tmp
+  systemctl daemon-reload
+  log::info "mongod systemd drop-in applied (NOFILE=64000, MEMLOCK=infinity, OOMAdj=-1000)"
 }

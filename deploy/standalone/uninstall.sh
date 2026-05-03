@@ -47,6 +47,10 @@ export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}
 . "${SCRIPT_DIR}/lib/watchdog.sh"
 # shellcheck source=lib/firewall.sh
 . "${SCRIPT_DIR}/lib/firewall.sh"
+# shellcheck source=lib/sysctl.sh
+. "${SCRIPT_DIR}/lib/sysctl.sh"
+# shellcheck source=lib/thp.sh
+. "${SCRIPT_DIR}/lib/thp.sh"
 
 PURGE=0
 PURGE_MONGO=0
@@ -176,6 +180,18 @@ remove_hosts_block() {
   hosts::clear_managed_block 2>/dev/null || true
 }
 
+# ----- unit fingerprints (always; not gated on --purge) ------------------
+# systemd::reconcile_external stores per-unit content hashes under
+# /var/lib/elchi/.unit-fingerprint/ to skip restarts when external configs
+# (mongod, grafana-server, nginx) haven't drifted. After an uninstall the
+# managed configs are gone but the package units may stay running with
+# their default config — leaving these fingerprints causes a re-install
+# to render the same config, match the stale hash, and SKIP the restart
+# that would actually load our vhost/drop-in. Wipe them on every uninstall.
+remove_unit_fingerprints() {
+  rm -rf /var/lib/elchi/.unit-fingerprint
+}
+
 # ----- journald drop-in --------------------------------------------------
 remove_journald_dropin() {
   rm -f /etc/systemd/journald.conf.d/10-elchi-stack.conf
@@ -185,6 +201,13 @@ remove_journald_dropin() {
 # ----- purge data --------------------------------------------------------
 purge_data() {
   log::step "Purging data + secrets + user/group"
+  # Production tuning we landed at install time goes too — operators
+  # opting into --purge want a clean machine. THP disable unit and
+  # sysctl drop-in are both reversible (system reverts to distro
+  # defaults on next boot for THP, sysctl --system already re-applied
+  # without our file).
+  sysctl::remove
+  thp::remove
   rm -rf /etc/elchi /var/lib/elchi /var/log/elchi /opt/elchi
   if id elchi >/dev/null 2>&1; then
     userdel elchi 2>/dev/null || true
@@ -207,6 +230,14 @@ purge_mongo() {
   log::step "Purging MongoDB"
   systemctl stop mongod 2>/dev/null || true
   systemctl disable mongod 2>/dev/null || true
+  # Drop the systemd drop-in we shipped at install time. Without this
+  # the rm -f below leaves the directory + stale conf behind, and a
+  # subsequent reinstall would write the new conf over a still-loaded
+  # cached unit (daemon-reload is idempotent so this is more about
+  # filesystem cleanliness than correctness).
+  rm -rf /etc/systemd/system/mongod.service.d/10-elchi.conf \
+         /etc/systemd/system/mongod.service.d
+  systemctl daemon-reload 2>/dev/null || true
   preflight::detect_os 2>/dev/null || true
   case "${ELCHI_OS_FAMILY:-}" in
     debian)
@@ -315,6 +346,7 @@ local_uninstall() {
   remove_nginx_vhost
   remove_journald_dropin
   remove_hosts_block
+  remove_unit_fingerprints
   # Best-effort firewall revert — runs on every uninstall (not just
   # purge) so leftover open ports don't outlive the services they
   # protect. Removing a non-existent rule is a no-op on both backends.
@@ -374,7 +406,9 @@ orchestrated_uninstall() {
       fi
     else
       log::step "Remote uninstall on ${host}"
-      if [ "$CONTINUE_ON_ERROR" = "1" ]; then
+      if ! _ensure_remote_uninstaller "$host"; then
+        rc=1
+      elif [ "$CONTINUE_ON_ERROR" = "1" ]; then
         ( trap - ERR; set +e
           ssh::run_sudo "$host" bash /opt/elchi-installer/uninstall.sh "${flags[@]}" ) \
           || rc=$?
@@ -406,6 +440,29 @@ orchestrated_uninstall() {
   if [ "${#failed[@]}" -gt 0 ]; then
     return 1
   fi
+}
+
+# Ensure the remote node has /opt/elchi-installer/uninstall.sh so we can
+# invoke it. If the previous install died before the orchestrator shipped
+# the payload (e.g. an early failure on M1), the remote will be missing
+# the script entirely. We re-ship it from the locally-extracted installer
+# tree (the same one get.sh extracted before exec'ing this script).
+# Returns 0 if the payload is present (shipped or pre-existing), 1 if we
+# couldn't get it there — caller treats failure as a normal remote error.
+_ensure_remote_uninstaller() {
+  local host=$1
+  if ssh::run_sudo "$host" test -x /opt/elchi-installer/uninstall.sh 2>/dev/null; then
+    return 0
+  fi
+  log::info "remote ${host}: /opt/elchi-installer/uninstall.sh missing — shipping payload from M1"
+  if ! ssh::scp_dir "$ELCHI_INSTALLER_ROOT" "$host" /opt/elchi-installer; then
+    log::warn "failed to ship installer payload to ${host}"
+    return 1
+  fi
+  ssh::run_sudo "$host" \
+    chmod +x /opt/elchi-installer/install.sh /opt/elchi-installer/uninstall.sh /opt/elchi-installer/upgrade.sh \
+    2>/dev/null || true
+  return 0
 }
 
 _print_uninstall_summary() {

@@ -66,9 +66,17 @@ ExecStart=${ENVOY_BIN} -c ${ENVOY_CONFIG} --log-level info
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
-LimitNOFILE=65536
+# Envoy holds 2 FDs per upstream connection plus one per downstream.
+# 65536 caps capacity around 32K concurrent — front-door scale needs
+# the kernel-level ceiling. fs.file-max is bumped to 2M in lib/sysctl.sh
+# so this LimitNOFILE is the actually-binding limit.
+LimitNOFILE=${ELCHI_ENVOY_NOFILE:-1048576}
+LimitNPROC=65536
+LimitMEMLOCK=64M
+LimitCORE=0
 MemoryMax=${ELCHI_ENVOY_MEMORY_MAX:-1G}
 CPUQuota=${ELCHI_ENVOY_CPU_QUOTA:-100%}
+TasksMax=infinity
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -76,9 +84,19 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectKernelLogs=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+KeyringMode=private
+RemoveIPC=yes
+UMask=0077
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=elchi-envoy
@@ -634,9 +652,13 @@ EOF
 
   cat <<EOF
 
+  # OTEL collector runs on every node (HA per-node). Each envoy writes
+  # /opentelemetry traffic to its OWN node's collector via loopback —
+  # no cross-node hop, no cascading failure if M1 OTEL is down. The
+  # collectors all export to the same upstream VictoriaMetrics.
   - name: otel-cluster
     connect_timeout: 1s
-    type: STRICT_DNS
+    type: STATIC
     lb_policy: ROUND_ROBIN
     typed_extension_protocol_options:
       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
@@ -652,7 +674,7 @@ EOF
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: {address: ${m1_name}, port_value: ${ELCHI_PORT_OTEL_GRPC}}
+              socket_address: {address: 127.0.0.1, port_value: ${ELCHI_PORT_OTEL_GRPC}}
 
   - name: grafana-cluster
     connect_timeout: 1s

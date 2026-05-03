@@ -401,6 +401,34 @@ preflight::check_disk_space() {
   log::info "${mount_point}: ${avail_gb}GiB free (>= ${need_gb}GiB required)"
 }
 
+# preflight::check_ram_swap — soft RAM check (warn, don't abort) + swap
+# nudge. The stack is functional on small VMs but tunings assume a
+# real budget; on a 1GB VM mongod will swap-thrash and elections will
+# storm. Surface both as warnings so operators can decide.
+#
+# Why warn instead of fail: dev/test/lab installs are legitimate even
+# at 2GB. Operators set ELCHI_REQUIRE_HEALTHY=1 to escalate to fatal.
+preflight::check_ram_swap() {
+  local mem_kb total_gb
+  mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+  if [ -n "$mem_kb" ]; then
+    total_gb=$(( mem_kb / 1024 / 1024 ))
+    if [ "$total_gb" -lt 4 ]; then
+      log::warn "system RAM ${total_gb}GB < recommended 4GB — services may OOM under load"
+      [ "${ELCHI_REQUIRE_HEALTHY:-0}" = "1" ] \
+        && die "RAM below threshold and ELCHI_REQUIRE_HEALTHY=1"
+    else
+      log::info "system RAM: ${total_gb}GB"
+    fi
+  fi
+
+  # /proc/swaps has a header line; >1 means at least one active swap.
+  if [ -r /proc/swaps ] && [ "$(wc -l < /proc/swaps)" -gt 1 ]; then
+    log::warn "swap is enabled — mongo strongly prefers swap=off (we set vm.swappiness=1 via sysctl drop-in to mitigate)"
+    log::warn "  to fully disable: sudo swapoff -a && remove the swap entry from /etc/fstab"
+  fi
+}
+
 # ----- port check entry points -------------------------------------------
 # preflight::check_basic_ports — topology-independent ports that EVERY
 # node opens. Catches the common operator footgun (port 443 already
@@ -529,6 +557,7 @@ preflight::run() {
   # libssl / openssl etc. are in place before we start mongod/grafana.
   preflight::upgrade_os
   preflight::check_time_sync
+  preflight::check_ram_swap
   preflight::check_disk_space 5 /var/lib
   # If a custom Mongo data dir is configured, check its filesystem too.
   # Helm pins a 5Gi PVC; we mirror the same minimum here.

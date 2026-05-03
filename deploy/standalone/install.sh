@@ -485,6 +485,10 @@ source_libs() {
   . "${lib}/firewall.sh"
   # shellcheck source=lib/journald.sh
   . "${lib}/journald.sh"
+  # shellcheck source=lib/sysctl.sh
+  . "${lib}/sysctl.sh"
+  # shellcheck source=lib/thp.sh
+  . "${lib}/thp.sh"
   # shellcheck source=lib/hosts.sh
   . "${lib}/hosts.sh"
   # shellcheck source=lib/watchdog.sh
@@ -622,6 +626,12 @@ local_install() {
   # System-wide journald retention (independent of cluster topology).
   journald::configure
 
+  # Kernel/network tuning for production. Lands /etc/sysctl.d/99-elchi-stack.conf
+  # and runs `sysctl --system` so per-service LimitNOFILE values can actually
+  # be honored (fs.file-max ceiling) and mongo gets vm.swappiness=1 +
+  # max_map_count=262144 before its first start.
+  sysctl::apply
+
   # /etc/hosts cluster block — every node maps every other node's
   # `<hostname>-<role>-<version>` instance name to its IP, so Envoy's
   # bootstrap can address backend pods by registry-emitted name without
@@ -659,12 +669,17 @@ local_install() {
     fi
   fi
 
-  # M1-only stateful services
+  # M1-only storage services (VM TSDB + Grafana UI singletons).
   if [ "$idx" = "1" ]; then
     victoriametrics::setup
-    otel::setup
     grafana::setup
   fi
+
+  # OTEL collector on EVERY node — local sink for that node's envoy
+  # /opentelemetry route. Exporter writes to M1 VictoriaMetrics (or
+  # external VM if --vm=external). HA: M1 OTEL down doesn't break
+  # telemetry on M2/M3 since each node owns its own collector.
+  otel::setup
 
   # Backend binaries (every node)
   backend::install_binaries

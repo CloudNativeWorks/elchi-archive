@@ -740,9 +740,10 @@
                 <span class="port-label">MongoDB</span><span class="port-value">:27017</span><span class="port-note">Standalone for 1-2 VM topology, RS-3 for 3+</span>
                 <span class="port-label">Grafana</span><span class="port-value">127.0.0.1:3000</span><span class="port-note">M1 only; reverse-proxied at <code>/grafana/</code></span>
                 <span class="port-label">VictoriaMetrics</span><span class="port-value">0.0.0.0:8428</span><span class="port-note">M1 only (with <code>--vm=local</code>)</span>
-                <span class="port-label">OTel gRPC</span><span class="port-value">:4317</span><span class="port-note">M1 only; ingest from backend</span>
-                <span class="port-label">OTel HTTP</span><span class="port-value">:4318</span><span class="port-note">M1 only</span>
-                <span class="port-label">OTel health</span><span class="port-value">:13133</span><span class="port-note">M1 only</span>
+                <span class="port-label">OTel gRPC</span><span class="port-value">:4317</span><span class="port-note">Every node (per-node sink for envoy <code>/opentelemetry</code>); each collector remote-writes to M1 VM</span>
+                <span class="port-label">OTel HTTP</span><span class="port-value">:4318</span><span class="port-note">Every node</span>
+                <span class="port-label">OTel health</span><span class="port-value">:13133</span><span class="port-note">Every node</span>
+                <span class="port-label">OTel prom</span><span class="port-value">:8888</span><span class="port-note">Every node (collector self-metrics)</span>
                 <span class="port-label">CoreDNS</span><span class="port-value">:53/tcp+udp</span><span class="port-note">Every node (only with <code>--gslb</code>)</span>
                 <span class="port-label">CoreDNS webhook</span><span class="port-value">0.0.0.0:8053</span><span class="port-note">M1 → M2/M3 push notifications (X-Elchi-Secret auth)</span>
             </div>
@@ -757,8 +758,120 @@
                 uses ext_proc + the registry to decide which control-plane / controller to route each
                 request to (<code>x-target-cluster</code> header).
             </p>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <strong>OTEL collector on every node.</strong> Each node ships its own
+                <code>otelcol-contrib</code> instance bound to <code>0.0.0.0:4317/4318</code>;
+                that node's Envoy routes <code>/opentelemetry</code> traffic to
+                <code>127.0.0.1:4317</code> (no cross-node hop). All collectors export to the
+                singleton VictoriaMetrics on M1 — or to <code>--vm-endpoint</code> when
+                <code>--vm=external</code>. Failure mode: M1 OTEL outage no longer cascades to
+                M2/M3 envoys, and the per-node collector's <code>sending_queue</code> buffers
+                writes if the VM is briefly unreachable.
+            </p>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <strong>Storage tier stays on M1:</strong> VictoriaMetrics TSDB and Grafana UI
+                are still singletons. With <code>--vm=external</code> the TSDB moves out
+                entirely; Grafana stays on M1.
+            </p>
 
-            <h4>9. Idempotency &amp; reconcile</h4>
+            <h4>9. Production hardening (kernel + systemd)</h4>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 10px;">
+                Every install lands a production tuning baseline. The defaults below come
+                from the upstream production checklists for Envoy, MongoDB, and the Linux
+                kernel — they're not opinionated guesses, they're the values these projects
+                explicitly call out.
+            </p>
+
+            <details>
+                <summary>Kernel sysctl (<code>/etc/sysctl.d/99-elchi-stack.conf</code>)</summary>
+                <div class="port-table" style="font-size: 12px;">
+                    <span class="port-label">net.core.somaxconn</span><span class="port-value">65535</span><span class="port-note">listen() backlog ceiling for Envoy + nginx + grpc</span>
+                    <span class="port-label">net.core.netdev_max_backlog</span><span class="port-value">10000</span><span class="port-note">NIC RX queue per CPU</span>
+                    <span class="port-label">net.ipv4.ip_local_port_range</span><span class="port-value">10240-65535</span><span class="port-note">~55K ephemeral ports for Envoy upstream + mongo failover churn</span>
+                    <span class="port-label">net.ipv4.tcp_tw_reuse</span><span class="port-value">1</span><span class="port-note">reuse TIME_WAIT sockets (RFC 6191 safe)</span>
+                    <span class="port-label">net.ipv4.tcp_fin_timeout</span><span class="port-value">15</span><span class="port-note">recycle FIN_WAIT2 (default 60)</span>
+                    <span class="port-label">net.ipv4.tcp_keepalive_time</span><span class="port-value">120</span><span class="port-note">detect dead peers in 2min, not 2hr</span>
+                    <span class="port-label">net.ipv4.tcp_syncookies</span><span class="port-value">1</span><span class="port-note">SYN flood protection (explicit)</span>
+                    <span class="port-label">fs.file-max</span><span class="port-value">2097152</span><span class="port-note">system-wide FD ceiling above any LimitNOFILE</span>
+                    <span class="port-label">vm.swappiness</span><span class="port-value">1</span><span class="port-note">never page out unless OOM (mongo prerequisite)</span>
+                    <span class="port-label">vm.max_map_count</span><span class="port-value">262144</span><span class="port-note">WiredTiger mmap regions</span>
+                    <span class="port-label">fs.inotify.max_queued_events</span><span class="port-value">65536</span><span class="port-note">event queue depth (default 16384)</span>
+                    <span class="port-label">fs.inotify.max_user_instances</span><span class="port-value">8192</span><span class="port-note">RHEL 9 default 128 — too low for VM/Grafana/mongo together</span>
+                    <span class="port-label">fs.inotify.max_user_watches</span><span class="port-value">524288</span><span class="port-note">RHEL 9 default 8192; Ubuntu already 524288</span>
+                    <span class="port-label">user.max_inotify_instances</span><span class="port-value">8192</span><span class="port-note">per-userns (Linux 5.11+); default 128</span>
+                    <span class="port-label">user.max_inotify_watches</span><span class="port-value">524288</span><span class="port-note">per-userns; default 65536</span>
+                </div>
+            </details>
+
+            <details>
+                <summary>MongoDB systemd drop-in (<code>/etc/systemd/system/mongod.service.d/10-elchi.conf</code>)</summary>
+                <p style="font-size: 13px; margin: 6px 0;">Mongo's package unit ships almost no resource limits; we override:</p>
+                <div class="port-table" style="font-size: 12px;">
+                    <span class="port-label">LimitNOFILE</span><span class="port-value">64000</span><span class="port-note">file per collection + index + cursor + connection</span>
+                    <span class="port-label">LimitNPROC</span><span class="port-value">64000</span><span class="port-note">WiredTiger thread pool + connection pool</span>
+                    <span class="port-label">LimitMEMLOCK</span><span class="port-value">infinity</span><span class="port-note">required to silence the "ulimit -l too low" warnings</span>
+                    <span class="port-label">OOMScoreAdjust</span><span class="port-value">-1000</span><span class="port-note">never let mongod be the OOM victim</span>
+                    <span class="port-label">TasksMax</span><span class="port-value">infinity</span><span class="port-note">cgroup task limit (default ~4915 on RHEL is not enough)</span>
+                </div>
+                <p style="font-size: 13px; margin: 6px 0;">
+                    Plus a one-shot <code>elchi-disable-thp.service</code>
+                    (<code>Before=mongod.service</code>) that writes
+                    <code>never</code> to
+                    <code>/sys/kernel/mm/transparent_hugepage/{enabled,defrag}</code>.
+                    THP-induced khugepaged compaction is the most common cause of
+                    second-scale latency spikes in WiredTiger.
+                </p>
+            </details>
+
+            <details>
+                <summary>Per-service systemd hardening</summary>
+                <p style="font-size: 13px; margin: 6px 0;">
+                    Every elchi-* unit (envoy, otel, victoriametrics, grafana, registry,
+                    controller, control-plane@, coredns) ships with a uniform hardening set:
+                </p>
+                <ul style="font-size: 13px; color: #24292f; margin: 4px 0 8px;">
+                    <li><code>NoNewPrivileges=true</code>, <code>PrivateTmp=true</code></li>
+                    <li><code>ProtectSystem=strict</code>, <code>ProtectHome=true</code>, <code>ReadWritePaths=</code> minimum</li>
+                    <li><code>ProtectKernelTunables/Modules/ControlGroups/Logs=true</code></li>
+                    <li><code>ProtectClock=true</code>, <code>ProtectHostname=true</code>, <code>ProtectProc=invisible</code>, <code>ProcSubset=pid</code></li>
+                    <li><code>RestrictSUIDSGID=true</code>, <code>LockPersonality=true</code>, <code>RestrictRealtime=true</code>, <code>RestrictNamespaces=true</code></li>
+                    <li><code>SystemCallArchitectures=native</code>, <code>KeyringMode=private</code>, <code>RemoveIPC=yes</code>, <code>UMask=0077</code></li>
+                    <li><code>CapabilityBoundingSet=</code> (drop ALL) — except Envoy + CoreDNS keep <code>CAP_NET_BIND_SERVICE</code> for :443 / :53</li>
+                </ul>
+                <p style="font-size: 13px; margin: 6px 0;">
+                    Per-service <strong>resource limits</strong>:
+                </p>
+                <div class="port-table" style="font-size: 12px;">
+                    <span class="port-label">elchi-envoy</span><span class="port-value">LimitNOFILE=1048576</span><span class="port-note">(override <code>ELCHI_ENVOY_NOFILE</code>) — front-door scale needs 1M FDs</span>
+                    <span class="port-label">control-plane / controller / registry</span><span class="port-value">LimitNOFILE=65536, LimitNPROC=65536, LimitMEMLOCK=64M</span><span class="port-note">gRPC fan-in</span>
+                    <span class="port-label">otel / victoriametrics / coredns</span><span class="port-value">LimitNOFILE=65536, LimitNPROC=65536/4096</span><span class="port-note">local sink + TSDB + DNS</span>
+                    <span class="port-label">grafana-server (drop-in)</span><span class="port-value">LimitNOFILE=65536, LimitNPROC=4096, MemoryMax=1G</span><span class="port-note">UI; not in hot path</span>
+                </div>
+            </details>
+
+            <details>
+                <summary>Preflight RAM/swap checks</summary>
+                <p style="font-size: 13px; margin: 6px 0;">
+                    Before any side-effect, <code>preflight::check_ram_swap</code> warns if
+                    total system RAM is below 4 GB and if any swap is active. Both are
+                    soft warnings on a normal install; set
+                    <code>ELCHI_REQUIRE_HEALTHY=1</code> to escalate to fatal. To remove
+                    swap permanently:
+                </p>
+                <div class="stdl-cmd">sudo swapoff -a
+sudo sed -i.bak '/\sswap\s/d' /etc/fstab</div>
+            </details>
+
+            <p class="note" style="margin-top: 10px;">
+                <strong>Verifying the hardening landed:</strong> run
+                <code>sudo /etc/elchi/validate.sh</code> on every node. §8 "System tuning"
+                checks <code>somaxconn</code>, <code>vm.max_map_count</code>,
+                <code>vm.swappiness</code>, <code>fs.file-max</code>,
+                THP state, swap state, mongo's <code>LimitNOFILE/MEMLOCK</code>, and
+                envoy's <code>LimitNOFILE</code>.
+            </p>
+
+            <h4>10. Idempotency &amp; reconcile</h4>
             <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
                 Every setup module uses hash-based reconcile
                 (<code>systemd::install_and_apply</code> for elchi-* units;
@@ -778,7 +891,7 @@
                 fails closed if any node fails the deep-health gate; per-binary rollback is automatic.
             </p>
 
-            <h4>10. Supported distros</h4>
+            <h4>11. Supported distros</h4>
             <p style="margin: 0; font-size: 14px; color: #656d76;">
                 Ubuntu 22.04 + 24.04 · Debian 11 + 12 · RHEL / Rocky / Alma / Oracle 9.
                 amd64 only (arm64 lands when upstream backend ships arm64 binaries).

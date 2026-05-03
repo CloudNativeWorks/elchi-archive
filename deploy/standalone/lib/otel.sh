@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 # otel.sh — install OpenTelemetry Collector (contrib distribution).
-# Runs only on M1. Receives OTLP from registry and remote-writes to
-# VictoriaMetrics. Helm pin: 0.89.0.
+#
+# Runs on EVERY node (per-node sink for that node's envoy + registry
+# Prometheus scrape). Each collector remote-writes to the singleton
+# VictoriaMetrics on M1 — or to operator-supplied --vm-endpoint when
+# --vm=external. Helm pin: 0.89.0.
+#
+# Endpoint resolution at render time:
+#   * --vm=external + --vm-endpoint=...  → operator endpoint
+#   * --vm=local on M1                   → 127.0.0.1:8428 (loopback)
+#   * --vm=local on Mn (n>1)             → M1's hostname:8428 (over /etc/hosts)
+# The cross-node M1 path uses the same /etc/hosts trick lib/envoy.sh
+# uses for its M1-targeted clusters.
 
 readonly OTEL_VERSION_DEFAULT=0.89.0
 readonly OTEL_BIN=/opt/elchi/bin/otelcol-contrib
@@ -44,6 +54,8 @@ ExecStart=${OTEL_BIN} --config=${OTEL_CONFIG}
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
+LimitNPROC=65536
+LimitCORE=0
 MemoryMax=${ELCHI_OTEL_MEMORY_MAX:-512M}
 CPUQuota=${ELCHI_OTEL_CPU_QUOTA:-50%}
 NoNewPrivileges=true
@@ -53,8 +65,19 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectKernelLogs=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=true
 LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+KeyringMode=private
+RemoveIPC=yes
+UMask=0077
 CapabilityBoundingSet=
 AmbientCapabilities=
 StandardOutput=journal
@@ -90,7 +113,15 @@ otel::render_config() {
       vm_endpoint="http://${ELCHI_VM_ENDPOINT}/api/v1/write"
     fi
   else
-    vm_endpoint="http://127.0.0.1:${ELCHI_PORT_VICTORIAMETRICS}/api/v1/write"
+    # --vm=local: VM lives on M1. M1 itself uses loopback; M2/M3 reach
+    # M1 over its hostname (resolved via lib/hosts.sh's managed block).
+    local vm_host=127.0.0.1
+    if [ "${ELCHI_NODE_INDEX:-1}" != "1" ]; then
+      vm_host=$(awk '/^  - index: 1$/{f=1; next} f && /^    host:/{print $2; exit}' \
+        "${ELCHI_ETC}/topology.full.yaml" 2>/dev/null)
+      [ -n "$vm_host" ] || die "could not resolve M1 host from topology.full.yaml for OTEL exporter"
+    fi
+    vm_endpoint="http://${vm_host}:${ELCHI_PORT_VICTORIAMETRICS}/api/v1/write"
   fi
 
   local registry_target="127.0.0.1:${ELCHI_PORT_REGISTRY_METRICS}"
