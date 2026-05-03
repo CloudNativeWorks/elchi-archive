@@ -34,6 +34,16 @@ else
   exit 1
 fi
 
+# _ssh_setup — pull persisted SSH creds from /etc/elchi/orchestrator.env
+# (USER/PORT/KEY) into env vars, then call ssh::configure so subsequent
+# ssh::run / ssh::scp use the cluster key non-interactively. Every
+# subcommand that touches a remote host MUST call this first; otherwise
+# ssh falls back to the default identity → password prompt.
+_ssh_setup() {
+  ssh::load_persisted_creds
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+}
+
 usage() {
   cat <<EOF
 elchi-stack — operator helper
@@ -63,6 +73,7 @@ cmd_status() {
     printf 'no /etc/elchi/nodes.list — is this M1?\n' >&2
     exit 1
   fi
+  _ssh_setup
   local host
   while IFS= read -r host; do
     [ -z "$host" ] && continue
@@ -86,6 +97,7 @@ cmd_logs() {
     -f|--follow) follow=1 ;;
   esac
 
+  _ssh_setup
   local host
   while IFS= read -r host; do
     [ -z "$host" ] && continue
@@ -111,11 +123,7 @@ cmd_logs() {
 }
 
 cmd_reload_envoy() {
-  if [ -r /etc/elchi/orchestrator.env ]; then
-    # shellcheck disable=SC1091
-    . /etc/elchi/orchestrator.env
-  fi
-  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+  _ssh_setup
   local host
   while IFS= read -r host; do
     [ -z "$host" ] && continue
@@ -195,11 +203,7 @@ cmd_verify() {
   if [ ! -f /etc/elchi/topology.full.yaml ]; then
     die "no /etc/elchi/topology.full.yaml — install hasn't completed"
   fi
-  if [ -r /etc/elchi/orchestrator.env ]; then
-    # shellcheck disable=SC1091
-    . /etc/elchi/orchestrator.env
-  fi
-  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+  _ssh_setup
 
   local total_fails=0 host
   while IFS= read -r host; do
@@ -294,13 +298,9 @@ cmd_rotate_secret() {
   log::info "re-rendering per-variant common.env on M1"
   backend::render_per_version_configs
 
-  # SSH driver — pick credentials from the persisted orchestrator env
-  # (so 'elchi-stack rotate-secret' run later with no flags still works).
-  if [ -r /etc/elchi/orchestrator.env ]; then
-    # shellcheck disable=SC1091
-    . /etc/elchi/orchestrator.env
-  fi
-  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+  # SSH driver — credentials come from persisted /etc/elchi/orchestrator.env
+  # via _ssh_setup, so this works without operator flags.
+  _ssh_setup
 
   # Walk every variant and ship its newly-rendered common.env to every
   # remote node. Local node is already updated by render_per_version_configs.
