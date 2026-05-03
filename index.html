@@ -540,6 +540,49 @@
             </details>
 
             <h4>4. <code>uninstall.sh</code> — remove the stack</h4>
+
+            <p style="font-size: 13px; color: #24292f; margin: 6px 0 8px;">
+                Two ways to invoke. Both routes hit the same script — pick whichever
+                matches how you installed.
+            </p>
+
+            <h5>Single node (this machine only)</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --uninstall --yes-i-mean-it</div>
+            <p style="font-size: 13px; margin: 4px 0 8px;">
+                Stops + disables every <code>elchi-*</code> unit, removes unit files,
+                binaries, the operator helper, the nginx vhost, the journald drop-in,
+                the managed <code>/etc/hosts</code> block, and reverts firewall ports.
+                Mongo / VictoriaMetrics / Grafana data + secrets + TLS material are
+                <strong>preserved</strong> unless you add a <code>--purge*</code> flag.
+            </p>
+
+            <h5>Whole cluster — fan out from M1 to every node</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --uninstall --all-nodes --yes-i-mean-it</div>
+            <p style="font-size: 13px; margin: 4px 0 8px;">
+                Reads <code>/etc/elchi/nodes.list</code> on M1, SSHes into every M2..Mn
+                using the SSH credentials saved at install time, and runs the local
+                uninstall on each. Order is reverse-by-design (Mn first, M1 last) so
+                shared state on M1 is dropped only after the dependents are gone.
+                Add <code>--continue-on-error</code> if you want partial-cluster
+                uninstall to finish all reachable nodes instead of aborting on the
+                first SSH failure.
+            </p>
+
+            <h5>Wipe everything (data + packages + secrets + SSH bootstrap material)</h5>
+            <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --uninstall --all-nodes --purge-all --yes-i-mean-it</div>
+            <p class="note" style="margin-top: 4px;">
+                <strong>--purge-all is destructive and irreversible:</strong> drops
+                Mongo + VictoriaMetrics + Grafana + nginx packages, deletes
+                <code>/var/lib/{mongodb,grafana,elchi}</code>, removes the cluster
+                SSH key + known_hosts pin + our authorized_keys entry, and clears the
+                CA we added to the system trust store. Combine with
+                <code>--all-nodes</code> only when you genuinely want a clean slate
+                across the whole fleet.
+            </p>
+
             <details>
                 <summary>Flags</summary>
                 <div class="flag-table">
@@ -565,7 +608,63 @@
                 <code>--purge*</code> flag.
             </p>
 
-            <h4>5. <code>elchi-stack</code> — operator helper (<code>/usr/local/bin/elchi-stack</code>)</h4>
+            <h4>5. <code>/etc/elchi/validate.sh</code> — per-node post-install audit</h4>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 10px;">
+                Read-only. The installer drops this on EVERY node so you can confirm
+                the install end-to-end without leaning on the orchestrator. Run it on
+                each machine after install (or any time you want a sanity check):
+            </p>
+            <div class="stdl-cmd">sudo /etc/elchi/validate.sh</div>
+            <p style="font-size: 13px; margin: 8px 0 10px;">What it walks (in order):</p>
+            <ul style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <li><strong>Topology context</strong> — this node's index, role flags
+                    (<code>runs_mongo</code>, <code>runs_otel</code>, …),
+                    the <code>backend_variants</code> set.</li>
+                <li><strong>Systemd</strong> — every <code>elchi-*</code> unit + mongod /
+                    grafana-server / nginx (where present). <code>active</code> = ✓,
+                    <code>activating</code> = warning (still coming up), <code>failed</code>
+                    or <code>inactive</code> = ✗. Watchdog timer state checked separately.</li>
+                <li><strong>Listening ports</strong> — compares <code>ss -lntp</code>
+                    against the expected per-node set + M1 singletons + per-variant
+                    control-plane ports from <code>ports.full.json</code>. Flags any
+                    M1-only port that shows up on Mn (and vice-versa).</li>
+                <li><strong>Singleton service health</strong> (M1 only) —
+                    <code>mongod</code> ping via mongosh, <code>VictoriaMetrics</code>
+                    <code>/api/v1/query</code>, <code>Grafana</code>
+                    <code>/api/health</code>, <code>otelcol</code> health extension on
+                    <code>:13133</code>.</li>
+                <li><strong>Envoy admin</strong> — <code>/ready</code>,
+                    <code>/clusters</code> health flags for every cluster
+                    (registry / controller-rest / otel / grafana / victoriametrics +
+                    every per-node controller and control-plane), and
+                    <code>/listeners</code> bind verification for the public TLS
+                    listener and the loopback internal listener.</li>
+                <li><strong>Config integrity</strong> — sha256 of
+                    <code>envoy.yaml</code>, <code>topology.full.yaml</code>,
+                    <code>ports.full.json</code>, <code>nodes.list</code>,
+                    <code>tls/server.crt</code>. Compare hashes by hand across nodes
+                    to confirm the bundle distributed cleanly.</li>
+                <li><strong>Stale variant detection</strong> — flags any
+                    <code>/etc/elchi/&lt;variant&gt;/</code> dir or
+                    <code>elchi-control-plane-&lt;sanitized&gt;@.service</code> unit
+                    whose variant tag isn't in the topology's <code>backend_variants</code>
+                    list. (<code>install.sh</code> auto-prunes these on its next run, so
+                    this should normally show "no stale variants".)</li>
+            </ul>
+            <p style="font-size: 13px; margin: 4px 0 10px;">
+                Output is colored, with a final
+                <code>PASS / WARN / FAIL</code> count. Exit code is non-zero on any
+                FAIL — friendly to <code>ssh node N -- 'sudo /etc/elchi/validate.sh'</code>
+                in a loop.
+            </p>
+            <p class="info">
+                <strong>Why per-node?</strong> The installer renders Envoy bootstrap +
+                bundle on M1 and SCPs to Mn — drift between nodes is the most common
+                "weird symptom" cause. Running validate on each box and diffing the
+                sha256 lines surfaces it in one shell command.
+            </p>
+
+            <h4>6. <code>elchi-stack</code> — operator helper (<code>/usr/local/bin/elchi-stack</code>)</h4>
             <div class="flag-table">
                 <code>elchi-stack status</code><div class="desc">Cluster-wide service summary (each node's <code>systemctl is-active</code> for every elchi-* unit).</div>
                 <code>elchi-stack logs &lt;unit&gt; [-f]</code><div class="desc">Tail journalctl for the named unit on every node. <code>-f</code> follows.</div>
@@ -577,7 +676,7 @@
                 <code>elchi-stack verify</code><div class="desc">End-to-end cluster health: registration log evidence + Envoy admin listener probe + service active state on every node.</div>
             </div>
 
-            <h4>6. Port atlas</h4>
+            <h4>7. Port atlas</h4>
             <div class="port-table">
                 <span class="port-label">Envoy public</span><span class="port-value">0.0.0.0:443/tcp</span><span class="port-note">TLS, every node (configurable via <code>--port</code>)</span>
                 <span class="port-label">Envoy internal</span><span class="port-value">127.0.0.1:8080</span><span class="port-note">Plaintext loopback (UI/API to backend)</span>
@@ -598,7 +697,7 @@
                 <span class="port-label">CoreDNS webhook</span><span class="port-value">0.0.0.0:8053</span><span class="port-note">M1 → M2/M3 push notifications (X-Elchi-Secret auth)</span>
             </div>
 
-            <h4>7. Topology</h4>
+            <h4>8. Topology</h4>
             <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
                 <strong>1 VM:</strong> all-in-one. <strong>2 VM:</strong> Mongo standalone on M1; M2
                 connects over LAN. <strong>3+ VM:</strong> Mongo replica set across the first 3 nodes;
@@ -609,7 +708,7 @@
                 request to (<code>x-target-cluster</code> header).
             </p>
 
-            <h4>8. Idempotency &amp; reconcile</h4>
+            <h4>9. Idempotency &amp; reconcile</h4>
             <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
                 Every setup module uses hash-based reconcile
                 (<code>systemd::install_and_apply</code> for elchi-* units;
@@ -629,7 +728,7 @@
                 fails closed if any node fails the deep-health gate; per-binary rollback is automatic.
             </p>
 
-            <h4>9. Supported distros</h4>
+            <h4>10. Supported distros</h4>
             <p style="margin: 0; font-size: 14px; color: #656d76;">
                 Ubuntu 22.04 + 24.04 · Debian 11 + 12 · RHEL / Rocky / Alma / Oracle 9.
                 amd64 only (arm64 lands when upstream backend ships arm64 binaries).

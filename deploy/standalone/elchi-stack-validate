@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+# elchi-stack-validate — read-only post-install audit for ONE node.
+# Installer copies this to /etc/elchi/validate.sh on every node.
+#
+# Run on each machine after install (or any time you want to confirm the
+# stack is healthy):
+#
+#   sudo /etc/elchi/validate.sh
+#
+# Self-contained: no lib/ sourcing. Walks topology.full.yaml, systemd
+# state, listening ports, singleton service health, envoy admin endpoints,
+# and config-file integrity. Reports PASS/WARN/FAIL counts and exits
+# non-zero on any FAIL. Safe to run during partial / interrupted installs.
+
+set -uo pipefail
+
+ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
+ELCHI_LIB=${ELCHI_LIB:-/var/lib/elchi}
+ELCHI_BIN_DIR=${ELCHI_BIN_DIR:-/opt/elchi/bin}
+
+# ── colors (auto-disable when stdout isn't a tty) ─────────────────────
+if [ -t 1 ]; then
+  C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_YLW=$'\033[0;33m'
+  C_BLU=$'\033[0;34m'; C_CYN=$'\033[0;36m'; C_BLD=$'\033[1m'; C_DIM=$'\033[2m'
+  C_RST=$'\033[0m'
+else
+  C_RED=; C_GRN=; C_YLW=; C_BLU=; C_CYN=; C_BLD=; C_DIM=; C_RST=
+fi
+
+PASS=0; WARN=0; FAIL=0
+ok()      { printf '  %s✓%s %s\n' "$C_GRN" "$C_RST" "$*"; PASS=$((PASS+1)); }
+warn()    { printf '  %s!%s %s\n' "$C_YLW" "$C_RST" "$*"; WARN=$((WARN+1)); }
+fail()    { printf '  %s✗%s %s\n' "$C_RED" "$C_RST" "$*"; FAIL=$((FAIL+1)); }
+info()    { printf '  %s·%s %s\n' "$C_BLU" "$C_RST" "$*"; }
+section() { printf '\n%s── %s ──%s\n' "$C_BLD" "$1" "$C_RST"; }
+
+# Check sanitization mirrors topology::sanitize_version: strip arch
+# suffix, dots → hyphens.
+sanitize_variant() {
+  local t=$1
+  t=${t%-arm64}; t=${t%-amd64}
+  printf '%s' "${t//./-}"
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+  printf '%snote:%s some checks require root (systemctl, ss, journalctl) — re-run with sudo for full output\n' \
+    "$C_YLW" "$C_RST"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 1. Topology context
+# ─────────────────────────────────────────────────────────────────────
+section "Topology"
+TOPO="${ELCHI_ETC}/topology.full.yaml"
+if [ ! -f "$TOPO" ]; then
+  fail "topology.full.yaml missing at ${TOPO} — cluster not installed?"
+  printf '\n%sFATAL: cannot continue without topology%s\n' "$C_RED" "$C_RST"
+  exit 2
+fi
+
+host_short=$(hostname -s)
+cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "$TOPO")
+my_idx=$(awk -v h="$host_short" '
+  $0 ~ "^  - index: "{idx=$3}
+  $0 ~ "^    host: "h"$" {print idx; exit}
+' "$TOPO")
+[ -z "${my_idx:-}" ] && my_idx="?"
+is_m1=0; [ "$my_idx" = "1" ] && is_m1=1
+
+info "host:         ${host_short}  (index ${my_idx} of ${cluster_size})"
+info "role:         $([ "$is_m1" = "1" ] && echo "M1 (singletons + control-plane)" || echo "Mn (control-plane only)")"
+
+# This node's runs_* role flags from topology
+mapfile -t role_flags < <(awk -v i="$my_idx" '
+  $0 ~ "^  - index: "i"$" {f=1; next}
+  f && /^[[:space:]]+runs_/{
+    sub(/^[[:space:]]+/, "")
+    print
+  }
+  f && /^  - index:/{exit}
+' "$TOPO")
+if [ "${#role_flags[@]}" -gt 0 ]; then
+  printf '  %srole flags:%s\n' "$C_CYN" "$C_RST"
+  printf '    %s%s%s\n' "$C_DIM" "${role_flags[@]}" "$C_RST"
+fi
+
+# Backend variants in topology (the kept set)
+mapfile -t kept_variants < <(
+  awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
+       f && /^[a-zA-Z]/{exit}' "$TOPO"
+)
+printf '  %sbackend_variants:%s\n' "$C_CYN" "$C_RST"
+for v in "${kept_variants[@]}"; do
+  printf '    %s· %s%s\n' "$C_DIM" "$v" "$C_RST"
+done
+
+# ─────────────────────────────────────────────────────────────────────
+# 2. Systemd state
+# ─────────────────────────────────────────────────────────────────────
+section "Systemd unit state"
+mapfile -t units < <(
+  systemctl list-units --no-legend --no-pager --type=service --state=loaded 2>/dev/null \
+    | awk '$1 ~ /^elchi-/ {print $1}'
+)
+# Add managed external services if their unit files exist
+for ext in mongod grafana-server nginx; do
+  if systemctl list-unit-files --type=service --no-legend "${ext}.service" 2>/dev/null | grep -q .; then
+    units+=("${ext}.service")
+  fi
+done
+
+for u in "${units[@]}"; do
+  state=$(systemctl is-active "$u" 2>/dev/null || true)
+  case "$u:$state" in
+    elchi-watchdog.service:inactive) info "$u: inactive (oneshot — driven by .timer)" ;;
+    *:active)                         ok   "$u: active" ;;
+    *:activating)                     warn "$u: activating (still coming up — re-run in 10s)" ;;
+    *:inactive|*:dead)                fail "$u: NOT active (state=$state)" ;;
+    *:failed)                         fail "$u: failed — see: journalctl -u $u --no-pager -n 50" ;;
+    *)                                warn "$u: state=$state" ;;
+  esac
+done
+
+# Watchdog timer is the operative health check for the oneshot service
+if systemctl list-unit-files --no-legend --type=timer 2>/dev/null \
+     | awk '{print $1}' | grep -qx elchi-watchdog.timer; then
+  if systemctl is-active --quiet elchi-watchdog.timer 2>/dev/null; then
+    ok "elchi-watchdog.timer: active (waiting for next fire)"
+  else
+    fail "elchi-watchdog.timer: NOT active"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 3. Listening ports vs expected
+# ─────────────────────────────────────────────────────────────────────
+section "Listening ports"
+mapfile -t listening < <(
+  ss -H -lntp 2>/dev/null \
+    | awk '{ split($4,a,":"); print a[length(a)] }' \
+    | sort -un
+)
+
+# Every node
+expected_every=( 443:envoy-public 8080:envoy-internal 9901:envoy-admin
+                 8081:nginx-ui 1870:registry-grpc
+                 1960:controller-grpc 1980:controller-rest 9091:registry-metrics )
+# M1-only singletons
+expected_m1=( 27017:mongod 8428:victoriametrics 3000:grafana
+              4317:otel-grpc 4318:otel-http 13133:otel-health 8888:otel-prom )
+
+check_port() {
+  local entry=$1 must=$2  # must=1 → fail if missing; 0 → warn if present (M2+)
+  local port=${entry%%:*} label=${entry##*:}
+  if printf '%s\n' "${listening[@]}" | grep -qx "$port"; then
+    if [ "$must" = "1" ]; then
+      ok "${port} (${label}) listening"
+    else
+      warn "${port} (${label}) listening — expected only on M1, this node is M${my_idx}"
+    fi
+  else
+    if [ "$must" = "1" ]; then
+      fail "${port} (${label}) NOT listening"
+    fi
+  fi
+}
+
+for e in "${expected_every[@]}"; do check_port "$e" 1; done
+if [ "$is_m1" = "1" ]; then
+  for e in "${expected_m1[@]}"; do check_port "$e" 1; done
+else
+  for e in "${expected_m1[@]}"; do check_port "$e" 0; done
+fi
+
+# Per-variant control-plane ports — read from ports.full.json if jq is around
+ports_json="${ELCHI_ETC}/ports.full.json"
+if [ -f "$ports_json" ] && command -v jq >/dev/null 2>&1; then
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    variant=${line%% *}; cp_port=${line##* }
+    if printf '%s\n' "${listening[@]}" | grep -qx "$cp_port"; then
+      ok "${cp_port} (control-plane ${variant}) listening"
+    else
+      fail "${cp_port} (control-plane ${variant}) NOT listening"
+    fi
+  done < <(
+    jq -r --arg h "$host_short" '
+      .control_plane // {}
+      | to_entries[]
+      | select(.value[$h] != null)
+      | "\(.key) \(.value[$h])"
+    ' "$ports_json" 2>/dev/null
+  )
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 4. Singleton service health (M1 only)
+# ─────────────────────────────────────────────────────────────────────
+if [ "$is_m1" = "1" ]; then
+  section "M1 singleton service health"
+
+  # mongod — ping via mongosh (best-effort; mongosh may not be installed
+  # everywhere even when mongod is)
+  if command -v mongosh >/dev/null 2>&1; then
+    pong=$(mongosh --quiet --eval 'try { db.runCommand({ping:1}).ok } catch(e) { 0 }' 2>/dev/null | tail -n1 | tr -d '[:space:]')
+    if [ "$pong" = "1" ]; then
+      ok "mongod: ping ok"
+    else
+      fail "mongod: ping failed (pong=${pong:-empty})"
+    fi
+  else
+    info "mongod: mongosh not installed — skipping ping (TCP check passed in §3)"
+  fi
+
+  # VictoriaMetrics
+  vm_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
+    'http://127.0.0.1:8428/api/v1/query?query=up' 2>/dev/null || echo 000)
+  case "$vm_code" in
+    200) ok   "VictoriaMetrics /api/v1/query: HTTP 200" ;;
+    *)   fail "VictoriaMetrics /api/v1/query: HTTP ${vm_code}" ;;
+  esac
+
+  # Grafana
+  gr_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
+    'http://127.0.0.1:3000/api/health' 2>/dev/null || echo 000)
+  case "$gr_code" in
+    200) ok   "Grafana /api/health: HTTP 200" ;;
+    *)   fail "Grafana /api/health: HTTP ${gr_code}" ;;
+  esac
+
+  # otelcol — health_check extension on :13133 returns 200 on healthy
+  ot_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 \
+    'http://127.0.0.1:13133/' 2>/dev/null || echo 000)
+  case "$ot_code" in
+    200) ok   "otelcol health: HTTP 200" ;;
+    *)   fail "otelcol health: HTTP ${ot_code}" ;;
+  esac
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 5. Envoy admin (every node)
+# ─────────────────────────────────────────────────────────────────────
+section "Envoy admin (loopback :9901)"
+ready=$(curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:9901/ready 2>/dev/null || true)
+case "$ready" in
+  LIVE*)   ok   "envoy /ready: LIVE" ;;
+  *)       fail "envoy /ready: ${ready:-unreachable}" ;;
+esac
+
+clusters=$(curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:9901/clusters 2>/dev/null || true)
+if [ -n "$clusters" ]; then
+  for cl in registry-cluster controller-rest-cluster otel-cluster grafana-cluster victoriametrics-cluster elchi-cluster; do
+    healthy=$(printf '%s\n' "$clusters" | grep -E "^${cl}::.*health_flags::healthy" | wc -l | tr -d ' ')
+    total=$(printf   '%s\n' "$clusters" | grep -E "^${cl}::.*health_flags::"        | wc -l | tr -d ' ')
+    if [ "$total" -eq 0 ]; then
+      info "${cl}: no health-checked endpoints (no health_check{} configured — OK)"
+    elif [ "$healthy" -eq "$total" ]; then
+      ok   "${cl}: ${healthy}/${total} healthy"
+    else
+      fail "${cl}: ${healthy}/${total} healthy"
+    fi
+  done
+
+  # Per-node controller / control-plane clusters
+  while IFS= read -r cl; do
+    healthy=$(printf '%s\n' "$clusters" | grep -E "^${cl}::.*health_flags::healthy" | wc -l | tr -d ' ')
+    total=$(printf   '%s\n' "$clusters" | grep -E "^${cl}::.*health_flags::"        | wc -l | tr -d ' ')
+    if [ "$total" -eq 0 ]; then
+      info "${cl}: 0 endpoints"
+    elif [ "$healthy" -eq "$total" ]; then
+      ok "${cl}: ${healthy}/${total} healthy"
+    else
+      fail "${cl}: ${healthy}/${total} healthy"
+    fi
+  done < <(printf '%s\n' "$clusters" \
+              | awk -F'::' '/-controlplane-|-controller::/ {print $1}' \
+              | sort -u)
+fi
+
+listeners=$(curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:9901/listeners 2>/dev/null || true)
+if [ -n "$listeners" ]; then
+  if printf '%s' "$listeners" | grep -q '0.0.0.0:443'; then
+    ok "envoy listener_public bound on 0.0.0.0:443"
+  else
+    fail "envoy listener_public NOT bound on 0.0.0.0:443"
+  fi
+  if printf '%s' "$listeners" | grep -q '127.0.0.1:8080'; then
+    ok "envoy listener_internal bound on 127.0.0.1:8080"
+  else
+    fail "envoy listener_internal NOT bound on 127.0.0.1:8080"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 6. Config integrity (sha256 — compare across nodes by hand)
+# ─────────────────────────────────────────────────────────────────────
+section "Config integrity"
+for f in "${ELCHI_ETC}/config/envoy.yaml" \
+         "${ELCHI_ETC}/topology.full.yaml" \
+         "${ELCHI_ETC}/ports.full.json" \
+         "${ELCHI_ETC}/nodes.list" \
+         "${ELCHI_ETC}/tls/server.crt"
+do
+  if [ -f "$f" ]; then
+    sha=$(sha256sum "$f" 2>/dev/null | awk '{print $1}')
+    info "$(basename "$f"): sha256=${sha:0:16}…"
+  else
+    warn "$(basename "$f"): missing at ${f}"
+  fi
+done
+
+# /etc/hosts elchi block
+if [ -f /etc/hosts ]; then
+  hb=$(awk '/# BEGIN elchi-stack/{f=1; next} /# END elchi-stack/{f=0} f' /etc/hosts | wc -l | tr -d ' ')
+  if [ "$hb" -gt 0 ]; then
+    info "/etc/hosts elchi-stack block: ${hb} entries"
+  else
+    warn "/etc/hosts elchi-stack block: missing"
+  fi
+fi
+
+# TLS cert expiry
+if [ -f "${ELCHI_ETC}/tls/server.crt" ] && command -v openssl >/dev/null 2>&1; then
+  not_after=$(openssl x509 -in "${ELCHI_ETC}/tls/server.crt" -noout -enddate 2>/dev/null | cut -d= -f2)
+  [ -n "$not_after" ] && info "TLS cert valid until: ${not_after}"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 7. Stale variant detection (read-only — informational)
+# ─────────────────────────────────────────────────────────────────────
+section "Stale variant detection"
+stale_found=0
+
+# Pass A: per-variant state dirs vs kept set
+if [ -d "$ELCHI_ETC" ]; then
+  for d in "$ELCHI_ETC"/elchi-v*/; do
+    [ -d "$d" ] || continue
+    v=$(basename "$d")
+    matched=0
+    for k in "${kept_variants[@]}"; do
+      [ "$k" = "$v" ] && { matched=1; break; }
+    done
+    if [ "$matched" = "0" ]; then
+      fail "stale on disk: ${ELCHI_ETC}/${v}/ (variant not in topology — re-run install.sh to auto-prune)"
+      stale_found=1
+    fi
+  done
+fi
+
+# Pass B: orphan systemd template units
+kept_san=()
+for v in "${kept_variants[@]}"; do
+  kept_san+=("$(sanitize_variant "$v")")
+done
+for f in /etc/systemd/system/elchi-control-plane-*@.service; do
+  [ -e "$f" ] || continue
+  base=$(basename "$f")
+  san=${base#elchi-control-plane-}; san=${san%@.service}
+  matched=0
+  for k in "${kept_san[@]}"; do
+    [ "$k" = "$san" ] && { matched=1; break; }
+  done
+  if [ "$matched" = "0" ]; then
+    fail "orphan unit: ${base} (sanitized=${san}, no matching variant in topology)"
+    stale_found=1
+  fi
+done
+
+[ "$stale_found" = "0" ] && ok "no stale variants — kept set matches disk + units"
+
+# ─────────────────────────────────────────────────────────────────────
+# 8. Summary
+# ─────────────────────────────────────────────────────────────────────
+section "Summary"
+printf '  %sPASS%s: %d   %sWARN%s: %d   %sFAIL%s: %d\n\n' \
+  "$C_GRN" "$C_RST" "$PASS" "$C_YLW" "$C_RST" "$WARN" "$C_RED" "$C_RST" "$FAIL"
+
+if [ "$FAIL" -gt 0 ]; then
+  printf '%sresult: FAIL%s — %d check(s) failed; see ✗ lines above\n' "$C_RED" "$C_RST" "$FAIL"
+  exit 1
+elif [ "$WARN" -gt 0 ]; then
+  printf '%sresult: PASS with warnings%s — %d soft issue(s)\n' "$C_YLW" "$C_RST" "$WARN"
+  exit 0
+else
+  printf '%sresult: ALL GREEN%s\n' "$C_GRN" "$C_RST"
+  exit 0
+fi

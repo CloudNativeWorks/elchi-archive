@@ -284,4 +284,9 @@ verify::print_summary() {
   printf '    elchi-stack add-node IP       extend the cluster\n'
   printf '    elchi-stack logs <unit>       tail journalctl on every node\n'
   printf '\n'
+  printf '  %bPer-node audit:%b   sudo /etc/elchi/validate.sh\n' "$C_CYAN" "$C_RESET"
+  printf '                     run on EACH machine to confirm topology, systemd,\n'
+  printf '                     listening ports, singleton health, envoy admin,\n'
+  printf '                     and stale-variant cleanliness.\n'
+  printf '\n'
 }

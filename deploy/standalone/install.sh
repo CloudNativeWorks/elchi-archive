@@ -507,6 +507,8 @@ source_libs() {
   . "${lib}/controller.sh"
   # shellcheck source=lib/control_plane.sh
   . "${lib}/control_plane.sh"
+  # shellcheck source=lib/prune.sh
+  . "${lib}/prune.sh"
   # shellcheck source=lib/envoy.sh
   . "${lib}/envoy.sh"
   # shellcheck source=lib/ui.sh
@@ -556,6 +558,19 @@ install_helpers() {
   if [ -f "${SCRIPT_DIR}/elchi-stack" ]; then
     install -m 0755 "${SCRIPT_DIR}/elchi-stack" /usr/local/bin/elchi-stack
   fi
+
+  # /etc/elchi/validate.sh — read-only per-node audit. Self-contained
+  # (no lib/ source dependency) so it survives partial installs / failed
+  # uninstalls. Operator runs `sudo /etc/elchi/validate.sh` on each box
+  # to confirm topology, systemd state, ports, singleton health,
+  # envoy admin, and stale-variant cleanliness.
+  if [ -f "${SCRIPT_DIR}/elchi-stack-validate" ]; then
+    install -d -m 0755 -o root -g root "${ELCHI_ETC:-/etc/elchi}"
+    install -m 0755 -o root -g root \
+      "${SCRIPT_DIR}/elchi-stack-validate" \
+      "${ELCHI_ETC:-/etc/elchi}/validate.sh"
+  fi
+
   log::ok "operator helper installed at /usr/local/bin/elchi-stack"
 }
 
@@ -662,8 +677,16 @@ local_install() {
   # one currently reports SERVING.
   registry::setup
 
-  # Controller + control-plane on every node
+  # Controller + control-plane on every node.
+  # Stale-variant prune runs FIRST: re-installing with a different
+  # backend_variants set previously left the old variant's systemd
+  # template unit on remote nodes; the new variant's @0 then collided
+  # on :1990 and crashlooped. prune::stale_variants reads the current
+  # topology, walks /etc/elchi/<variant>/ + /etc/systemd/system/
+  # elchi-control-plane-*@.service, and removes anything not in the
+  # active set before we render the new units.
   controller::create_instances
+  prune::stale_variants
   control_plane::create_instances
 
   # nginx + UI on every node
