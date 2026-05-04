@@ -932,6 +932,14 @@
                 <div class="desc">Repackage cluster artifacts into an encrypted bundle. <code>--reuse-bundle-key</code>
                     reuses the install-time key persisted via systemd-creds at <code>/etc/elchi/.bundle-key</code> so
                     the bundle can be reapplied without redistributing a fresh key.</div>
+                <code>elchi-stack show-secret &lt;name&gt;</code>
+                <div class="desc">Print a stored credential without rotating it. <code>name</code> is one of
+                    <code>grafana</code> (UI admin login), <code>jwt</code> (backend API auth),
+                    <code>gslb</code> (CoreDNS plugin → backend auth), <code>mongo-app</code>,
+                    <code>mongo-root</code>, or <code>all</code> (full table). Same values are
+                    also printed once at the end of the install. Persisted in
+                    <code>/etc/elchi/secrets.env</code> (mode 0640 root:elchi); preserved across
+                    re-runs and upgrades.</div>
                 <code>elchi-stack rotate-secret &lt;jwt|gslb&gt;</code>
                 <div class="desc">Mint a new JWT or GSLB secret, restart affected services.</div>
                 <code>elchi-stack verify</code>

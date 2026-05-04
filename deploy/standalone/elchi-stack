@@ -61,6 +61,8 @@ Usage:
                                        so an exported bundle can be reapplied
                                        to the existing cluster without
                                        redistributing a fresh decryption key.
+  elchi-stack show-secret <name>      print a stored credential
+                                       (grafana | jwt | gslb | mongo-app | mongo-root | all)
   elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart)
   elchi-stack verify                  end-to-end cluster health check
                                        (registration logs, Envoy admin, listener ports)
@@ -101,28 +103,49 @@ cmd_logs() {
   esac
 
   _ssh_setup
+
+  if [ "$follow" = "1" ]; then
+    # Multi-host live tail: each node's `journalctl -f` runs in the
+    # background and writes to a shared stdout. Two issues to handle:
+    #
+    #   (a) Interleaving — without per-line prefixing, a line from node A
+    #       can land under node B's banner and look like it came from B.
+    #       Pipe each stream through `sed` to prepend "[host] ".
+    #
+    #   (b) Ctrl+C — `wait` returns 130 on SIGINT, and `set -Eeuo
+    #       pipefail` then triggers the global ERR handler ("[ERR]
+    #       installer exited with rc=130"). Trap INT/TERM so the user
+    #       can break out of `-f` cleanly: kill the children, exit 0.
+    local pids=() host
+    # shellcheck disable=SC2064
+    trap 'kill ${pids[*]:-} 2>/dev/null || true; exit 0' INT TERM
+    while IFS= read -r host; do
+      [ -z "$host" ] && continue
+      if ssh::is_local "$host"; then
+        ( journalctl -u "$unit" -f --no-pager 2>&1 \
+            | sed -u "s/^/[$host] /" ) &
+      else
+        ( ssh::run "$host" bash -c "journalctl -u '$unit' -f --no-pager" 2>&1 \
+            | sed -u "s/^/[$host] /" ) &
+      fi
+      pids+=("$!")
+    done < /etc/elchi/nodes.list
+    wait
+    return 0
+  fi
+
+  # Non-follow mode: serial dump per host with a banner — no interleave
+  # risk, no SIGINT loop to manage.
   local host
   while IFS= read -r host; do
     [ -z "$host" ] && continue
     printf '\n%s── %s : %s ──%s\n' "$C_BOLD" "$host" "$unit" "$C_RESET"
-    if [ "$follow" = "1" ]; then
-      if ssh::is_local "$host"; then
-        journalctl -u "$unit" -f --no-pager &
-      else
-        ssh::run "$host" bash -c "journalctl -u '$unit' -f --no-pager" &
-      fi
+    if ssh::is_local "$host"; then
+      journalctl -u "$unit" -n 50 --no-pager
     else
-      if ssh::is_local "$host"; then
-        journalctl -u "$unit" -n 50 --no-pager
-      else
-        ssh::run "$host" bash -c "journalctl -u '$unit' -n 50 --no-pager"
-      fi
+      ssh::run "$host" bash -c "journalctl -u '$unit' -n 50 --no-pager"
     fi
   done < /etc/elchi/nodes.list
-
-  if [ "$follow" = "1" ]; then
-    wait
-  fi
 }
 
 cmd_reload_envoy() {
@@ -281,6 +304,54 @@ cmd_verify() {
   fi
 }
 
+cmd_show_secret() {
+  local name=${1:-}
+  local sec_file=/etc/elchi/secrets.env
+  if [ ! -r "$sec_file" ]; then
+    die "cannot read ${sec_file} (must run as root on M1)"
+  fi
+
+  # Read a single key=value, returning just the value.
+  _read() { grep -E "^${1}=" "$sec_file" | tail -n1 | cut -d= -f2-; }
+
+  case "$name" in
+    grafana)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_GRAFANA_USER)" "$(_read ELCHI_GRAFANA_PASSWORD)"
+      ;;
+    jwt)        _read ELCHI_JWT_SECRET; printf '\n' ;;
+    gslb)       _read ELCHI_GSLB_SECRET; printf '\n' ;;
+    mongo-app)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_MONGO_USERNAME)" "$(_read ELCHI_MONGO_PASSWORD)"
+      ;;
+    mongo-root)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_MONGO_ROOT_USERNAME)" "$(_read ELCHI_MONGO_ROOT_PASSWORD)"
+      ;;
+    all)
+      printf '%sCredentials at %s (mode 0640 root:elchi)%s\n\n' \
+        "$C_BOLD" "$sec_file" "$C_RESET"
+      printf '  %sGrafana admin:%s   %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_GRAFANA_USER)" "$(_read ELCHI_GRAFANA_PASSWORD)"
+      printf '  %sJWT secret:%s      %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_JWT_SECRET)"
+      printf '  %sGSLB secret:%s     %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_GSLB_SECRET)"
+      printf '  %sMongo app user:%s  %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_MONGO_USERNAME)" "$(_read ELCHI_MONGO_PASSWORD)"
+      printf '  %sMongo root:%s      %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_MONGO_ROOT_USERNAME)" "$(_read ELCHI_MONGO_ROOT_PASSWORD)"
+      ;;
+    "")
+      die "secret name required (one of: grafana, jwt, gslb, mongo-app, mongo-root, all)"
+      ;;
+    *)
+      die "unknown secret: $name (use grafana | jwt | gslb | mongo-app | mongo-root | all)"
+      ;;
+  esac
+}
+
 cmd_rotate_secret() {
   local name=${1:?secret name required (one of: jwt, gslb, registry)}
   local key var
@@ -348,6 +419,7 @@ case "${1:-}" in
   add-node)          shift; cmd_add_node "$@" ;;
   init-replica-set)  shift; cmd_init_rs "$@" ;;
   export-bundle)     shift; cmd_export_bundle "$@" ;;
+  show-secret)       shift; cmd_show_secret "$@" ;;
   rotate-secret)     shift; cmd_rotate_secret "$@" ;;
   verify)            shift; cmd_verify "$@" ;;
   -h|--help|"")      usage ;;

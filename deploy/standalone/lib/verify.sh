@@ -265,9 +265,36 @@ verify::print_summary() {
   fi
   printf '\n'
   printf '  %bGrafana:%b      %s://%s/grafana/   (admin: %s)\n' \
-    "$C_CYAN" "$C_RESET" "$proto" "$main" "${ELCHI_GRAFANA_USER:-elchi}"
+    "$C_CYAN" "$C_RESET" "$proto" "$main" "${ELCHI_GRAFANA_USER:-admin}"
   printf '  %bAPI:%b          %s://%s/api/...\n' "$C_CYAN" "$C_RESET" "$proto" "$main"
   printf '\n'
+
+  # Show the credentials operators actually need to log in / federate.
+  # secrets.env is mode 0640 root:elchi so these values are persisted
+  # securely; here we only print them once after install completes (so
+  # the operator captures them before the SSH session closes). Subsequent
+  # access via `elchi-stack show-secret <name>`.
+  if [ -f "${ELCHI_ETC:-/etc/elchi}/secrets.env" ]; then
+    local sec_file=${ELCHI_ETC:-/etc/elchi}/secrets.env
+    local g_pwd j_secret gslb_secret
+    g_pwd=$(grep -E '^ELCHI_GRAFANA_PASSWORD=' "$sec_file" | cut -d= -f2- | head -n1)
+    j_secret=$(grep -E '^ELCHI_JWT_SECRET=' "$sec_file" | cut -d= -f2- | head -n1)
+    gslb_secret=$(grep -E '^ELCHI_GSLB_SECRET=' "$sec_file" | cut -d= -f2- | head -n1)
+
+    printf '%b  ┌─ Credentials (auto-generated, persisted, preserved on upgrade) ─┐%b\n' "$C_YELLOW" "$C_RESET"
+    [ -n "$g_pwd" ] && \
+      printf '  │ %bGrafana admin password:%b %s\n' "$C_CYAN" "$C_RESET" "$g_pwd"
+    [ -n "$j_secret" ] && \
+      printf '  │ %bJWT secret (API auth):%b   %s\n' "$C_CYAN" "$C_RESET" "$j_secret"
+    if [ -n "$gslb_secret" ] && [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ] && [ -n "${ELCHI_GSLB_ZONE:-}" ]; then
+      printf '  │ %bGSLB secret:%b             %s\n' "$C_CYAN" "$C_RESET" "$gslb_secret"
+      printf '  │   (use this when deploying additional CoreDNS instances\n'
+      printf '  │    via Helm — must match for plugin auth against backend)\n'
+    fi
+    printf '%b  └────────────────────────────────────────────────────────────────┘%b\n' "$C_YELLOW" "$C_RESET"
+    printf '  Re-display anytime: %belchi-stack show-secret <grafana|jwt|gslb>%b\n' "$C_BOLD" "$C_RESET"
+    printf '\n'
+  fi
 
   if [ -f "${ELCHI_ETC}/topology.full.yaml" ]; then
     local size
