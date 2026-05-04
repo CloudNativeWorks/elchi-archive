@@ -75,7 +75,7 @@ coredns::setup() {
     log::err "  bin path : ${COREDNS_BIN}"
     log::err "  download : ${url}"
     log::err "  available plugins: $("$COREDNS_BIN" -plugins 2>&1 | tr '\n' ' ' | head -c 400)"
-    die "coredns-elchi v${v} is missing the elchi plugin — check release artifacts or pass --coredns-version=<correct-tag>"
+    die "coredns-elchi ${tag} is missing the elchi plugin — upstream release was built without 'go generate'/make; check cloudnativeworks/elchi-gslb CI or pass --coredns-version=<correct-tag>"
   fi
 
   coredns::render_corefile
