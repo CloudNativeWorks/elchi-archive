@@ -262,6 +262,11 @@ preflight::install_tools() {
   done
   # envsubst lives in gettext(-base); name varies across families.
   command -v envsubst >/dev/null 2>&1 || missing+=("envsubst")
+  # `hostname` binary is NOT a bash builtin and gets stripped from some
+  # Ubuntu 22+ cloud images / cloud-init minimal builds. Several modules
+  # rely on `hostname -I` (coredns bind IP, ssh::is_local, etc.) — without
+  # it those silently fall back to empty strings and break later.
+  command -v hostname >/dev/null 2>&1 || missing+=("hostname")
 
   if (( ${#missing[@]} == 0 )); then
     return 0
