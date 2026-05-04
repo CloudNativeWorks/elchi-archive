@@ -926,6 +926,34 @@ orchestrate() {
   local -a hosts
   mapfile -t hosts < <(topology::parse_nodes "$ELCHI_NODES")
 
+  # CRITICAL: the first IP in --nodes is "M1" — orchestrator + singleton
+  # storage tier (mongo, VictoriaMetrics, Grafana). It MUST equal the
+  # local machine where this script is running. If not, install would
+  # silently install M1 services on the wrong host:
+  #   * coredns binds ${m1_ip} → "cannot assign requested address" on
+  #     a host that doesn't own that IP → crashloop
+  #   * mongo / grafana / VM data all land on the wrong node and the
+  #     topology files claim a different M1 → cluster is unrecoverable
+  #     short of a full --purge-all reinstall.
+  # We detect "$hosts[0] is local" the same way ssh::is_local does
+  # (loopback set + every IP from `hostname -I` + system hostnames),
+  # then abort early with a precise hint.
+  if ! ssh::is_local "${hosts[0]}"; then
+    log::err "first --nodes entry (${hosts[0]}) is NOT this machine"
+    log::err "  this machine's IPs: $(hostname -I 2>/dev/null | tr -d '\n')"
+    log::err "  this machine's hostname: $(hostname 2>/dev/null) / $(hostname -f 2>/dev/null || true)"
+    log::err ""
+    log::err "  M1 (the first --nodes entry) is the orchestrator + singleton"
+    log::err "  storage tier (mongo, VictoriaMetrics, Grafana, optional coredns"
+    log::err "  bind IP). It must equal the host you're running this script on."
+    log::err ""
+    log::err "  Either:"
+    log::err "    1) Re-run with the local IP first, e.g.:"
+    log::err "         --nodes=$(hostname -I 2>/dev/null | awk '{print $1}'),<other-ips>"
+    log::err "    2) SSH to ${hosts[0]} and run the same command there."
+    die "M1/local mismatch — refusing to install the wrong topology"
+  fi
+
   # Auto-enable --ssh-bootstrap when the operator clearly needs it but
   # didn't pass it explicitly: multi-node cluster (≥1 remote host), no
   # --ssh-key, no --ssh-password, interactive TTY available, not under
