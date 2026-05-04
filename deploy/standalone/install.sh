@@ -68,7 +68,7 @@ ELCHI_SSH_BOOTSTRAP=${ELCHI_SSH_BOOTSTRAP:-0}
 ELCHI_BACKEND_VARIANTS=${ELCHI_BACKEND_VARIANTS:-elchi-v1.2.0-v0.14.0-envoy1.36.2}
 ELCHI_UI_VERSION=${ELCHI_UI_VERSION:-v1.1.3}
 ELCHI_ENVOY_VERSION=${ELCHI_ENVOY_VERSION:-v1.37.0}
-ELCHI_COREDNS_VERSION=${ELCHI_COREDNS_VERSION:-v0.1.1}
+ELCHI_COREDNS_VERSION=${ELCHI_COREDNS_VERSION:-v0.1.2}
 
 # Replicas-per-node is fixed at 1:
 #   * Controller is version-agnostic — exactly ONE per node, using
@@ -203,7 +203,7 @@ Versioning
                                        (release tag derived per-variant)
   --ui-version=<vX.Y.Z>               UI bundle version (default: v1.1.3)
   --envoy-version=<vX.Y.Z>            envoy proxy version (default: v1.37.0)
-  --coredns-version=<vX.Y.Z>          GSLB plugin version (default: v0.1.1)
+  --coredns-version=<vX.Y.Z>          GSLB plugin version (default: v0.1.2)
 
 Network / TLS
   --main-address=<dns|ip>             public address — REQUIRED. Cert SAN.
