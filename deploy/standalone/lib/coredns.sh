@@ -37,19 +37,45 @@ coredns::setup() {
   sec=$(secrets::value ELCHI_GSLB_SECRET 2>/dev/null || true)
   [ -n "$sec" ] || die "ELCHI_GSLB_SECRET missing — did secrets::generate run?"
 
+  # CoreDNS-with-elchi-plugin binary lives at upstream
+  # https://github.com/cloudnativeworks/elchi-gslb (separate repo from
+  # elchi-archive). Release tag = "v<X.Y.Z>", asset filename =
+  # "coredns-elchi-linux-<arch>-v<X.Y.Z>". Both the previous URL pattern
+  # (elchi-archive/elchi-gslb-<v>/coredns-elchi-linux-<arch>) and the
+  # filename without version suffix were never published — pulling from
+  # there fetched a vanilla coredns or 404 → "Unknown directive 'elchi'"
+  # at runtime.
   local v=${ELCHI_COREDNS_VERSION:-v0.1.1}
-  local url="https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-${v}/coredns-elchi-linux-${ELCHI_ARCH}"
+  # Normalize: accept both "v0.1.1" and "0.1.1" inputs; the tag and the
+  # filename in upstream releases both use the "v"-prefixed form.
+  local tag=v${v#v}
+  local fname="coredns-elchi-linux-${ELCHI_ARCH}-${tag}"
+  local url="https://github.com/cloudnativeworks/elchi-gslb/releases/download/${tag}/${fname}"
 
   if [ ! -x "$COREDNS_BIN" ]; then
     local tmp
     tmp=$(mktemp -d)
-    retry 3 5 curl -fL --retry 3 --retry-delay 2 -o "${tmp}/coredns" "$url" \
+    retry 3 5 curl -fL --retry 3 --retry-delay 2 --retry-connrefused \
+      --connect-timeout 30 --speed-limit 1024 --speed-time 30 --max-time 600 \
+      -o "${tmp}/coredns" "$url" \
       || { rm -rf "$tmp"; die "coredns-elchi download failed"; }
     install -m 0755 -o root -g root "${tmp}/coredns" "${COREDNS_BIN}.new"
     mv -f "${COREDNS_BIN}.new" "$COREDNS_BIN"
     rm -rf "$tmp"
     # CoreDNS binds :53 — needs CAP_NET_BIND_SERVICE when run as non-root.
     setcap cap_net_bind_service=+ep "$COREDNS_BIN" 2>/dev/null || true
+  fi
+
+  # Fail-fast: verify the binary actually carries the elchi GSLB plugin.
+  # Without this check a vanilla coredns binary (or an old tag that
+  # predates the plugin) installs cleanly, then crashloops at runtime
+  # with "Unknown directive 'elchi'" — 100+ restarts, no clean signal.
+  if ! "$COREDNS_BIN" -plugins 2>&1 | grep -qE '(^|/)elchi\b'; then
+    log::err "coredns-elchi binary does NOT include the elchi plugin"
+    log::err "  bin path : ${COREDNS_BIN}"
+    log::err "  download : ${url}"
+    log::err "  available plugins: $("$COREDNS_BIN" -plugins 2>&1 | tr '\n' ' ' | head -c 400)"
+    die "coredns-elchi v${v} is missing the elchi plugin — check release artifacts or pass --coredns-version=<correct-tag>"
   fi
 
   coredns::render_corefile

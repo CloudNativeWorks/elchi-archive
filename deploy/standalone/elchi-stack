@@ -82,7 +82,10 @@ cmd_status() {
       systemctl list-units --no-pager --no-legend --type=service 'elchi-*' \
         | awk '{printf "  %-50s %s\n", $1, $4}'
     else
-      ssh::run "$host" "systemctl list-units --no-pager --no-legend --type=service 'elchi-*'" \
+      # ssh::run argv-style would let local shell expand 'elchi-*' before
+      # send. bash -c keeps the glob literal so systemctl applies its own
+      # unit-pattern match on the remote.
+      ssh::run "$host" bash -c "systemctl list-units --no-pager --no-legend --type=service 'elchi-*'" \
         | awk '{printf "  %-50s %s\n", $1, $4}'
     fi
   done < /etc/elchi/nodes.list
@@ -106,13 +109,13 @@ cmd_logs() {
       if ssh::is_local "$host"; then
         journalctl -u "$unit" -f --no-pager &
       else
-        ssh::run "$host" "journalctl -u '$unit' -f --no-pager" &
+        ssh::run "$host" bash -c "journalctl -u '$unit' -f --no-pager" &
       fi
     else
       if ssh::is_local "$host"; then
         journalctl -u "$unit" -n 50 --no-pager
       else
-        ssh::run "$host" "journalctl -u '$unit' -n 50 --no-pager"
+        ssh::run "$host" bash -c "journalctl -u '$unit' -n 50 --no-pager"
       fi
     fi
   done < /etc/elchi/nodes.list
