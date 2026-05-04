@@ -90,7 +90,11 @@ EOF
   install -m 0644 -o root -g root "${OTEL_UNIT}.tmp" "$OTEL_UNIT"
   rm -f "${OTEL_UNIT}.tmp"
   systemd::reload
-  systemd::install_and_apply elchi-otel.service
+  # Pass otel-config.yaml so a real config change (e.g. VM endpoint flip
+  # to external, or new receivers added by future versions) actually
+  # triggers a restart. Without this, install_and_apply only sees the
+  # unit file + binary, which don't change on a config-only edit.
+  systemd::install_and_apply elchi-otel.service "$OTEL_CONFIG"
   wait_for_tcp 127.0.0.1 "$ELCHI_PORT_OTEL_HEALTH" 30 \
     || die "otel collector health endpoint did not come up"
   log::ok "OTel collector running"

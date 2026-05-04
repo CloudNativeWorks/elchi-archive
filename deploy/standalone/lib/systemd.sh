@@ -128,7 +128,19 @@ systemd::enable_now() {
 # Safe to call on first install; the absent fingerprint file is treated
 # as "changed" and the unit just starts cleanly.
 systemd::install_and_apply() {
+  # Usage: systemd::install_and_apply <unit> [extra_config_file ...]
+  #
+  # Extra files are config artifacts whose path appears in ExecStart as
+  # an argument (e.g. envoy's `-c envoy.yaml`, coredns's `-conf Corefile`,
+  # otel's `--config=otel-config.yaml`). Without folding their content
+  # into the fingerprint, the unit silently keeps running an outdated
+  # config because the unit file + binary haven't actually changed. The
+  # caller knows which files matter and passes them explicitly — we
+  # don't try to parse ExecStart heuristically because the flag syntax
+  # varies per project.
   local unit=$1
+  shift
+  local -a extra_files=("$@")
   local fp_dir=/var/lib/elchi/.unit-fingerprint
   install -d -m 0700 -o root -g root "$fp_dir"
   local fp_file="${fp_dir}/${unit}"
@@ -171,6 +183,17 @@ systemd::install_and_apply() {
   if [ -n "$exec_bin" ] && [ -f "$exec_bin" ]; then
     fp_input+="$(sha256sum "$exec_bin" 2>/dev/null | awk '{print $1}')|"
   fi
+
+  # Caller-supplied extra config files (envoy.yaml, Corefile, zonefile,
+  # otel-config.yaml, etc.). These are path-args in ExecStart, not
+  # EnvironmentFile entries, so the parser above can't see them.
+  local f
+  for f in "${extra_files[@]}"; do
+    [ -n "$f" ] || continue
+    if [ -f "$f" ]; then
+      fp_input+="$(sha256sum "$f" 2>/dev/null | awk '{print $1}')|"
+    fi
+  done
 
   local new_fp old_fp=""
   new_fp=$(printf '%s' "$fp_input" | sha256sum | awk '{print $1}')

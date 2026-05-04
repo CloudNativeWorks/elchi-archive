@@ -107,7 +107,13 @@ EOF
   install -m 0644 -o root -g root "${ENVOY_UNIT}.tmp" "$ENVOY_UNIT"
   rm -f "${ENVOY_UNIT}.tmp"
   systemd::reload
-  systemd::install_and_apply elchi-envoy.service
+  # Pass envoy.yaml so the fingerprint reflects bootstrap content. The
+  # bootstrap is regenerated on every install (peer-aware, mirrors current
+  # topology + variant set), but the unit file + binary path stay the
+  # same — without folding envoy.yaml into the hash, a topology change
+  # (new node, new variant, /etc/hosts diff) would NOT trigger an envoy
+  # restart and the proxy would silently keep an outdated cluster list.
+  systemd::install_and_apply elchi-envoy.service "$ENVOY_CONFIG"
 
   # Probe whichever the public listener is — TLS or plaintext, but
   # always on ELCHI_PORT.

@@ -135,7 +135,15 @@ EOF
   install -m 0644 "${COREDNS_UNIT}.tmp" "$COREDNS_UNIT"
   rm -f "${COREDNS_UNIT}.tmp"
   systemd::reload
-  systemd::install_and_apply elchi-coredns.service
+  # Pass Corefile + zone file paths so the fingerprint reflects actual
+  # config — without these, install_and_apply would only hash the unit
+  # file + binary and miss every Corefile change. With them, an
+  # unchanged Corefile + unchanged version + unchanged zone content
+  # produces an identical fingerprint → noop, no DNS restart. A real
+  # config diff (zone change, new region, secret rotation) bumps the
+  # fingerprint → restart.
+  local zfile="${ELCHI_CONFIG}/coredns/zones/${ELCHI_GSLB_ZONE}.db"
+  systemd::install_and_apply elchi-coredns.service "$COREDNS_CONF" "$zfile"
   log::ok "CoreDNS GSLB running on :${ELCHI_PORT_COREDNS}"
 }
 
@@ -247,11 +255,25 @@ coredns::render_zone() {
   # SOA admin field uses '.' instead of '@'
   local admin_dot=${admin/@/.}
   local ttl=${ELCHI_GSLB_TTL:-300}
-  local serial
-  serial=$(date -u +%Y%m%d%H)
 
   local zfile="${ELCHI_CONFIG}/coredns/zones/${zone}.db"
   install -d -m 0755 "$(dirname "$zfile")"
+
+  # Serial determinism: a date-based serial (YYYYMMDDHH) changes every
+  # hour even when the zone content is identical, which would force a
+  # DNS reload + bump the install_and_apply fingerprint on every rerun.
+  # We instead read the previous serial out of the existing zone file
+  # and compare a SERIAL-stripped hash of the new render against the
+  # SERIAL-stripped hash of the old file. Same content → keep the old
+  # serial (DNS knows the zone hasn't changed; coredns stays at noop).
+  # Real change → increment by 1 (RFC 1035 monotonic-increase rule).
+  local prev_serial=0 prev_hash=""
+  if [ -f "$zfile" ]; then
+    prev_serial=$(awk '/; serial/ {print $1; exit}' "$zfile" 2>/dev/null || echo 0)
+    [[ "$prev_serial" =~ ^[0-9]+$ ]] || prev_serial=0
+    prev_hash=$(sed -E 's/^[[:space:]]*[0-9]+[[:space:]]*; serial.*$/__SERIAL__ ; serial/' "$zfile" \
+                  | sha256sum | awk '{print $1}')
+  fi
 
   # SOA MNAME = first nameserver in the supplied list (Helm:
   # nameservers[0].name). Falls back to "ns1" when the operator doesn't
@@ -263,13 +285,15 @@ coredns::render_zone() {
     soa_ns=${first%%:*}
   fi
 
+  # Render with a placeholder serial first; we'll substitute the real
+  # serial after we've decided whether content actually changed.
   {
     cat <<EOF
 \$ORIGIN ${zone}.
 \$TTL ${ttl}
 
 @ IN SOA ${soa_ns}.${zone}. ${admin_dot}. (
-    ${serial} ; serial (YYYYMMDDHH)
+    __SERIAL__ ; serial
     3600       ; refresh
     900        ; retry
     604800     ; expire
@@ -320,6 +344,28 @@ EOF
       done
     fi
   } > "${zfile}.tmp"
+
+  # Resolve the real serial: if the SERIAL-stripped hash matches the
+  # previous file, content is unchanged → keep the old serial (so the
+  # zone file is byte-identical → install_and_apply fingerprint stays
+  # the same → coredns is NOT restarted). Different content (or first
+  # render) → bump by 1 (RFC 1035 monotonically-increasing rule).
+  local new_hash
+  new_hash=$(sha256sum "${zfile}.tmp" | awk '{print $1}')
+  local final_serial
+  if [ -n "$prev_hash" ] && [ "$prev_hash" = "$new_hash" ]; then
+    final_serial=$prev_serial
+  else
+    final_serial=$(( prev_serial + 1 ))
+    # First-time render → start at YYYYMMDDHH (DNS convention) instead of 1
+    # so external tooling that compares serials doesn't get confused by
+    # very-low values. Subsequent bumps are still +1 for predictability.
+    if [ "$prev_serial" = "0" ]; then
+      final_serial=$(date -u +%Y%m%d%H)
+    fi
+  fi
+  sed -i "s/__SERIAL__/${final_serial}/" "${zfile}.tmp"
+
   install -m 0644 "${zfile}.tmp" "$zfile"
   rm -f "${zfile}.tmp"
 }

@@ -623,7 +623,36 @@
                 <code>--ssh-bootstrap</code> already distributed the cluster key during install.
             </p>
 
-            <h5>Add a new variant (curl one-liner from any node)</h5>
+            <h5>Add a new variant alongside what's already running (additive)</h5>
+            <div class="stdl-cmd">curl -fsSL
+                https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+                | sudo bash -s -- --upgrade \
+                --add-backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0</div>
+            <p style="font-size: 13px; margin: 4px 0 12px;">
+                <code>--add-backend-version</code> appends to the current variant set
+                without making you re-list everything that's already deployed. The new
+                variant gets a fresh control-plane systemd unit + binary on every node,
+                ports are allocated deterministically, and the UI's <code>config.js</code>
+                <code>AVAILABLE_VERSIONS</code> regenerates so the new envoy version
+                shows up in the UI version dropdown automatically.
+            </p>
+
+            <h5>Bump just the UI (sadece UI güncelleme)</h5>
+            <div class="stdl-cmd">curl -fsSL
+                https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+                | sudo bash -s -- --upgrade --ui-version=v1.1.6</div>
+            <p style="font-size: 13px; margin: 4px 0 12px;">
+                Backend / envoy / coredns are not touched — every other component's
+                fingerprint stays identical so install.sh's reconcile marks them as
+                <code>noop</code>. Only nginx may restart if its config block changes.
+            </p>
+
+            <h5>Bump just CoreDNS (only when GSLB is enabled)</h5>
+            <div class="stdl-cmd">curl -fsSL
+                https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+                | sudo bash -s -- --upgrade --coredns-version=v0.1.4</div>
+
+            <h5>Replace the variant set explicitly (full union)</h5>
             <div class="stdl-cmd">curl -fsSL
                 https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                 | sudo bash -s -- --upgrade \
@@ -661,7 +690,13 @@
                 <summary>Flags</summary>
                 <div class="flag-table">
                     <code>--backend-version=&lt;csv&gt;</code>
-                    <div class="desc">New variant set. Omit to keep the current set.</div>
+                    <div class="desc">New variant set (replaces current). Omit to keep the current set.</div>
+                    <code>--add-backend-version=&lt;csv&gt;</code>
+                    <div class="desc">Additive: appends to the current variant set. Use when you want
+                        to start serving an additional Envoy version without re-listing what's
+                        already there. Mutually exclusive with <code>--prune-version</code> /
+                        <code>--prune-missing</code>. Triggers control-plane unit creation +
+                        UI <code>config.js</code> regeneration cluster-wide.</div>
                     <code>--ui-version=&lt;vX.Y.Z&gt;</code>
                     <div class="desc">Bump UI bundle.</div>
                     <code>--envoy-version=&lt;vX.Y.Z&gt;</code>

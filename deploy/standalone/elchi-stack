@@ -76,19 +76,28 @@ cmd_status() {
     exit 1
   fi
   _ssh_setup
+
+  # Status query: every "elchi-*" unit (templates included via the @* glob)
+  # PLUS the externally-managed services we drive (mongod, grafana-server,
+  # nginx). Without listing those, M1 looks like it's missing mongo/VM/UI
+  # because those packages don't carry an "elchi-" prefix even though
+  # elchi-stack owns their config + lifecycle on this host. The glob is
+  # passed through bash -c on the remote side so the shell on the local
+  # box doesn't try to expand 'elchi-*' against /etc.
+  local query=$(cat <<'EOF'
+systemctl list-units --no-pager --no-legend --type=service \
+  'elchi-*' 'elchi-control-plane-*@*' \
+  mongod.service grafana-server.service nginx.service 2>/dev/null
+EOF
+)
   local host
   while IFS= read -r host; do
     [ -z "$host" ] && continue
     printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
     if ssh::is_local "$host"; then
-      systemctl list-units --no-pager --no-legend --type=service 'elchi-*' \
-        | awk '{printf "  %-50s %s\n", $1, $4}'
+      bash -c "$query" | awk '{printf "  %-50s %s\n", $1, $4}'
     else
-      # ssh::run argv-style would let local shell expand 'elchi-*' before
-      # send. bash -c keeps the glob literal so systemctl applies its own
-      # unit-pattern match on the remote.
-      ssh::run "$host" bash -c "systemctl list-units --no-pager --no-legend --type=service 'elchi-*'" \
-        | awk '{printf "  %-50s %s\n", $1, $4}'
+      ssh::run "$host" bash -c "$query" | awk '{printf "  %-50s %s\n", $1, $4}'
     fi
   done < /etc/elchi/nodes.list
 }

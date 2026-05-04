@@ -62,6 +62,7 @@ export ELCHI_INSTALLER_ROOT
 . "${SCRIPT_DIR}/lib/verify.sh"
 
 NEW_BACKEND_VARIANTS=""
+ADD_BACKEND_VARIANTS=""   # additive: appended to current set (UX shortcut)
 NEW_UI_VERSION=""
 NEW_ENVOY_VERSION=""
 NEW_COREDNS_VERSION=""
@@ -83,6 +84,11 @@ Version flags (omit to keep current):
   --backend-version=<csv>           full variant tags, e.g.
                                      elchi-v1.2.0-v0.14.0-envoy1.36.2,...
                                      Replaces the active variant set.
+  --add-backend-version=<csv>       additive shortcut: appends to the
+                                     current variant set without making
+                                     you re-list everything that's
+                                     already there. Mutually exclusive
+                                     with --prune-version / --prune-missing.
   --ui-version=<vX.Y.Z>
   --envoy-version=<vX.Y.Z>
   --coredns-version=<vX.Y.Z>
@@ -128,6 +134,12 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --backend-version=*)                  NEW_BACKEND_VARIANTS=${1#*=} ;;
     --backend-variants=*)                 NEW_BACKEND_VARIANTS=${1#*=} ;;
+    # Additive shortcut: append to current variants instead of replacing.
+    # Use case: cluster running v1.36.2 → operator wants to ALSO offer
+    # v1.37.0 to UI users without listing v1.36.2 again. Resolved against
+    # the current backend_variants set after argparse so dedup is honest.
+    --add-backend-version=*)              ADD_BACKEND_VARIANTS=${1#*=} ;;
+    --add-backend-variants=*)             ADD_BACKEND_VARIANTS=${1#*=} ;;
     --backend-release=*)                  : "${1#*=}" ;;   # deprecated; release is per-variant now
     --ui-version=*)                       NEW_UI_VERSION=${1#*=} ;;
     --envoy-version=*)                    NEW_ENVOY_VERSION=${1#*=} ;;
@@ -189,6 +201,31 @@ NEW_COREDNS_VERSION=${NEW_COREDNS_VERSION:-$CUR_COREDNS}
 if [ -z "$NEW_BACKEND_VARIANTS" ]; then
   NEW_BACKEND_VARIANTS=$(IFS=,; printf '%s' "${CUR_VARIANTS[*]}")
 fi
+
+# --add-backend-version: append to current set without making the
+# operator hand-write the union. install.sh duplicate-variants would
+# reject "v1,v1" via topology compute, so dedup before passing.
+if [ -n "$ADD_BACKEND_VARIANTS" ]; then
+  if [ -n "$PRUNE_VERSIONS" ] || [ "$PRUNE_MISSING" = "1" ]; then
+    die "--add-backend-version cannot combine with --prune-version / --prune-missing (use --backend-version=<full-set> instead)"
+  fi
+  log::info "extending current variant set with: ${ADD_BACKEND_VARIANTS}"
+  # Build a deduplicated CSV: NEW_BACKEND_VARIANTS first (covers both
+  # the cur-only default above and an explicit --backend-version override),
+  # then any added variants the operator listed.
+  declare -A _seen
+  _merged=()
+  while IFS= read -r v; do
+    [ -z "$v" ] && continue
+    if [ -z "${_seen[$v]:-}" ]; then
+      _seen[$v]=1
+      _merged+=("$v")
+    fi
+  done < <(csv_split "$NEW_BACKEND_VARIANTS"; csv_split "$ADD_BACKEND_VARIANTS")
+  NEW_BACKEND_VARIANTS=$(IFS=,; printf '%s' "${_merged[*]}")
+  unset _seen _merged
+fi
+
 mapfile -t NEW_VARIANTS < <(csv_split "$NEW_BACKEND_VARIANTS")
 [ "${#NEW_VARIANTS[@]}" -ge 1 ] || die "--backend-version produced an empty variant list"
 
@@ -251,13 +288,38 @@ if [ "$PRUNE_MISSING" = "0" ] && [ -z "$PRUNE_VERSIONS" ]; then
   fi
 fi
 
-log::info "current backend variants: ${CUR_VARIANTS[*]}"
-log::info "current UI: ${CUR_UI}    envoy: ${CUR_ENVOY}    coredns: ${CUR_COREDNS:-<unset>}"
-log::info "new backend variants:     ${NEW_VARIANTS[*]}"
-log::info "new UI:  ${NEW_UI_VERSION}    envoy: ${NEW_ENVOY_VERSION}    coredns: ${NEW_COREDNS_VERSION:-<unset>}"
-log::info "added variants:   ${ADDED_VARIANTS[*]:-<none>}"
-log::info "kept variants:    ${KEPT_VARIANTS[*]:-<none>}"
-log::info "removed variants: ${REMOVED_VARIANTS[*]:-<none>}"
+# ----- per-component diff banner ----------------------------------------
+# Surface what's actually changing component-by-component so the operator
+# sees at a glance whether their --ui-version-only command will accidentally
+# bump envoy too (it won't), or whether a --backend-version replacement
+# is going to drop the variant they thought they were keeping.
+#
+# A line marked "= kept" means install.sh's fingerprint reconcile will
+# treat that component as a no-op; a "→ change" line means the matching
+# binary/config will be re-fetched + the systemd unit restarted on every
+# node where it runs.
+_diff_line() {
+  local label=$1 cur=$2 new=$3
+  if [ "$cur" = "$new" ] || [ -z "$new" ]; then
+    printf '  %-10s %s   = kept\n' "${label}:" "${cur:-<unset>}"
+  else
+    printf '  %-10s %s → %s   ← change\n' "${label}:" "${cur:-<unset>}" "$new"
+  fi
+}
+
+printf '\n%selchi-stack upgrade plan%s\n' "$C_BOLD" "$C_RESET"
+_diff_line "UI"      "$CUR_UI"      "$NEW_UI_VERSION"
+_diff_line "Envoy"   "$CUR_ENVOY"   "$NEW_ENVOY_VERSION"
+_diff_line "CoreDNS" "$CUR_COREDNS" "$NEW_COREDNS_VERSION"
+[ -n "$NEW_MONGO_VERSION" ] && \
+  printf '  %-10s %s   ← change requested\n' "Mongo:" "$NEW_MONGO_VERSION"
+
+printf '\n  %sBackend variants%s\n' "$C_BOLD" "$C_RESET"
+printf '    current : %s\n' "${CUR_VARIANTS[*]}"
+printf '    new     : %s\n' "${NEW_VARIANTS[*]}"
+printf '    added   : %s\n' "${ADDED_VARIANTS[*]:-<none>}"
+printf '    kept    : %s\n' "${KEPT_VARIANTS[*]:-<none>}"
+printf '    removed : %s\n\n' "${REMOVED_VARIANTS[*]:-<none>}"
 
 # ----- compose the install.sh re-run -------------------------------------
 # install.sh is the source of truth for "make this cluster look like X".
