@@ -399,7 +399,37 @@ mongodb::initiate_replica_set() {
   " 2>&1 || true)
 
   if printf '%s' "$rs_state" | grep -q 'STATE:1\|STATE:2'; then
-    log::info "replica set already initialized — verifying member health"
+    log::info "replica set already initialized — syncing member list with topology"
+    # An earlier half-broken install (e.g. one that ran rs.initiate with
+    # only M1 before the cluster grew) can leave the RS in a state where
+    # M1 is PRIMARY but M2/M3 are NOT in rs.status().members at all. The
+    # convergence wait below would then time out forever (secondaryCount
+    # stays at 0) without a useful clue. Reconcile the configured member
+    # set against topology and add the missing ones.
+    local existing
+    existing=$(mongodb::eval_root "
+      var s = rs.status();
+      print('MEMBERS:' + s.members.map(m => m.name).join(','));
+      print('EVAL_OK');
+    " 2>/dev/null | grep '^MEMBERS:' | sed 's/^MEMBERS://' || true)
+    log::info "RS currently configured with: ${existing:-<empty>}"
+
+    local h
+    for h in "$n1" "$n2" "$n3"; do
+      case ",${existing}," in
+        *",${h}:27017,"*)
+          ;;
+        *)
+          local pri=1
+          [ "$h" = "$n1" ] && pri=2
+          log::info "adding missing member ${h}:27017 to RS (priority=${pri})"
+          mongodb::eval_root "
+            rs.add({host: '${h}:27017', priority: ${pri}});
+            print('EVAL_OK');
+          " || die "rs.add(${h}) failed — try 'mongosh ... --eval rs.status()' for state"
+          ;;
+      esac
+    done
   else
     mongodb::eval_root "
       rs.initiate({
@@ -446,7 +476,28 @@ mongodb::initiate_replica_set() {
     fi
     sleep 1
   done
-  die "RS did not converge to 1 PRIMARY + 2 SECONDARY within 60s — check 'rs.status()'"
+
+  # Timeout — dump the current state to the install log so the operator
+  # has something concrete to start from instead of "go ssh in and run
+  # rs.status()". Common failure modes the dump distinguishes:
+  #   * STARTUP / STARTUP2 / RECOVERING — initial sync still in progress
+  #     (huge oplog catch-up, slow disk, network bottleneck)
+  #   * (not reachable/healthy) state — keyfile bytes differ across
+  #     members, or 27017 firewalled between nodes
+  #   * unknown / removed — member dropped from rs.config() but mongod
+  #     left running; needs an explicit rs.add()
+  log::err "current rs.status() snapshot:"
+  mongodb::eval_root "
+    var s = rs.status();
+    s.members.forEach(function(m) {
+      print('  member ' + m._id + ' ' + m.name + ' = ' + m.stateStr +
+            ' (health=' + m.health + ', uptime=' + m.uptime + 's' +
+            (m.lastHeartbeatMessage ? ', lastHB=\"' + m.lastHeartbeatMessage + '\"' : '') + ')');
+    });
+    print('EVAL_OK');
+  " 2>/dev/null || log::warn "could not read rs.status() — primary may be down"
+
+  die "RS did not converge to 1 PRIMARY + 2 SECONDARY within 60s — see rs.status() snapshot above"
 }
 
 # ----- top-level entry points --------------------------------------------
