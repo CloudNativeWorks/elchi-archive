@@ -153,7 +153,23 @@ secrets::import_from_bundle() {
   fi
 
   if [ -f "${bundle_dir}/mongo/keyfile" ]; then
-    install -m 0400 "${bundle_dir}/mongo/keyfile" "${ELCHI_MONGO}/keyfile"
+    # Content-equal short-circuit: `install` always rewrites the
+    # destination, so its mtime moves on every rerun even when the
+    # bytes are identical. mongodb::start_service feeds the keyfile
+    # into systemd::install_and_apply's fingerprint hash, and a
+    # changed mtime there would re-trigger mongod restart on every
+    # `--upgrade` — a 10-15s SECONDARY drop on M2/M3 with no
+    # operator-visible benefit. cmp first, install only on real diff.
+    if [ -f "${ELCHI_MONGO}/keyfile" ] \
+       && cmp -s "${bundle_dir}/mongo/keyfile" "${ELCHI_MONGO}/keyfile"; then
+      :   # identical content; leave file (and mtime) untouched
+    else
+      install -m 0400 "${bundle_dir}/mongo/keyfile" "${ELCHI_MONGO}/keyfile"
+    fi
+    # Ownership is cheap to reapply and idempotent — keep it
+    # outside the cmp guard so a node that gained the mongodb user
+    # AFTER the first import (fresh mongod install on N=2→3
+    # transition) still ends up with the right uid/gid.
     if id mongodb >/dev/null 2>&1; then
       chown mongodb:mongodb "${ELCHI_MONGO}/keyfile"
     fi
