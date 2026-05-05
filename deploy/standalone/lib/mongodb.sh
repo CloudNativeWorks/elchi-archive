@@ -406,12 +406,17 @@ mongodb::initiate_replica_set() {
     # convergence wait below would then time out forever (secondaryCount
     # stays at 0) without a useful clue. Reconcile the configured member
     # set against topology and add the missing ones.
+    # NB: mongodb::eval_root prefixes every output line with `  [mongosh] `
+    # before returning it (so multi-line script output is clearly tagged
+    # in install.log). A line-anchored `grep '^MEMBERS:'` therefore never
+    # matches; use sed to strip the prefix and capture only the payload
+    # after the sentinel.
     local existing
     existing=$(mongodb::eval_root "
       var s = rs.status();
       print('MEMBERS:' + s.members.map(m => m.name).join(','));
       print('EVAL_OK');
-    " 2>/dev/null | grep '^MEMBERS:' | sed 's/^MEMBERS://' || true)
+    " 2>/dev/null | sed -n 's/.*MEMBERS://p' | head -1 || true)
     log::info "RS currently configured with: ${existing:-<empty>}"
 
     local h
@@ -461,13 +466,16 @@ mongodb::initiate_replica_set() {
     # `2>/dev/null` hides the noisy "MongoNetworkError" backtraces from
     # the operator's screen during the few seconds it takes for the new
     # primary to start serving rs.status() reads again.
+    # `grep -oE` strips mongodb::eval_root's `  [mongosh] ` prefix and
+    # returns only the matched "P:N S:M" payload — same parsing fix as
+    # the member-sync block above.
     out=$(mongodb::eval_root "
       var s = rs.status();
       var p = s.members.filter(m => m.stateStr === 'PRIMARY').length;
       var sec = s.members.filter(m => m.stateStr === 'SECONDARY').length;
       print('P:' + p + ' S:' + sec);
       print('EVAL_OK');
-    " 2>/dev/null | grep '^P:' | head -1 || true)
+    " 2>/dev/null | grep -oE 'P:[0-9]+ S:[0-9]+' | head -1 || true)
     primary_count=$(printf '%s' "$out" | sed -n 's/^P:\([0-9]*\).*/\1/p')
     secondary_count=$(printf '%s' "$out" | sed -n 's/.* S:\([0-9]*\).*/\1/p')
     if [ "${primary_count:-0}" = "1" ] && [ "${secondary_count:-0}" = "2" ]; then

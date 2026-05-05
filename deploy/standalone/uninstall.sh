@@ -101,9 +101,66 @@ confirm_destructive() {
   [ "$ans" = "yes" ] || die "aborted"
 }
 
-if [ "$PURGE" = "1" ]; then
-  confirm_destructive "PURGE all elchi-stack data"
-fi
+# Pre-flight summary so the operator sees EXACTLY what's about to be
+# wiped before the first systemd stop fires. Listing the scope (single
+# node vs cluster fanout) + every active --purge-* flag turns the
+# default base uninstall into a confirmed action too — operators
+# routinely typo'd themselves into a teardown they didn't mean to do.
+# `--yes-i-mean-it` still skips the prompt (CI / scripted teardown).
+uninstall::preview_and_confirm() {
+  log::step "Uninstall preview"
+
+  local scope_label="this machine ($(hostname -I 2>/dev/null | awk '{print $1}' || hostname))"
+  if [ "$ALL_NODES" = "1" ]; then
+    if [ -f /etc/elchi/nodes.list ]; then
+      local _count
+      _count=$(wc -l < /etc/elchi/nodes.list 2>/dev/null | tr -d ' ')
+      scope_label="${_count} node(s) in /etc/elchi/nodes.list (M1 last, in reverse)"
+    else
+      scope_label="--all-nodes requested but /etc/elchi/nodes.list missing — will fail"
+    fi
+  fi
+
+  printf '\n  scope:           %s\n' "$scope_label"
+  if [ "$ALL_NODES" = "1" ] && [ -f /etc/elchi/nodes.list ]; then
+    local h
+    while IFS= read -r h; do
+      [ -n "$h" ] && printf '                     - %s\n' "$h"
+    done < /etc/elchi/nodes.list
+  fi
+
+  printf '\n  always removed:\n'
+  printf '    %s\n' \
+    'stop + disable every elchi-* systemd unit' \
+    'remove /etc/systemd/system/elchi-*.{service,timer}' \
+    'remove /opt/elchi/bin/* (every elchi-stack-installed binary)' \
+    'remove /opt/elchi-installer (the staged installer payload)' \
+    'remove the nginx vhost we wrote (package kept)' \
+    'remove the elchi-stack /etc/hosts block' \
+    'close any firewall ports we opened'
+
+  printf '\n  optional purge flags (default: OFF — package + data preserved):\n'
+  local marker
+  marker=$( [ "$PURGE" = "1" ]         && printf 'ON ' || printf '   ' )
+  printf '    --purge          %s  also remove /etc/elchi, /var/lib/elchi, admin user, sysctl/THP tuning\n' "$marker"
+  marker=$( [ "$PURGE_MONGO" = "1" ]   && printf 'ON ' || printf '   ' )
+  printf '    --purge-mongo    %s  also remove the mongodb-org package + /var/lib/mongodb data\n'    "$marker"
+  marker=$( [ "$PURGE_VM" = "1" ]      && printf 'ON ' || printf '   ' )
+  printf '    --purge-vm       %s  also remove /var/lib/elchi/victoriametrics\n'                    "$marker"
+  marker=$( [ "$PURGE_GRAFANA" = "1" ] && printf 'ON ' || printf '   ' )
+  printf '    --purge-grafana  %s  also remove the grafana package + /var/lib/grafana data\n'        "$marker"
+  marker=$( [ "$PURGE_NGINX" = "1" ]   && printf 'ON ' || printf '   ' )
+  printf '    --purge-nginx    %s  also remove the nginx package (only if WE installed it)\n'        "$marker"
+  printf '\n'
+
+  if [ "$PURGE" = "1" ]; then
+    confirm_destructive "PURGE elchi-stack on ${scope_label}"
+  else
+    confirm_destructive "uninstall elchi-stack on ${scope_label}"
+  fi
+}
+
+uninstall::preview_and_confirm
 
 # ----- stop + disable every elchi-* service ------------------------------
 stop_all_units() {
