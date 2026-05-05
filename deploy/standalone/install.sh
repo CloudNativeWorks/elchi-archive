@@ -142,13 +142,15 @@ ELCHI_TIMEZONE=${ELCHI_TIMEZONE:-UTC}
 # operators who genuinely want plaintext, but no CLI flag advertises it.
 ELCHI_TLS_ENABLED=${ELCHI_TLS_ENABLED:-true}
 
-# GSLB CoreDNS plugin: default ON. The actual `coredns::setup` is a
-# nezaket-guard — if --gslb-zone or --gslb-admin-email isn't supplied,
-# it logs a warning and skips (no install failure). Operators who want
-# the stack without GSLB pass --no-gslb. Operators who want GSLB pass
-# --gslb-zone=... + --gslb-admin-email=... and get it automatically.
+# GSLB CoreDNS plugin: default ON. The plugin always installs unless
+# the operator passes --no-gslb. If they don't supply --gslb-zone, we
+# fall back to elchi.local — a non-routable .local-style domain that
+# is safe by default (won't collide with anything authoritative on the
+# public internet, and the plugin still works for internal cluster DNS
+# / ad-hoc testing). Operators with a real authoritative zone pass
+# --gslb-zone=<domain> to override.
 ELCHI_INSTALL_GSLB=${ELCHI_INSTALL_GSLB:-1}
-ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-}
+ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-elchi.local}
 ELCHI_GSLB_ADMIN_EMAIL=${ELCHI_GSLB_ADMIN_EMAIL:-}
 ELCHI_GSLB_NAMESERVERS=${ELCHI_GSLB_NAMESERVERS:-}
 ELCHI_GSLB_REGIONS=${ELCHI_GSLB_REGIONS:-}
@@ -263,10 +265,10 @@ Grafana
   --grafana-user=<user>               default: elchi
   --grafana-password=<pwd>            default: random
 
-GSLB (optional CoreDNS)
-  --gslb                              enable CoreDNS GSLB on every node
-  --gslb-zone=<domain>                required with --gslb
-  --gslb-admin-email=<email>          required with --gslb
+GSLB (CoreDNS — default ON)
+  --no-gslb                           opt out of the CoreDNS GSLB plugin
+  --gslb-zone=<domain>                authoritative zone (default: elchi.local)
+  --gslb-admin-email=<email>          SOA RNAME (default: hostmaster@<zone>)
   --gslb-nameservers=ns1:ip,ns2:ip    NS records + glue
   --gslb-regions=<csv>                Corefile regions directive
   --gslb-tls-skip-verify              optional

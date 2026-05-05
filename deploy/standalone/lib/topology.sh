@@ -291,13 +291,12 @@ topology::compute() {
       # VictoriaMetrics + Grafana stay singletons on M1 (storage tier).
       printf '    runs_victoriametrics: %s\n' "$is_m1"
       printf '    runs_grafana: %s\n' "$is_m1"
-      # CoreDNS GSLB DaemonSet pattern: every node when GSLB is on AND
-      # operator supplied --gslb-zone. The flag alone (default ON) is
-      # not enough — coredns::setup gracefully skips when zone is empty,
-      # so topology must reflect actual install intent for validate.sh
-      # to flag drift between "topology says yes" and "no port 53 bound".
+      # CoreDNS GSLB DaemonSet pattern: every node when --gslb is on
+      # (default ON). The zone always has a value now — install.sh
+      # falls back to "elchi.local" when --gslb-zone isn't supplied,
+      # so the only way runs_coredns is false is an explicit --no-gslb.
       local runs_coredns=false
-      if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ] && [ -n "${ELCHI_GSLB_ZONE:-}" ]; then
+      if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
         runs_coredns=true
       fi
       printf '    runs_coredns: %s\n' "$runs_coredns"
@@ -361,19 +360,18 @@ topology::print_plan() {
   printf '  main address: %s\n' "${ELCHI_MAIN_ADDRESS:-(unset)}"
   printf '  public port:  %s (TLS=%s)\n' "${ELCHI_PORT:-443}" "${ELCHI_TLS_ENABLED:-true}"
   printf '  envoy internal listener: 127.0.0.1:%s (plaintext)\n' "${ELCHI_PORT_ENVOY_INTERNAL}"
-  # GSLB has three states now that it's default-on:
-  #   * enabled — flag on AND zone set → coredns::setup will install
-  #     (admin defaults to hostmaster@<zone> per RFC 2142 if not set)
-  #   * pending — flag on (default) but zone missing → graceful skip
+  # GSLB has two states now that the zone has a default fallback:
+  #   * enabled — flag on (default), zone is either operator-supplied
+  #     or the elchi.local fallback (admin defaults to hostmaster@<zone>
+  #     per RFC 2142 if not set)
   #   * disabled — operator passed --no-gslb explicitly
   local gslb_state
   if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
-    if [ -n "${ELCHI_GSLB_ZONE:-}" ]; then
-      local admin_display=${ELCHI_GSLB_ADMIN_EMAIL:-hostmaster@${ELCHI_GSLB_ZONE} (auto)}
-      gslb_state="enabled (zone=${ELCHI_GSLB_ZONE}, admin=${admin_display})"
-    else
-      gslb_state="pending — pass --gslb-zone=<domain> to install, or --no-gslb to silence"
-    fi
+    local zone=${ELCHI_GSLB_ZONE:-elchi.local}
+    local admin_display=${ELCHI_GSLB_ADMIN_EMAIL:-hostmaster@${zone} (auto)}
+    local zone_label=$zone
+    [ "$zone" = "elchi.local" ] && zone_label="${zone} (default)"
+    gslb_state="enabled (zone=${zone_label}, admin=${admin_display})"
   else
     gslb_state="disabled (--no-gslb)"
   fi

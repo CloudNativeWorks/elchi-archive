@@ -279,6 +279,7 @@
                 | sudo bash -s -- \
                 --nodes=$(hostname -I | awk '{print $1}') \
                 --main-address=elchi.example.com \
+                --gslb-zone=gslb.example.com \
                 --ui-version=v1.1.5 \
                 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2 \
                 --envoy-version=v1.36.2</div>
@@ -290,10 +291,18 @@
                 --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
                 --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
                 --main-address=elchi.example.com \
+                --gslb-zone=gslb.example.com \
                 --ui-version=v1.1.5 \
                 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.35.3,elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.38.0
                 \
                 --envoy-version=v1.36.2</div>
+            <p class="info" style="margin-top: 8px;">
+                <strong>GSLB zone:</strong> CoreDNS GSLB plugin is enabled by default. If you skip
+                <code>--gslb-zone=...</code>, the installer falls back to <code>elchi.local</code> — a non-routable
+                <code>.local</code>-style namespace safe for internal clusters / testing. Pass
+                <code>--gslb-zone=&lt;your-delegated-domain&gt;</code> for a real authoritative deployment, or
+                <code>--no-gslb</code> to skip the plugin entirely.
+            </p>
             <p class="info" style="margin-top: 8px;">
                 <strong>Variants &amp; replicas:</strong> each <code>--backend-version</code> entry is
                 ONE variant. The number of variants determines how many backend processes per node:
@@ -527,15 +536,16 @@
                 <summary>GSLB / CoreDNS plugin</summary>
                 <div class="flag-table">
                     <code>--gslb</code>
-                    <div class="desc"><strong>Default: ON.</strong> CoreDNS GSLB plugin will install on every node (port
-                        53 TCP+UDP, webhook on 8053) IF <code>--gslb-zone</code> is supplied. The flag is a no-op when
-                        default is already on; kept for explicitness.</div>
+                    <div class="desc"><strong>Default: ON.</strong> CoreDNS GSLB plugin installs on every node (port
+                        53 TCP+UDP, webhook on 8053). The flag is a no-op when default is already on; kept for
+                        explicitness.</div>
                     <code>--no-gslb</code>
-                    <div class="desc">Opt out of the GSLB CoreDNS install — use this when you don't want the plugin and
-                        don't want the "GSLB skipped" hint in the install log.</div>
+                    <div class="desc">Opt out of the GSLB CoreDNS install entirely.</div>
                     <code>--gslb-zone=&lt;domain&gt;</code>
-                    <div class="desc">Authoritative zone (e.g. <code>gslb.example.com</code>). <strong>Only flag
-                            actually required to install GSLB.</strong> Missing → graceful skip.</div>
+                    <div class="desc">Authoritative zone (e.g. <code>gslb.example.com</code>).
+                        <span class="default">Default: <code>elchi.local</code></span> — a non-routable
+                        <code>.local</code>-style domain that's safe out of the box for internal cluster DNS / testing.
+                        Override with your own delegated domain in production.</div>
                     <code>--gslb-admin-email=&lt;email&gt;</code>
                     <div class="desc"><span class="default">Optional. Default: <code>hostmaster@&lt;zone&gt;</code> (RFC
                             2142 convention).</span> Becomes the SOA RNAME (with <code>@</code> → <code>.</code>).
