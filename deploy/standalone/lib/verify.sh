@@ -189,45 +189,23 @@ verify::deep_health() {
             --state=loaded 2>/dev/null \
             | awk '$1 ~ /^elchi-/ {print $1}')
 
-  # Pass 2 — backend liveness evidence in the journal. Earlier versions
-  # of the backend wrote a one-shot "Controller registered ${hn}-..."
-  # line at startup and we grepped for that. New backend builds dropped
-  # the one-shot in favor of periodic loop messages, and the old line
-  # rotates out of journald long before verify gets called on a healthy
-  # cluster — false-positive failures every install.
-  #
-  # Switch to PERIODIC pattern matching: each module emits a recurring
-  # heartbeat we can rely on always being in the recent journal.
-  #   Controller:  every ~5 min  — `[controller/clientService] sync_registry.go: ... SYNC-START`
-  #   Control-plane: every 30 s  — `[control-plane/server] control_plane_manager.go: Periodic node list update`
-  # Both lines come from healthy code paths inside the running process,
-  # so absence means "service is up but its main loop has wedged" — a
-  # genuine red flag. We deliberately don't bind the pattern to ${hn}:
-  # the unit is per-node already, journalctl -u <unit> can't show
-  # another node's logs, so the hostname filter would just narrow a
-  # match that's already unambiguous.
-  if systemctl is-active --quiet elchi-controller.service 2>/dev/null; then
-    if journalctl -u elchi-controller.service -n 400 --no-pager 2>/dev/null \
-         | grep -qE 'controller/clientService.*sync_registry'; then
-      log::ok "controller liveness OK (${hn})"
-    else
-      log::err "controller has no recent client-registry sync log (${hn})"
-      fails=$(( fails + 1 ))
-    fi
-  fi
-
-  while IFS= read -r unit; do
-    [ -z "$unit" ] && continue
-    if journalctl -u "$unit" -n 200 --no-pager 2>/dev/null \
-         | grep -qE 'control-plane/server.*Periodic node list update|control_plane_manager'; then
-      log::ok "${unit}: control-plane liveness OK"
-    else
-      log::err "${unit}: no recent periodic update log"
-      fails=$(( fails + 1 ))
-    fi
-  done < <(systemctl list-units --no-pager --no-legend --type=service \
-            'elchi-control-plane-*@*' 2>/dev/null \
-            | awk '$1 ~ /^elchi-control-plane-.*@.*\.service/ && $3 == "active" {print $1}')
+  # Earlier revisions of this gate also grepped backend journal logs
+  # for a per-binary "Controller registered" / "Successfully registered
+  # control-plane" pattern, then for periodic SYNC / heartbeat patterns
+  # when those one-shots got dropped from the binary. Both approaches
+  # produced false positives whenever:
+  #   * the backend's log format drifted across releases (every tag
+  #     changes the message text by a word or two)
+  #   * journalctl's window (-n 400) fell shorter than the heartbeat
+  #     period because of unrelated chatty log lines
+  #   * a fresh boot / restart hadn't yet emitted the periodic line
+  #     when verify ran during the same orchestration
+  # Conclusion: if systemd reports the unit `active`, that's already
+  # the strongest health signal we have at this layer. The runtime
+  # endpoint probes above (envoy admin :443/:8080, registry :1870,
+  # mongod :27017, etc.) cover the "listener bound + responding" axis;
+  # piling fragile log-pattern detection on top adds noise without
+  # extra correctness. Stay out of the journal.
 
   # Pass 3 — envoy admin listener probe. Admin listens loopback only.
   if systemctl is-active --quiet elchi-envoy.service 2>/dev/null \

@@ -180,9 +180,13 @@ ELCHI_LOG_REPORT_CALLER=${ELCHI_LOG_REPORT_CALLER:-false}
 
 ELCHI_NON_INTERACTIVE=${ELCHI_NON_INTERACTIVE:-0}
 ELCHI_NO_FIREWALL=${ELCHI_NO_FIREWALL:-0}
-# Default: pull latest OS package updates (security + general) before
-# any service install. Operators on pinned base images / air-gapped
-# networks / fast iteration loops can opt out with --no-upgrade-os.
+# Default: apply published OS SECURITY patches before any service
+# install — `unattended-upgrade` on debian, `dnf upgrade-minimal
+# --security` on rhel. NOT a full apt/dnf upgrade: general updates
+# (random userspace bumps, config drift, surprise mongo / nginx
+# minor revs) are the operator's call. Opt out entirely with
+# --no-upgrade-os when the VM image is pinned / air-gapped / iteration
+# speed matters more than security currency.
 ELCHI_UPGRADE_OS=${ELCHI_UPGRADE_OS:-1}
 ELCHI_DRY_RUN=${ELCHI_DRY_RUN:-0}
 ELCHI_KEEP_BUNDLE=${ELCHI_KEEP_BUNDLE:-0}
@@ -285,7 +289,10 @@ GSLB (CoreDNS — default ON)
 Op-mode
   --non-interactive                   never prompt
   --no-firewall                       skip firewalld/ufw configuration
-  --no-upgrade-os                     skip the apt/dnf full system upgrade
+  --no-upgrade-os                     skip the OS security-patch step
+                                       (default: ON — applies security advisories
+                                       only; general/full upgrades remain the
+                                       operator's responsibility)
                                        step run before any service install
                                        (default: ON; use this on pinned base
                                        images / air-gapped / fast iteration)

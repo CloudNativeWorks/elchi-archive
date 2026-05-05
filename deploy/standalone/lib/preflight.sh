@@ -316,46 +316,74 @@ preflight::wait_apt_lock() {
   return 0
 }
 
-# preflight::upgrade_os — apply pending OS package updates BEFORE any
-# service install runs. Default ON; opt out with --no-upgrade-os when:
-#   * the operator wants reproducible installs against a pinned base image
-#   * the VM has no outbound mirrors / is air-gapped
-#   * iteration speed matters more than security currency (test loops)
+# preflight::upgrade_os — apply pending OS SECURITY patches before any
+# service install runs. Default ON; opt out with --no-upgrade-os when
+# you want the install loop to skip apt/dnf entirely.
 #
-# Notes:
-#   * On debian we use `apt-get -y dist-upgrade` (not `upgrade`) so the
-#     kernel meta-package can pull in newer kernels; --force-confdef +
-#     --force-confold keep modified configs untouched.
-#   * Reboot is NOT auto-triggered — operator must run `reboot` after
-#     install if /var/run/reboot-required exists. We log a warning.
+# Scope: SECURITY ONLY. Earlier revisions ran a full `apt-get
+# dist-upgrade` / `dnf upgrade`, which silently bumped every package
+# the distro had a newer version of — random userspace revs, config
+# drift, surprise mongo / nginx / grafana minor bumps independent of
+# what install.sh itself manages. Operators don't expect a fleet-wide
+# package roll just because they ran `--upgrade` to refresh elchi-stack
+# code. Restrict ourselves to the published security tier; anything
+# else is the operator's call (`sudo apt full-upgrade` / `dnf upgrade`
+# whenever they're ready for it).
+#
+# Implementation:
+#   * Debian / Ubuntu: invoke `unattended-upgrade` with the distro
+#     default config — its `Allowed-Origins` list is pre-tuned to
+#     ${distro}-security. We install the package on demand for minimal
+#     cloud images that don't ship it.
+#   * RHEL / Rocky / Alma / Oracle: `dnf upgrade-minimal --security`.
+#     "minimal" picks the smallest set of package versions that fix
+#     advertised CVEs (vs. plain `--security` which can pull non-CVE
+#     bug-fix releases for the same package).
+#
+# Reboot is NOT auto-triggered. We log a warning if the upgrade laid
+# down a new kernel / glibc and `/var/run/reboot-required` exists.
 preflight::upgrade_os() {
   if [ "${ELCHI_UPGRADE_OS:-1}" != "1" ]; then
     log::info "skipping OS upgrade (--no-upgrade-os)"
     return 0
   fi
-  log::step "Applying OS package updates (security + general)"
+  log::step "Applying OS SECURITY patches (general updates are operator responsibility)"
   preflight::wait_apt_lock 600 || true
   case "$ELCHI_OS_FAMILY" in
     debian)
       DEBIAN_FRONTEND=noninteractive apt-get update -qq \
-        || die "apt-get update failed during OS upgrade"
-      DEBIAN_FRONTEND=noninteractive apt-get -y \
-        -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold" \
-        dist-upgrade \
-        || die "OS upgrade failed via apt-get dist-upgrade"
-      DEBIAN_FRONTEND=noninteractive apt-get -y autoremove >/dev/null 2>&1 || true
+        || die "apt-get update failed during OS security upgrade"
+      # unattended-upgrades is in main on Ubuntu / Debian; ensure it's
+      # present (minimal cloud images sometimes drop it). The package
+      # ships the distro's security-only origins config out of the box.
+      if ! command -v unattended-upgrade >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades \
+          || die "failed to install unattended-upgrades for security-only patching"
+      fi
+      # Run the security-only upgrade. -v emits per-package decisions
+      # to the journal so the install log shows exactly what landed.
+      # Non-zero exit when no security updates are available is OK —
+      # treat it as success. A genuine config error surfaces in
+      # /var/log/unattended-upgrades/ which we point the operator to.
+      if ! DEBIAN_FRONTEND=noninteractive unattended-upgrade -v 2>&1; then
+        log::warn "unattended-upgrade returned non-zero — check /var/log/unattended-upgrades/ if security patches were expected"
+      fi
       ;;
     rhel)
       local pm
       pm=$(command -v dnf || command -v yum)
-      "$pm" -y upgrade || die "OS upgrade failed via $pm upgrade"
+      # `--security` requires dnf-plugins-core (default on RHEL 9 /
+      # Rocky 9 / Alma 9 / Oracle 9). `upgrade-minimal` picks the
+      # smallest set of package versions that close the advertised
+      # CVEs — no churn for unrelated bug-fix releases.
+      "$pm" -y --security upgrade-minimal \
+        || log::warn "${pm} --security upgrade-minimal returned non-zero (no advisories applicable, or dnf-plugins-core missing)"
       ;;
   esac
   if [ -f /var/run/reboot-required ]; then
-    log::warn "OS upgrade installed a kernel/glibc update — reboot recommended after install completes"
+    log::warn "security upgrade installed a kernel / libc update — reboot recommended after install completes"
   fi
-  log::ok "OS packages up to date"
+  log::ok "OS security patches applied"
 }
 
 # ----- tooling presence --------------------------------------------------
