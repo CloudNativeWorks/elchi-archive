@@ -254,6 +254,14 @@ topology::compute() {
     # the only operator-specific GSLB value (admin defaults from zone).
     printf '  gslb_zone: %s\n' "${ELCHI_GSLB_ZONE:-elchi.local}"
     printf '  gslb_admin_email: %s\n' "${ELCHI_GSLB_ADMIN_EMAIL:-}"
+    # Persist nameservers + regions so add-node / upgrade reruns can
+    # forward them back to install.sh. Without these, the second run
+    # would re-render Corefile + zone file without the operator's
+    # original NS records / region directives — silently breaking
+    # public DNS for any operator who passed --gslb-nameservers at
+    # install time.
+    printf '  gslb_nameservers: %s\n' "${ELCHI_GSLB_NAMESERVERS:-}"
+    printf '  gslb_regions: %s\n'     "${ELCHI_GSLB_REGIONS:-}"
     printf 'versions:\n'
     printf '  ui: %s\n' "${ELCHI_UI_VERSION:-}"
     printf '  envoy: %s\n' "${ELCHI_ENVOY_VERSION:-}"

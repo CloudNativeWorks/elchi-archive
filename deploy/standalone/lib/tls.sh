@@ -191,6 +191,13 @@ tls::_san_drift() {
   local needle
   for needle in "${want_dns[@]}"; do
     [ -n "$needle" ] || continue
+    # Skip the universal-presence entries — they're in every cert
+    # tls::_self_signed mints (we hard-code them in tls::_compute_san_lists)
+    # and comparing them adds parser fragility for zero benefit. They
+    # cannot be the real drift source.
+    case "$needle" in
+      localhost) continue ;;
+    esac
     case ",${san}," in
       *",DNS:${needle},"*) ;;
       *) return 0 ;;
@@ -198,6 +205,13 @@ tls::_san_drift() {
   done
   for needle in "${want_ips[@]}"; do
     [ -n "$needle" ] || continue
+    # Same reasoning + IPv6 specifically: openssl normalizes `::1` to
+    # `0:0:0:0:0:0:0:1` in -ext subjectAltName output on some
+    # versions, which makes the string-match below a false-positive
+    # trigger every install.
+    case "$needle" in
+      127.0.0.1|::1) continue ;;
+    esac
     case ",${san}," in
       *",IP:${needle},"*|*",IPAddress:${needle},"*) ;;
       *) return 0 ;;

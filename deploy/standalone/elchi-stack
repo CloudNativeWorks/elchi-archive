@@ -58,6 +58,9 @@ Usage:
   elchi-stack reload-envoy            re-render bootstrap and restart Envoy on every node
   elchi-stack add-node <ip>           extend the cluster (M1 only)
   elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
+  elchi-stack mongo-status            replica-set health snapshot (M1 only)
+                                       — primary, per-member state / health /
+                                       uptime / replication lag / heartbeat msg
   elchi-stack export-bundle <out> [--reuse-bundle-key]
                                       repackage the encrypted cluster bundle.
                                        --reuse-bundle-key uses the install-time
@@ -185,23 +188,297 @@ cmd_reload_envoy() {
 }
 
 cmd_add_node() {
-  local new_ip=${1:?new node IP required}
-  if [ ! -f /etc/elchi/nodes.list ]; then
-    die "no /etc/elchi/nodes.list — run install.sh first"
+  local new_ip=""
+  local skip_confirm=0
+  # Two-pass arg loop: pull --yes-i-mean-it / -y out for the prompt,
+  # let everything else (e.g. --ssh-key, --ssh-port) pass through to
+  # install.sh below. Keeps the flag surface compatible with operator
+  # muscle memory from `bash get.sh --uninstall --yes-i-mean-it`.
+  local -a passthru=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --yes-i-mean-it|-y) skip_confirm=1 ;;
+      -h|--help)
+        printf 'Usage: elchi-stack add-node <ip> [--yes-i-mean-it] [extra flags forwarded to install.sh]\n'
+        return 0
+        ;;
+      -*) passthru+=("$1") ;;
+      *)
+        if [ -z "$new_ip" ]; then new_ip=$1
+        else passthru+=("$1")
+        fi
+        ;;
+    esac
+    shift
+  done
+  [ -n "$new_ip" ] || die "new node IP required: elchi-stack add-node <ip>"
+
+  if [ ! -f /etc/elchi/nodes.list ] || [ ! -f /etc/elchi/topology.full.yaml ]; then
+    die "no /etc/elchi/nodes.list or topology.full.yaml — run install.sh first"
   fi
 
-  # Append + re-run the orchestrator with the union list. install.sh is
-  # idempotent for existing nodes — only the new one gets bootstrap.
-  local existing
-  existing=$(paste -sd, /etc/elchi/nodes.list)
-  local merged="${existing},${new_ip}"
+  # Existing topology: nodes + persisted install-time choices. We
+  # forward all of these to install.sh on rerun so the operator
+  # doesn't have to re-type --main-address / --backend-version /
+  # --gslb-zone / --ui-version / --envoy-version. install.sh would
+  # otherwise hard-fail on the missing --main-address.
+  local existing_csv existing_count new_pos
+  existing_csv=$(paste -sd, /etc/elchi/nodes.list)
+  existing_count=$(wc -l < /etc/elchi/nodes.list | tr -d ' ')
+  new_pos=$(( existing_count + 1 ))
 
-  log::info "extending cluster: ${existing} → ${merged}"
-  exec bash "${ELCHI_INSTALLER_ROOT}/install.sh" --nodes="$merged" --non-interactive "${@:2}"
+  if grep -qxF "$new_ip" /etc/elchi/nodes.list 2>/dev/null; then
+    die "${new_ip} is already in /etc/elchi/nodes.list — refusing to add a duplicate"
+  fi
+
+  local merged="${existing_csv},${new_ip}"
+
+  local main_addr port install_gslb gslb_zone gslb_admin gslb_nameservers gslb_regions
+  main_addr=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  port=$(awk      '/^cluster:/{f=1; next} f && /^[[:space:]]+port:/{print $2; exit}'         /etc/elchi/topology.full.yaml)
+  install_gslb=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+install_gslb:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  gslb_zone=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_zone:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  gslb_admin=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_admin_email:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  # Nameservers + regions are operator-supplied at install time and must
+  # round-trip through topology.full.yaml so add-node's install.sh rerun
+  # doesn't re-render Corefile / zone.db without them.
+  gslb_nameservers=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_nameservers:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  gslb_regions=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_regions:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  [ -n "$main_addr" ] || die "main_address missing from topology.full.yaml — file may be corrupt"
+
+  local ui_version envoy_version coredns_version
+  ui_version=$(awk      '/^versions:/{f=1; next} f && /^  ui:/{print $2; exit}'      /etc/elchi/topology.full.yaml)
+  envoy_version=$(awk   '/^versions:/{f=1; next} f && /^  envoy:/{print $2; exit}'   /etc/elchi/topology.full.yaml)
+  coredns_version=$(awk '/^versions:/{f=1; next} f && /^  coredns:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+
+  # backend_variants is a multi-line list under `versions:` — collect
+  # to CSV in document order so install.sh + the cluster keep their
+  # existing port allocations.
+  local variants_csv
+  variants_csv=$(awk '
+    /^  backend_variants:/ { f=1; next }
+    f && /^    -[[:space:]]+/ { sub(/^    -[[:space:]]+/, "", $0); printf "%s%s", sep, $0; sep="," }
+    f && /^[a-zA-Z]/ { exit }
+  ' /etc/elchi/topology.full.yaml)
+  [ -n "$variants_csv" ] || die "backend_variants missing from topology.full.yaml"
+
+  # ---- mongo impact (drives the preview banner + operator warnings) -----
+  # Mirrors lib/topology.sh::is_mongo_node:
+  #   N=1|2  → only idx=1 runs mongo (standalone)
+  #   N>=3   → idx 1..3 run mongo (replica set)
+  # The interesting transition is N=2 → N=3: M1 flips standalone→RS,
+  # M2 gets a fresh mongod install for the first time, M3 same. That's
+  # the only shape that imposes a brief write-availability gap.
+  local mongo_impact_label mongo_impact_lines
+  if [ "$existing_count" = "1" ] && [ "$new_pos" = "2" ]; then
+    mongo_impact_label="no migration"
+    mongo_impact_lines="this node will NOT run mongo (will reach M1's standalone mongod over LAN)"
+  elif [ "$existing_count" = "2" ] && [ "$new_pos" = "3" ]; then
+    # Bash 3.2 (macOS dev shell) has parser bugs with heredocs nested
+    # inside $(...) when the body contains parens / apostrophes — build
+    # this multi-line message with explicit \n joins instead of cat<<EOF
+    # so the script lints cleanly across every shell version.
+    mongo_impact_label="${C_YELLOW}STANDALONE -> REPLICA SET migration${C_RESET}"
+    mongo_impact_lines="M1 mongod will be reconfigured (replSetName=elchi-rs) and restarted
+M2 + M3 will install mongo for the first time (apt-get mongodb-org)
+rs.initiate() will run with all 3 members
+expected write-availability gap: ~10-30s during M1 restart
+existing M1 data is preserved and replicated to M2/M3 on initial sync"
+  elif [ "$new_pos" -le 3 ] 2>/dev/null; then
+    mongo_impact_label="this node joins the RS"
+    mongo_impact_lines="mongod will be installed and added to the elchi-rs replica set"
+  else
+    mongo_impact_label="no mongo (capped at 3 RS members)"
+    mongo_impact_lines="mongo stays on M1+M2+M3; this node connects via the cluster URI like every other backend service"
+  fi
+
+  # ---- preview banner ---------------------------------------------------
+  printf '\n%b==> Add-node preview%b\n\n' "$C_BOLD" "$C_RESET"
+  printf '  current cluster:  %d node(s) — %s\n' "$existing_count" "$existing_csv"
+  printf '  new node:         %s (will be M%d)\n' "$new_ip" "$new_pos"
+  printf '  cluster size:     %d → %d\n\n' "$existing_count" "$new_pos"
+
+  printf '  what will happen:\n'
+  printf '    [admin user]    create elchi-cluster-admin on %s (cluster key authorized)\n' "$new_ip"
+  printf '    [bootstrap]     ssh-copy-id cluster key (interactive password if needed)\n'
+  printf '    [mongo]         %b\n' "$mongo_impact_label"
+  while IFS= read -r _line; do
+    [ -n "$_line" ] && printf '                    %s\n' "$_line"
+  done <<<"$mongo_impact_lines"
+  printf '    [new node]      install backend (controller + control-plane), envoy, nginx, coredns, otel\n'
+  printf '    [topology]      re-render topology.full.yaml + ports.full.json\n'
+  printf '    [tls]           regenerate self-signed cert (SAN list will include %s)\n' "$new_ip"
+  printf '    [/etc/hosts]    push the new managed block to every node\n'
+  if [ "$install_gslb" = "1" ]; then
+    printf '    [coredns]       new CoreDNS instance binds %s:53 with the same Corefile\n' "$new_ip"
+    if [ -n "$gslb_nameservers" ]; then
+      printf '                    NS records preserved from topology (--gslb-nameservers=%s);\n' "$gslb_nameservers"
+      printf '                    operator-supplied list is NOT auto-extended -- pass a new\n'
+      printf '                    --gslb-nameservers=... if you want %s to advertise as NS\n' "$new_ip"
+    else
+      # auto-derive default kicks in: every cluster node becomes an ns<idx>
+      printf '                    no operator NS list -- defaults to one ns<idx> entry per\n'
+      printf '                    cluster node; %s will be added as ns%d:%s automatically\n' \
+        "$new_ip" "$new_pos" "$new_ip"
+    fi
+  fi
+  printf '    [existing M*]   envoy.yaml + backend common.env get re-rendered with the\n'
+  printf '                    new peer set; fingerprint reconcile restarts envoy and the\n'
+  printf '                    affected backends on each existing node (~1-3s gap per\n'
+  printf '                    node, sequential -- front-door HTTPS may briefly 5xx)\n\n'
+  printf '  estimated time:   3-5 min\n\n'
+
+  # ---- confirm ----------------------------------------------------------
+  if [ "$skip_confirm" != "1" ]; then
+    if [ ! -t 0 ]; then
+      die "no controlling tty; pass --yes-i-mean-it for non-interactive add-node"
+    fi
+    local ans
+    read -r -p "About to add ${new_ip} to the cluster (size ${existing_count} → ${new_pos}). Type 'yes' to continue: " ans
+    [ "$ans" = "yes" ] || die "aborted"
+  fi
+
+  # ---- compose + exec install.sh re-run ---------------------------------
+  local -a cmd=(
+    bash "${ELCHI_INSTALLER_ROOT}/install.sh"
+    --nodes="$merged"
+    --main-address="$main_addr"
+    --backend-version="$variants_csv"
+    --non-interactive
+  )
+  [ -n "$port" ]            && cmd+=(--port="$port")
+  [ -n "$ui_version" ]      && cmd+=(--ui-version="$ui_version")
+  [ -n "$envoy_version" ]   && cmd+=(--envoy-version="$envoy_version")
+  [ -n "$coredns_version" ] && cmd+=(--coredns-version="$coredns_version")
+  [ "$install_gslb" = "1" ] && cmd+=(--gslb)
+  [ -n "$gslb_zone" ]       && cmd+=(--gslb-zone="$gslb_zone")
+  [ -n "$gslb_admin" ]      && cmd+=(--gslb-admin-email="$gslb_admin")
+  [ -n "$gslb_nameservers" ] && cmd+=(--gslb-nameservers="$gslb_nameservers")
+  [ -n "$gslb_regions" ]     && cmd+=(--gslb-regions="$gslb_regions")
+  [ -n "${ELCHI_SSH_USER:-}" ] && cmd+=(--ssh-user="$ELCHI_SSH_USER")
+  [ -n "${ELCHI_SSH_KEY:-}" ]  && cmd+=(--ssh-key="$ELCHI_SSH_KEY")
+  [ -n "${ELCHI_SSH_PORT:-}" ] && cmd+=(--ssh-port="$ELCHI_SSH_PORT")
+
+  log::info "extending cluster: ${existing_csv} → ${merged}"
+  exec "${cmd[@]}" "${passthru[@]}"
 }
 
 cmd_init_rs() {
   mongodb::initiate_replica_set
+}
+
+# cmd_mongo_status — print mongo replica-set health from M1's perspective.
+# Single-shot rs.status() snapshot: PRIMARY identification, per-member
+# state / health / uptime / replication lag / lastHeartbeatMessage.
+#
+# M1-only: the only node where /etc/elchi/mongo/root.env exists (mongo
+# root creds — never shipped to M2/M3 in the bundle). Cross-node read
+# would require either persisting root creds elsewhere or proxying via
+# SSH; both add attack surface for a tool that's purely diagnostic.
+# Operators on M2/M3 get a clean error pointing at M1 instead.
+cmd_mongo_status() {
+  if [ ! -f /etc/elchi/mongo/root.env ]; then
+    local m1_ip=""
+    [ -f /etc/elchi/nodes.list ] && m1_ip=$(head -1 /etc/elchi/nodes.list)
+    printf 'mongo-status is M1-only — run on M1%s\n' \
+      "${m1_ip:+ ($m1_ip)}" >&2
+    exit 1
+  fi
+
+  local size=1
+  if [ -f /etc/elchi/topology.full.yaml ]; then
+    size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+             /etc/elchi/topology.full.yaml)
+  fi
+
+  # Standalone shortcut. cluster_size < 3 means this install never
+  # configured a replica set (lib/topology.sh::is_mongo_node caps RS
+  # at 3 members and uses standalone for size 1-2). rs.status() would
+  # error here with NotYetInitialized, so just report the basic
+  # mongod liveness instead of a misleading "RS down".
+  if [ "${size:-1}" -lt 3 ] 2>/dev/null; then
+    printf '%bStandalone mongo%b (cluster size=%s, no replica set)\n' \
+      "$C_BOLD" "$C_RESET" "$size"
+    if systemctl is-active --quiet mongod 2>/dev/null; then
+      log::ok "mongod active on 127.0.0.1:27017"
+    else
+      log::err "mongod NOT active"
+      exit 1
+    fi
+    return 0
+  fi
+
+  # RS path. Emit one tagged line per member from inside mongosh —
+  # each line survives the `  [mongosh] ` prefix wrapping that
+  # `mongodb::eval_root` adds (lib/mongodb.sh:262), so we parse with
+  # `sed -n 's/.*MEMBER|/MEMBER|/p'` rather than line-anchored grep.
+  # The pipe (`|`) is the field separator since hostnames can contain
+  # ':' and lastHeartbeatMessage can contain spaces / commas.
+  local out
+  out=$(mongodb::eval_root "
+    var s = rs.status();
+    print('SUMMARY|' + s.set + '|' + (s.term || 0) + '|' + s.ok);
+    var primaryOptime = null;
+    s.members.forEach(function(m) {
+      if (m.stateStr === 'PRIMARY' && m.optimeDate) primaryOptime = m.optimeDate;
+    });
+    s.members.forEach(function(m) {
+      var lag = '-';
+      if (m.optimeDate && primaryOptime) {
+        lag = (primaryOptime - m.optimeDate) + 'ms';
+      }
+      var hb = m.lastHeartbeatMessage || '';
+      print('MEMBER|' + m._id + '|' + m.name + '|' + m.stateStr +
+            '|' + m.health + '|' + (m.uptime || 0) + '|' + lag +
+            '|' + hb);
+    });
+    print('EVAL_OK');
+  " 2>/dev/null) || die "rs.status() failed - is mongod running on M1? (check 'systemctl status mongod')"
+
+  local set_name term ok
+  read -r set_name term ok < <(
+    printf '%s\n' "$out" \
+      | sed -n 's/.*SUMMARY|\([^|]*\)|\([^|]*\)|\([^|]*\).*/\1 \2 \3/p' \
+      | head -1
+  )
+
+  printf '\n%bReplica set:%b %s (term=%s, ok=%s)\n\n' \
+    "$C_BOLD" "$C_RESET" "${set_name:-?}" "${term:-?}" "${ok:-?}"
+
+  local id name state health uptime lag hb marker color
+  while IFS='|' read -r id name state health uptime lag hb; do
+    [ -z "$id" ] && continue
+    # ASCII markers only. Multi-line case branches: bash 3.2 (the
+    # macOS dev shell) chokes on inline `;` separators in some
+    # locales. Production is bash 5.x but the dev `bash -n` lint
+    # runs on the workstation, so be defensive.
+    case "$state" in
+      PRIMARY)
+        marker='[P]'
+        color="$C_GREEN"
+        ;;
+      SECONDARY)
+        marker='[S]'
+        color="$C_BLUE"
+        ;;
+      STARTUP|STARTUP2|RECOVERING|ROLLBACK)
+        marker='[~]'
+        color="$C_YELLOW"
+        ;;
+      *)
+        marker='[X]'
+        color="$C_RED"
+        ;;
+    esac
+    printf '  %b%s%b  %-28s  %-10s  health=%s  uptime=%ss  lag=%s' \
+      "$color" "$marker" "$C_RESET" "$name" "$state" "$health" "$uptime" "$lag"
+    [ -n "$hb" ] && printf '  "%s"' "$hb"
+    printf '\n'
+  done < <(
+    printf '%s\n' "$out" \
+      | sed -n 's/.*MEMBER|//p'
+  )
+  printf '\n'
 }
 
 cmd_export_bundle() {
@@ -450,6 +727,7 @@ case "${1:-}" in
   reload-envoy)      shift; cmd_reload_envoy "$@" ;;
   add-node)          shift; cmd_add_node "$@" ;;
   init-replica-set)  shift; cmd_init_rs "$@" ;;
+  mongo-status)      shift; cmd_mongo_status "$@" ;;
   export-bundle)     shift; cmd_export_bundle "$@" ;;
   show-secret)       shift; cmd_show_secret "$@" ;;
   rotate-secret)     shift; cmd_rotate_secret "$@" ;;

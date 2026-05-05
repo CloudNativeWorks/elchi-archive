@@ -150,6 +150,11 @@ ELCHI_TLS_ENABLED=${ELCHI_TLS_ENABLED:-true}
 # / ad-hoc testing). Operators with a real authoritative zone pass
 # --gslb-zone=<domain> to override.
 ELCHI_INSTALL_GSLB=${ELCHI_INSTALL_GSLB:-1}
+# Track whether the operator passed --gslb-zone explicitly so we can
+# tell apart "operator chose elchi.local" from "fell back to default".
+# Same pattern as _ELCHI_SSH_USER_EXPLICIT (see line 51-52).
+_ELCHI_GSLB_ZONE_EXPLICIT=${ELCHI_GSLB_ZONE:+1}
+_ELCHI_GSLB_ZONE_EXPLICIT=${_ELCHI_GSLB_ZONE_EXPLICIT:-0}
 ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-elchi.local}
 ELCHI_GSLB_ADMIN_EMAIL=${ELCHI_GSLB_ADMIN_EMAIL:-}
 ELCHI_GSLB_NAMESERVERS=${ELCHI_GSLB_NAMESERVERS:-}
@@ -419,7 +424,7 @@ parse_args() {
       --grafana-allow-plugin=*)               ELCHI_GRAFANA_ALLOW_PLUGINS="${ELCHI_GRAFANA_ALLOW_PLUGINS}${ELCHI_GRAFANA_ALLOW_PLUGINS:+,}${1#*=}" ;;
       --gslb)                                 ELCHI_INSTALL_GSLB=1 ;;
       --no-gslb)                              ELCHI_INSTALL_GSLB=0 ;;
-      --gslb-zone=*)                          ELCHI_GSLB_ZONE=${1#*=} ;;
+      --gslb-zone=*)                          ELCHI_GSLB_ZONE=${1#*=}; _ELCHI_GSLB_ZONE_EXPLICIT=1 ;;
       --gslb-admin-email=*)                   ELCHI_GSLB_ADMIN_EMAIL=${1#*=} ;;
       --gslb-nameservers=*)                   ELCHI_GSLB_NAMESERVERS=${1#*=} ;;
       --gslb-regions=*)                       ELCHI_GSLB_REGIONS=${1#*=} ;;

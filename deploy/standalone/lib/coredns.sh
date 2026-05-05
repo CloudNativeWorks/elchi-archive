@@ -19,13 +19,48 @@ coredns::setup() {
   # RNAME convention. Both fall-throughs mean an unconfigured GSLB
   # still produces a working internal DNS namespace; operators with a
   # real authoritative domain pass --gslb-zone=<domain> to override.
+  # Default fallback if not yet set. The companion `_ELCHI_GSLB_ZONE_EXPLICIT`
+  # flag (set by install.sh's --gslb-zone arg parser) tells us whether
+  # this value came from the operator or from our fallback — without
+  # it, we'd mis-log "defaulted to 'elchi.local'" on every install
+  # where the operator passed --gslb-zone=elchi.local explicitly,
+  # making it look like their input was ignored.
   : "${ELCHI_GSLB_ZONE:=elchi.local}"
-  if [ "$ELCHI_GSLB_ZONE" = "elchi.local" ]; then
+  if [ "$ELCHI_GSLB_ZONE" = "elchi.local" ] \
+     && [ "${_ELCHI_GSLB_ZONE_EXPLICIT:-0}" != "1" ]; then
     log::info "GSLB zone defaulted to 'elchi.local' (pass --gslb-zone=<domain> to override)"
   fi
   if [ -z "${ELCHI_GSLB_ADMIN_EMAIL:-}" ]; then
     ELCHI_GSLB_ADMIN_EMAIL="hostmaster@${ELCHI_GSLB_ZONE}"
     log::info "GSLB admin email defaulted to ${ELCHI_GSLB_ADMIN_EMAIL} (RFC 2142 convention)"
+  fi
+
+  # Default GSLB nameservers: every cluster node listed as ns<idx>:<ip>.
+  # Without this fallback, operators who don't pass --gslb-nameservers
+  # end up with a zone file that has no NS records — technically valid
+  # for an internal-only deployment but surprising the moment they
+  # query the zone from outside the box. With it, the cluster
+  # advertises itself as authoritative and the list auto-grows when
+  # add-node extends the cluster (next install rerun re-renders the
+  # Corefile + zone with the bigger ns set).
+  #
+  # Operators with a real authoritative DNS shape pass
+  #   --gslb-nameservers=ns1.example.com:1.2.3.4,ns2.example.com:5.6.7.8
+  # which round-trips through topology.full.yaml on rerun. The non-empty
+  # check below means the operator's value is never overwritten.
+  if [ -z "${ELCHI_GSLB_NAMESERVERS:-}" ] && [ -f "${ELCHI_ETC}/nodes.list" ]; then
+    local _ns_csv="" _idx=0 _ip
+    while IFS= read -r _ip; do
+      [ -z "$_ip" ] && continue
+      _idx=$((_idx + 1))
+      _ns_csv="${_ns_csv}${_ns_csv:+,}ns${_idx}:${_ip}"
+    done < "${ELCHI_ETC}/nodes.list"
+    if [ -n "$_ns_csv" ]; then
+      ELCHI_GSLB_NAMESERVERS=$_ns_csv
+      export ELCHI_GSLB_NAMESERVERS
+      log::info "GSLB nameservers auto-derived from cluster nodes: ${_ns_csv}"
+      log::info "  override with --gslb-nameservers=ns1.fqdn:ip,ns2.fqdn:ip,... for a real authoritative deployment"
+    fi
   fi
 
   log::step "Installing CoreDNS GSLB plugin"

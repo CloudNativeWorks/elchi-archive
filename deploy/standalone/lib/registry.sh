@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# registry.sh — install + run the elchi-registry singleton on M1.
+# registry.sh — install + run elchi-registry on every node.
 #
 # Registry is the ext_proc target Envoy calls into for every request to
 # decide which control-plane / controller pod the traffic should land
-# on. It's a single-instance service: M1 only. Other nodes' Envoys
-# reach this instance via the cluster-internal IP.
+# on. It runs on every node as an HA peer set: instances coordinate
+# leader election via the mongo replica set, and Envoy's
+# registry-cluster gRPC health check picks whichever peer currently
+# reports SERVING. (Earlier revisions ran a single instance on M1 —
+# that was a hard SPOF for xDS routing and the topology file still
+# carries the legacy `runs_registry` field for reverse compatibility.)
 #
 # Helm uses versions[0] for both registry and controller. We follow
 # that — registry's binary, config, and HOME all point at the first
 # variant's directory.
 
 registry::setup() {
-  log::step "Installing elchi-registry (M1 singleton)"
+  log::step "Installing elchi-registry"
 
   local first_variant
   first_variant=$(awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")

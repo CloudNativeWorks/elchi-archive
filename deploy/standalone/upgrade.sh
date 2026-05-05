@@ -336,6 +336,8 @@ PORT=$(awk     '/^cluster:/{f=1; next} f && /^[[:space:]]+port:/{print $2; exit}
 INSTALL_GSLB=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+install_gslb:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 GSLB_ZONE=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_zone:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 GSLB_ADMIN_EMAIL=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_admin_email:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+GSLB_NAMESERVERS=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_nameservers:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+GSLB_REGIONS=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_regions:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 
 # Compose the union explicitly so order is deterministic: kept first
 # (preserves existing port allocations), then added.
@@ -357,6 +359,8 @@ cmd=(bash "${SCRIPT_DIR}/install.sh"
 [ "$INSTALL_GSLB" = "1" ]        && cmd+=(--gslb)
 [ -n "$GSLB_ZONE" ]              && cmd+=(--gslb-zone="$GSLB_ZONE")
 [ -n "$GSLB_ADMIN_EMAIL" ]       && cmd+=(--gslb-admin-email="$GSLB_ADMIN_EMAIL")
+[ -n "$GSLB_NAMESERVERS" ]       && cmd+=(--gslb-nameservers="$GSLB_NAMESERVERS")
+[ -n "$GSLB_REGIONS" ]           && cmd+=(--gslb-regions="$GSLB_REGIONS")
 [ -n "${ELCHI_SSH_USER:-}" ]     && cmd+=(--ssh-user="$ELCHI_SSH_USER")
 [ -n "${ELCHI_SSH_KEY:-}" ]      && cmd+=(--ssh-key="$ELCHI_SSH_KEY")
 [ -n "${ELCHI_SSH_PORT:-}" ]     && cmd+=(--ssh-port="$ELCHI_SSH_PORT")
