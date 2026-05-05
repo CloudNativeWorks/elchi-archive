@@ -208,12 +208,45 @@ purge_data() {
   # without our file).
   sysctl::remove
   thp::remove
+
+  # Resolve the admin username BEFORE rm -rf /etc/elchi wipes
+  # orchestrator.env. If the operator picked a custom name via
+  # --admin-user=foo, that name is the only thing telling us which
+  # account to delete; without this lookup we'd fall back to the
+  # default and leak the custom-named account on disk.
+  local admin_user=elchi-cluster-admin
+  if [ -f /etc/elchi/orchestrator.env ]; then
+    local persisted
+    persisted=$(grep -E '^ELCHI_ADMIN_USER=' /etc/elchi/orchestrator.env 2>/dev/null \
+                  | tail -n1 | cut -d= -f2-)
+    [ -n "$persisted" ] && admin_user=$persisted
+  fi
+
   rm -rf /etc/elchi /var/lib/elchi /var/log/elchi /opt/elchi
   if id elchi >/dev/null 2>&1; then
     userdel elchi 2>/dev/null || true
   fi
   if getent group elchi >/dev/null 2>&1; then
     groupdel elchi 2>/dev/null || true
+  fi
+
+  # Admin user (default elchi-cluster-admin) — without this cleanup,
+  # --purge-all leaves a privileged user behind: the password is locked
+  # but /etc/sudoers.d/10-elchi-admin still grants NOPASSWD:ALL and the
+  # cluster pubkey is still in their authorized_keys. A re-install on
+  # the same host then layers a new admin user on top, accumulating
+  # privileged identities across rerun cycles.
+  rm -f /etc/sudoers.d/10-elchi-admin
+  if id "$admin_user" >/dev/null 2>&1; then
+    pkill -KILL -u "$admin_user" 2>/dev/null || true
+    sleep 1
+    if userdel -r "$admin_user" 2>/dev/null; then
+      log::info "removed admin user '${admin_user}' (and home directory)"
+    else
+      userdel "$admin_user" 2>/dev/null \
+        && log::info "removed admin user '${admin_user}' (home was already gone)" \
+        || log::warn "userdel ${admin_user} failed — manual cleanup may be needed"
+    fi
   fi
   # System trust store anchors
   rm -f /usr/local/share/ca-certificates/elchi-stack.crt \
@@ -308,6 +341,20 @@ purge_ssh_bootstrap() {
     grep -v 'elchi-stack@' /root/.ssh/authorized_keys > "$tmp" || true
     install -m 0600 -o root -g root "$tmp" /root/.ssh/authorized_keys
     rm -f "$tmp"
+  fi
+
+  # Defensive sweep: if purge_data couldn't resolve the admin user from
+  # orchestrator.env (e.g. operator deleted /etc/elchi manually before
+  # running uninstall), drop the default named account + sudoers rule.
+  # Custom-named admin accounts can't be discovered here without the
+  # env file, so this is best-effort fallback only.
+  rm -f /etc/sudoers.d/10-elchi-admin
+  if id elchi-cluster-admin >/dev/null 2>&1; then
+    pkill -KILL -u elchi-cluster-admin 2>/dev/null || true
+    sleep 1
+    userdel -r elchi-cluster-admin 2>/dev/null \
+      || userdel elchi-cluster-admin 2>/dev/null \
+      || true
   fi
 }
 

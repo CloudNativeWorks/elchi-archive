@@ -279,9 +279,9 @@
                 | sudo bash -s -- \
                 --nodes=$(hostname -I | awk '{print $1}') \
                 --main-address=elchi.example.com \
-                --ui-version=v1.1.3 \
+                --ui-version=v1.1.5 \
                 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2 \
-                --envoy-version=v1.37.0</div>
+                --envoy-version=v1.36.2</div>
 
             <h5>3-VM cluster, multi-version backend, key-based SSH</h5>
             <div class="stdl-cmd">curl -fsSL
@@ -290,10 +290,10 @@
                 --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
                 --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
                 --main-address=elchi.example.com \
-                --ui-version=v1.1.3 \
+                --ui-version=v1.1.5 \
                 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.35.3,elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.38.0
                 \
-                --envoy-version=v1.37.0</div>
+                --envoy-version=v1.36.2</div>
             <p class="info" style="margin-top: 8px;">
                 <strong>Variants &amp; replicas:</strong> each <code>--backend-version</code> entry is
                 ONE variant. The number of variants determines how many backend processes per node:
@@ -317,6 +317,16 @@
                 used only for that node's <code>ssh-copy-id</code> and is discarded immediately
                 after. M1 itself is local — no password prompt for it. Subsequent SSH (orchestration,
                 upgrades, uninstall) all use the generated key.
+            </p>
+            <p class="info">
+                <strong>Dedicated admin user (default-on).</strong> By default the bootstrap also
+                creates a key-only, passwordless-sudo admin user (<code>elchi-cluster-admin</code>)
+                on every node — including M1 — and locks all subsequent orchestration to that
+                identity. After the first install, the operator can lock root's password, disable
+                root SSH login, or delete the root account; <code>upgrade</code> and
+                <code>uninstall</code> keep working because they run as <code>elchi-cluster-admin</code>
+                with sudo. Override the name with <code>--admin-user=&lt;name&gt;</code> or opt out
+                with <code>--no-admin-user</code> (legacy: orchestration stays on root).
             </p>
 
             <h4>2. <code>install.sh</code> — full flag reference</h4>
@@ -347,6 +357,20 @@
                     <div class="desc">Mint an ed25519 key on M1 and copy it to every remote node. Prompts INTERACTIVELY
                         for each remote node's password (M1 skipped). Subsequent SSH uses the generated key; passwords
                         are discarded.</div>
+                    <code>--admin-user=&lt;name&gt;</code>
+                    <div class="desc"><strong>Default: <code>elchi-cluster-admin</code> (active by default).</strong>
+                        Dedicated admin user provisioned on every node during the first bootstrap. Runs
+                        <code>useradd</code> + <code>/etc/sudoers.d/10-elchi-admin</code> (NOPASSWD) + drops
+                        the cluster pubkey into the new user's <code>authorized_keys</code>, then flips the
+                        orchestrator's SSH user to it (persisted to <code>/etc/elchi/orchestrator.env</code>).
+                        After this, the cluster does NOT depend on the initial login user (root): the
+                        operator can rotate root's password, disable root SSH login, or even delete root
+                        entirely without breaking <code>upgrade</code> or <code>uninstall</code>.
+                        Idempotent on rerun.</div>
+                    <code>--no-admin-user</code>
+                    <div class="desc">Opt OUT of the default admin-user flow. Orchestration stays on the
+                        original login user (root). Use only when your environment forbids provisioning
+                        users (rare).</div>
                 </div>
             </details>
 
@@ -907,11 +931,24 @@
                     against the expected per-node set + M1 singletons + per-variant
                     control-plane ports from <code>ports.full.json</code>. Flags any
                     M1-only port that shows up on Mn (and vice-versa).</li>
-                <li><strong>Singleton service health</strong> (M1 only) —
+                <li><strong>Service health</strong> —
                     <code>mongod</code> ping via mongosh, <code>VictoriaMetrics</code>
                     <code>/api/v1/query</code>, <code>Grafana</code>
                     <code>/api/health</code>, <code>otelcol</code> health extension on
                     <code>:13133</code>.
+                </li>
+                <li><strong>CoreDNS GSLB ports</strong> — checks
+                    <code>53/tcp</code> + <code>53/udp</code> (DNS) and
+                    <code>:8053</code> (health/metrics) on every node where the
+                    plugin is enabled. Flags missing binds — typical cause is
+                    <code>systemd-resolved</code> still holding <code>:53</code>.
+                </li>
+                <li><strong>System tuning</strong> — sysctl drop-in present
+                    (<code>net.core.somaxconn</code>, <code>vm.max_map_count</code>,
+                    file-max), Transparent Huge Pages disabled
+                    (<code>elchi-thp.service</code>), swap behaviour
+                    (<code>vm.swappiness</code>), MongoDB <code>LimitNOFILE</code>
+                    drop-in, Envoy <code>LimitNOFILE</code> ≥ 1048576.
                 </li>
                 <li><strong>Envoy admin</strong> — <code>/ready</code>,
                     <code>/clusters</code> health flags for every cluster

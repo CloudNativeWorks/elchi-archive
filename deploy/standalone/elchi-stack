@@ -29,6 +29,10 @@ if [ -d "${ELCHI_INSTALLER_ROOT}/lib" ]; then
   . "${ELCHI_INSTALLER_ROOT}/lib/dirs.sh"
   # shellcheck source=lib/backend.sh
   . "${ELCHI_INSTALLER_ROOT}/lib/backend.sh"
+  # shellcheck source=lib/grafana.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/grafana.sh"
+  # shellcheck source=lib/systemd.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/systemd.sh"
 else
   printf 'elchi-stack: installer libs missing (looked under %s)\n' "$ELCHI_INSTALLER_ROOT" >&2
   exit 1
@@ -63,7 +67,7 @@ Usage:
                                        redistributing a fresh decryption key.
   elchi-stack show-secret <name>      print a stored credential
                                        (grafana | jwt | gslb | mongo-app | mongo-root | all)
-  elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart)
+  elchi-stack rotate-secret <name>    rotate JWT/GSLB/Grafana secret (cluster-wide restart for jwt/gslb)
   elchi-stack verify                  end-to-end cluster health check
                                        (registration logs, Envoy admin, listener ports)
 
@@ -362,12 +366,26 @@ cmd_show_secret() {
 }
 
 cmd_rotate_secret() {
-  local name=${1:?secret name required (one of: jwt, gslb, registry)}
+  local name=${1:?secret name required (one of: jwt, gslb, grafana)}
+
+  # Grafana is a special case: the new password must also be pushed
+  # into the live grafana DB via grafana-cli, and the rotation only
+  # affects M1 (Grafana is singleton). Handle it before the cluster-
+  # wide JWT/GSLB path so we don't touch every node.
+  if [ "$name" = "grafana" ]; then
+    local new_pwd
+    new_pwd="elchi-$(rand_hex 6)"
+    grafana::rotate_admin_password "$new_pwd"
+    log::info "new grafana admin password: ${new_pwd}"
+    log::info "  retrieve later via: elchi-stack show-secret grafana"
+    return 0
+  fi
+
   local key var
   case "$name" in
     jwt)  var=ELCHI_JWT_SECRET;  key=$(rand_hex 32) ;;
     gslb) var=ELCHI_GSLB_SECRET; key=$(rand_alnum 48) ;;
-    *) die "unknown secret: $name (use jwt|gslb)" ;;
+    *) die "unknown secret: $name (use jwt|gslb|grafana)" ;;
   esac
 
   log::info "rotating ${var}"

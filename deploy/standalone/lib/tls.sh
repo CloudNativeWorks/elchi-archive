@@ -33,69 +33,31 @@ tls::setup() {
 }
 
 tls::_self_signed() {
+  # Compute the desired SAN list up front — even on the reuse path —
+  # so we can compare against the live cert and catch drift introduced
+  # by `add-node` / changed --hostnames / changed --main-address.
+  local -a dns_dedup=() ips_dedup=()
+  tls::_compute_san_lists
+
   if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
-    log::info "reusing existing TLS material at ${ELCHI_TLS}"
-    tls::_finalize_perms
-    return
+    if tls::_san_drift "$TLS_CERT" dns_dedup ips_dedup; then
+      log::warn "TLS cert SAN list does not match current topology — regenerating"
+      log::info "old cert backed up to ${TLS_CERT}.bak (manual restore: cp -p ${TLS_CERT}.bak ${TLS_CERT})"
+      cp -p "$TLS_CERT" "${TLS_CERT}.bak"
+      cp -p "$TLS_KEY"  "${TLS_KEY}.bak"
+      # Fall through to regenerate. Note: keys are NOT preserved — the
+      # regen below mints a new ECDSA keypair. That is intentional: a
+      # SAN refresh on a self-signed cert is the right moment to also
+      # rotate key material.
+    else
+      log::info "reusing existing TLS material at ${ELCHI_TLS}"
+      tls::_finalize_perms
+      return
+    fi
   fi
 
   log::info "generating 10-year self-signed ECDSA-P256 certificate"
   require_cmd openssl
-
-  # Build SAN list. Always include localhost + loopbacks; add the
-  # main_address (DNS/IP), every host from the topology, and any extra
-  # hostnames the operator passed.
-  local -a dns=("localhost")
-  local -a ips=("127.0.0.1" "::1")
-
-  local main=${ELCHI_MAIN_ADDRESS:-}
-  if [ -n "$main" ]; then
-    if [[ "$main" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$main" =~ : ]]; then
-      ips+=("$main")
-    else
-      dns+=("$main")
-    fi
-  fi
-
-  # Walk topology nodes (if computed) and add their hosts.
-  if [ -f "${ELCHI_ETC}/nodes.list" ]; then
-    local h
-    while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      if [[ "$h" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$h" =~ : ]]; then
-        ips+=("$h")
-      else
-        dns+=("$h")
-      fi
-    done < "${ELCHI_ETC}/nodes.list"
-  fi
-
-  # Extra hostnames from --hostnames=a,b,c
-  if [ -n "${ELCHI_HOSTNAMES:-}" ]; then
-    local h
-    while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      if [[ "$h" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$h" =~ : ]]; then
-        ips+=("$h")
-      else
-        dns+=("$h")
-      fi
-    done < <(csv_split "${ELCHI_HOSTNAMES}")
-  fi
-
-  # Dedup
-  local -a dns_dedup=() ips_dedup=()
-  local seen=$'\n'
-  local x
-  for x in "${dns[@]}"; do
-    case "$seen" in *$'\n'"$x"$'\n'*) continue ;; esac
-    dns_dedup+=("$x"); seen="${seen}${x}"$'\n'
-  done
-  seen=$'\n'
-  for x in "${ips[@]}"; do
-    case "$seen" in *$'\n'"$x"$'\n'*) continue ;; esac
-    ips_dedup+=("$x"); seen="${seen}${x}"$'\n'
-  done
 
   # openssl req config — explicit SAN block keeps RHEL/Ubuntu's various
   # openssl versions all happy.
@@ -148,6 +110,100 @@ tls::_self_signed() {
 
   tls::_finalize_perms
   log::ok "wrote self-signed cert/key/ca to ${ELCHI_TLS} (10-year validity)"
+}
+
+# tls::_compute_san_lists — populate caller-scoped `dns_dedup` and
+# `ips_dedup` arrays with the SAN values we want on the current cert.
+# Caller must declare both arrays via `local -a` BEFORE calling — bash
+# scoping rules mean we mutate the nearest dynamic-scope array of that
+# name. This function is read-only with respect to the filesystem.
+tls::_compute_san_lists() {
+  local -a dns=("localhost")
+  local -a ips=("127.0.0.1" "::1")
+
+  local main=${ELCHI_MAIN_ADDRESS:-}
+  if [ -n "$main" ]; then
+    if [[ "$main" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$main" =~ : ]]; then
+      ips+=("$main")
+    else
+      dns+=("$main")
+    fi
+  fi
+
+  if [ -f "${ELCHI_ETC}/nodes.list" ]; then
+    local h
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      if [[ "$h" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$h" =~ : ]]; then
+        ips+=("$h")
+      else
+        dns+=("$h")
+      fi
+    done < "${ELCHI_ETC}/nodes.list"
+  fi
+
+  if [ -n "${ELCHI_HOSTNAMES:-}" ]; then
+    local h
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      if [[ "$h" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$h" =~ : ]]; then
+        ips+=("$h")
+      else
+        dns+=("$h")
+      fi
+    done < <(csv_split "${ELCHI_HOSTNAMES}")
+  fi
+
+  local seen=$'\n' x
+  dns_dedup=()
+  ips_dedup=()
+  for x in "${dns[@]}"; do
+    case "$seen" in *$'\n'"$x"$'\n'*) continue ;; esac
+    dns_dedup+=("$x"); seen="${seen}${x}"$'\n'
+  done
+  seen=$'\n'
+  for x in "${ips[@]}"; do
+    case "$seen" in *$'\n'"$x"$'\n'*) continue ;; esac
+    ips_dedup+=("$x"); seen="${seen}${x}"$'\n'
+  done
+}
+
+# tls::_san_drift <cert-path> <dns-array-name> <ips-array-name>
+# Returns 0 (drift) if the live cert's SAN list does not contain every
+# entry from the current expected DNS/IP arrays. Returns 1 (no drift)
+# otherwise. We deliberately do NOT flag drift in the other direction
+# (cert lists extras the topology doesn't have): an operator may have
+# manually pinned extra SANs, and a regen would silently strip them.
+# The "missing entry" direction is the real failure mode — a new node
+# can't be reached over HTTPS without its hostname/IP in the SAN list.
+tls::_san_drift() {
+  local cert=$1
+  local -n want_dns=$2
+  local -n want_ips=$3
+
+  command -v openssl >/dev/null 2>&1 || return 1
+
+  local san
+  san=$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null \
+        | tail -n +2 | tr -d ' \n')
+  [ -n "$san" ] || return 1
+
+  local needle
+  for needle in "${want_dns[@]}"; do
+    [ -n "$needle" ] || continue
+    case ",${san}," in
+      *",DNS:${needle},"*) ;;
+      *) return 0 ;;
+    esac
+  done
+  for needle in "${want_ips[@]}"; do
+    [ -n "$needle" ] || continue
+    case ",${san}," in
+      *",IP:${needle},"*|*",IPAddress:${needle},"*) ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 tls::_provided() {

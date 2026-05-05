@@ -60,6 +60,23 @@ ELCHI_SSH_PASSWORD=${ELCHI_SSH_PASSWORD:-}
 # prompted). After bootstrap, all subsequent SSH goes through the
 # generated key and each password is discarded immediately after use.
 ELCHI_SSH_BOOTSTRAP=${ELCHI_SSH_BOOTSTRAP:-0}
+# Dedicated admin user — default-ON. The bootstrap flow uses the
+# operator's high-privilege login (root or whoever) ONCE to create a
+# dedicated, key-only, passwordless-sudo user on every node, drops the
+# cluster pubkey into its authorized_keys, and then flips the
+# orchestrator's SSH user to that one. After this:
+#
+#   * the original login user (typically root) is no longer needed
+#   * the operator can rotate root's password, disable root SSH login,
+#     or even delete the root account entirely without breaking
+#     subsequent upgrade / uninstall / elchi-stack helper calls
+#   * the cluster runs on a single dedicated identity that only the
+#     orchestrator's private key (/root/.ssh/elchi_cluster) unlocks
+#
+# Opt out with --no-admin-user (legacy mode: orchestration stays on
+# the original login user). Override the name with --admin-user=NAME.
+ELCHI_ADMIN_USER=${ELCHI_ADMIN_USER:-elchi-cluster-admin}
+ELCHI_CREATE_ADMIN_USER=${ELCHI_CREATE_ADMIN_USER:-1}
 
 # Backend variants. Each entry is a full asset name, e.g.
 #   elchi-v1.2.0-v0.14.0-envoy1.35.3
@@ -195,6 +212,22 @@ Topology
                                        and is never prompted). Subsequent
                                        SSH uses the generated key; each
                                        password is discarded after use.
+  --admin-user=<name>                 dedicated admin user provisioned on
+                                       every node (default:
+                                       'elchi-cluster-admin'). The cluster
+                                       does NOT depend on the initial login
+                                       user (root) after this — the admin
+                                       user gets passwordless sudo + the
+                                       cluster key. Operator can later
+                                       rotate root's password, disable root
+                                       SSH login, or delete root entirely
+                                       without breaking upgrade/uninstall.
+                                       Idempotent on rerun.
+  --no-admin-user                     opt OUT of the default admin-user
+                                       flow. Orchestration stays on the
+                                       original login user (root). Use only
+                                       when your environment forbids
+                                       provisioning users (rare).
 
 Versioning
   --backend-version=<csv>             one or more elchi-backend variant tags;
@@ -333,6 +366,11 @@ parse_args() {
       --ssh-key=*)                            ELCHI_SSH_KEY=${1#*=} ;;
       --ssh-password=*)                       ELCHI_SSH_PASSWORD=${1#*=} ;;
       --ssh-bootstrap)                        ELCHI_SSH_BOOTSTRAP=1 ;;
+      --admin-user=*)                         ELCHI_ADMIN_USER=${1#*=} ;;
+      --no-admin-user)                        ELCHI_CREATE_ADMIN_USER=0; ELCHI_ADMIN_USER='' ;;
+      # Kept for backwards compatibility with early-access scripts; the
+      # admin user is now created by default. No-op if already on.
+      --create-admin-user)                    ELCHI_CREATE_ADMIN_USER=1 ;;
       # New canonical flag — one CSV list of full variant asset names.
       --backend-version=*)                    ELCHI_BACKEND_VARIANTS=${1#*=} ;;
       # Backwards-compatible alias.
@@ -1016,6 +1054,20 @@ orchestrate() {
     ssh::configure "$ELCHI_SSH_USER" "$ELCHI_SSH_PORT" "$ELCHI_SSH_KEY" ""
   fi
 
+  # Default-on admin user provisioning. bootstrap_keys_interactive
+  # already handled this when --ssh-bootstrap was active (each host
+  # probes-skip on rerun). For --ssh-key / --ssh-password / add-node /
+  # --non-interactive paths, this is the OUTSIDE-of-bootstrap entry
+  # point — without it the cluster would silently keep depending on
+  # the original login user (root). Operator opts out with
+  # --no-admin-user (sets ELCHI_CREATE_ADMIN_USER=0).
+  if [ "${ELCHI_CREATE_ADMIN_USER:-1}" = "1" ] && [ -n "${ELCHI_ADMIN_USER:-}" ]; then
+    if [ "$ELCHI_SSH_USER" != "$ELCHI_ADMIN_USER" ]; then
+      ssh::ensure_admin_user_everywhere \
+        "$ELCHI_SSH_USER" "$ELCHI_ADMIN_USER" "$ELCHI_SSH_PORT" "${hosts[@]}"
+    fi
+  fi
+
   log::info "verifying SSH access to ${#hosts[@]} node(s)"
   local idx=0 host
   for host in "${hosts[@]}"; do
@@ -1101,6 +1153,8 @@ orchestrate() {
 ELCHI_SSH_USER=${ELCHI_SSH_USER}
 ELCHI_SSH_PORT=${ELCHI_SSH_PORT}
 ELCHI_SSH_KEY=${ELCHI_SSH_KEY}
+ELCHI_ADMIN_USER=${ELCHI_ADMIN_USER:-}
+ELCHI_CREATE_ADMIN_USER=${ELCHI_CREATE_ADMIN_USER:-1}
 EOF
   chmod 0600 /etc/elchi/orchestrator.env.tmp
   mv -f /etc/elchi/orchestrator.env.tmp /etc/elchi/orchestrator.env

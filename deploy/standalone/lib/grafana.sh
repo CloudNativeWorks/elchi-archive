@@ -364,3 +364,39 @@ grafana::_reset_admin_password() {
     log::info "ensure admin login is '${user}' (manual rename via Grafana UI if needed)"
   fi
 }
+
+# grafana::rotate_admin_password <new-password>
+# Public entry point used by `elchi-stack rotate-secret grafana`. Updates
+# secrets.env in place, regenerates grafana.ini (so the operator-facing
+# config matches), and forces grafana-cli to reset the live DB-backed
+# admin password. Idempotent: re-running with the same password is a no-op
+# at the file layer and a fresh reset at the grafana-cli layer.
+grafana::rotate_admin_password() {
+  local new_pwd=${1:?new password required}
+  local secrets_file="${ELCHI_ETC}/secrets.env"
+  [ -f "$secrets_file" ] || die "secrets.env missing — cluster not installed?"
+
+  # Persist new password to secrets.env. Use a temp+mv to keep mode/ownership.
+  local tmp
+  tmp=$(mktemp)
+  if grep -qE '^ELCHI_GRAFANA_PASSWORD=' "$secrets_file"; then
+    sed "s|^ELCHI_GRAFANA_PASSWORD=.*|ELCHI_GRAFANA_PASSWORD=${new_pwd}|" "$secrets_file" > "$tmp"
+  else
+    cp "$secrets_file" "$tmp"
+    printf 'ELCHI_GRAFANA_PASSWORD=%s\n' "$new_pwd" >> "$tmp"
+  fi
+  install -m 0640 -o root -g "$ELCHI_GROUP" "$tmp" "$secrets_file"
+  rm -f "$tmp"
+
+  # Re-render grafana.ini so the file matches the new secret. This is
+  # cosmetic for re-runs (Grafana ignores admin_password after first DB
+  # init) but keeps the config inspectable + correct.
+  export ELCHI_GRAFANA_PASSWORD=$new_pwd
+  grafana::render_ini
+
+  # Now actually push the new password to the running Grafana DB.
+  grafana::_reset_admin_password
+
+  systemctl restart grafana-server 2>/dev/null || true
+  log::ok "Grafana admin password rotated"
+}

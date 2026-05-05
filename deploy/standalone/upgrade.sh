@@ -364,39 +364,15 @@ if ! "${cmd[@]}"; then
 fi
 
 # ----- pruning -----------------------------------------------------------
-# install.sh has now landed the new state on every node. Pruning is the
-# delta — stop+remove anything that's no longer in the active variant
-# set. We fan out via SSH and source lib/prune.sh on each node.
-if [ "${#REMOVED_VARIANTS[@]}" -gt 0 ]; then
-  log::step "Pruning ${#REMOVED_VARIANTS[@]} variant(s): ${REMOVED_VARIANTS[*]}"
-  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
-
-  PRUNE_CSV=$(IFS=, ; printf '%s' "${REMOVED_VARIANTS[*]}")
-
-  while IFS= read -r host; do
-    [ -z "$host" ] && continue
-    log::node "$host" "running prune for: ${PRUNE_CSV}"
-    ssh::run_sudo "$host" bash -c "
-      set -Eeuo pipefail
-      cd /opt/elchi-installer
-      . lib/common.sh
-      . lib/topology.sh
-      . lib/systemd.sh
-      . lib/prune.sh
-      IFS=',' read -ra V <<<'${PRUNE_CSV}'
-      for v in \"\${V[@]}\"; do
-        prune::variant \"\$v\"
-      done
-    " || die "prune on ${host} failed — leaving lock held; investigate journalctl + retry"
-  done < /etc/elchi/nodes.list
-
-  # After pruning every node, re-render M1's hosts block (the orphan
-  # entries for the removed variant disappear). install.sh's
-  # hosts::render_managed_block already ran with the NEW variant set,
-  # so this is a noop unless install.sh's block render somehow lagged
-  # the prune; harmless either way.
-  log::info "prune complete; /etc/hosts already reflects new variant set"
-fi
+# install.sh's per-node setup now invokes prune::stale_variants
+# (lib/prune.sh:139) before control_plane::create_instances. That pass
+# already drops any variant that exists on disk but isn't in the new
+# topology, so a separate fanout from upgrade.sh would just repeat
+# the same work — and partial-failure interleaving across two prune
+# passes made operator log diagnostics harder, not easier.
+#
+# REMOVED_VARIANTS is still computed above so the diff banner +
+# "removed:" line in the post-upgrade summary remain meaningful.
 
 # ----- post-upgrade health gate -----------------------------------------
 # Fan out verify::deep_health to every node. It checks systemd state +

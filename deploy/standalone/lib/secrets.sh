@@ -29,6 +29,19 @@ secrets::generate() {
 
   if [ -f "$out" ]; then
     log::info "${out} already exists — preserving (no rotation)"
+    # Common operator footgun: passing --grafana-password=NEW on a
+    # rerun expecting it to update the live admin password. We can't
+    # silently rotate (would surprise operators using secrets.env as
+    # a state file), but we also can't silently DROP — they'd have
+    # no way to know the flag was ignored. Emit an explicit pointer.
+    if [ -n "${ELCHI_GRAFANA_PASSWORD:-}" ]; then
+      local current
+      current=$(grep -E '^ELCHI_GRAFANA_PASSWORD=' "$out" 2>/dev/null | cut -d= -f2-)
+      if [ -n "$current" ] && [ "$current" != "$ELCHI_GRAFANA_PASSWORD" ]; then
+        log::warn "--grafana-password ignored on rerun (secrets.env preserved)"
+        log::warn "  use 'elchi-stack rotate-secret grafana' for live rotation"
+      fi
+    fi
   else
     log::info "minting fresh secrets"
     local jwt_secret mongo_app_pwd mongo_root_pwd gslb_secret grafana_pwd
