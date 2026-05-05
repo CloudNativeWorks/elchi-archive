@@ -14,49 +14,48 @@
 #   external           Operator-supplied URI. No mongo install on this host.
 #                      URI is written into secrets.env so backend reads it.
 #
-# The version is picked OS-aware (6.0/7.0/8.0) since Helm's pin to 6.0.12
-# is incompatible with the apt repo on Ubuntu 24.04 (noble — only 8.0).
+# MongoDB version policy: a single canonical major (8.0) across every
+# supported distro. The previous OS-aware auto-pick (Ubuntu 24 → 8.0,
+# Ubuntu 22 → 7.0, RHEL → 7.0) was a drift source: even when the
+# homogeneity preflight is green for the cluster's OS major, two
+# subtly-different point releases (e.g. Ubuntu 22.04.4 vs 22.04.5) could
+# still resolve to different mongo majors on a re-image. A 3-member RS
+# straddling mongo 7.0 + 8.0 fails wire-protocol negotiation and binary
+# upgrade ordering — the kind of failure that surfaces hours after
+# install when something restarts.
 #
-# Borrows heavily from certautopilot/deploy/standalone/lib/mongodb.sh —
-# the MongoDB packaging story is identical across both projects.
+# 8.0 is current-GA and has apt/yum repos for every distro this stack
+# supports per `preflight::_check_supported_version`:
+#   * Ubuntu 22.04 (jammy), 24.04 (noble)
+#   * Debian 12 (bookworm)
+#   * RHEL / Rocky / Alma / Oracle 9
+# Distros we deliberately do NOT support:
+#   * Debian 11 (bullseye), Ubuntu 20.04 (focal) — Mongo 8.0 isn't
+#     published for them, and we refuse to silently fall back to 7.0
+#     (silent fallback was the original drift bug).
+#   * RHEL / Rocky / Alma / Oracle 8 — Mongo 8.0 IS published for it
+#     but our systemd unit hardening (ProtectKernelLogs, ProtectClock,
+#     ProcSubset, …) requires systemd ≥ 247 which RHEL 8 ships older.
+# Operators on those releases have to update the OS first; this also
+# keeps the homogeneity preflight meaningful (no "M1 jammy gets 7.0,
+# M2 jammy gets 8.0 because operator rebuilt with an older repo
+# cache" surprise).
+#
+# Operator override remains via --mongo-version=X.Y for off-label
+# experiments; the apt/yum repo probe below fails fast if that combo
+# isn't actually published.
 
 # ----- version resolver ---------------------------------------------------
-# Auto-pick a major that has an apt/yum repo for the running OS. Operator
-# can override via --mongo-version=X.Y; we still warn on known-broken combos.
 mongodb::resolve_version() {
-  local explicit=${ELCHI_MONGO_VERSION:-auto}
-  if [ "$explicit" != "auto" ] && [ -n "$explicit" ]; then
+  local explicit=${ELCHI_MONGO_VERSION:-}
+  if [ -n "$explicit" ] && [ "$explicit" != "auto" ]; then
     ELCHI_MONGO_VERSION_RESOLVED=$explicit
     log::info "using operator-supplied MongoDB version: ${ELCHI_MONGO_VERSION_RESOLVED}"
-    return
+  else
+    ELCHI_MONGO_VERSION_RESOLVED=8.0
+    log::info "MongoDB ${ELCHI_MONGO_VERSION_RESOLVED} (cluster-wide canonical default; override with --mongo-version=X.Y)"
   fi
-
-  local picked
-  case "$ELCHI_OS_ID" in
-    ubuntu)
-      case "$ELCHI_OS_CODENAME" in
-        noble)        picked=8.0 ;;     # 24.04 → only 8.0 published
-        jammy)        picked=7.0 ;;     # 22.04
-        focal)        picked=7.0 ;;     # 20.04 (out of support but still works)
-        *)            picked=8.0 ;;
-      esac
-      ;;
-    debian)
-      case "$ELCHI_OS_CODENAME" in
-        bookworm|bullseye) picked=7.0 ;;
-        *)                 picked=8.0 ;;
-      esac
-      ;;
-    rhel|centos|rocky|almalinux|ol|oracle)
-      picked=7.0
-      ;;
-    *)
-      picked=7.0
-      ;;
-  esac
-  ELCHI_MONGO_VERSION_RESOLVED=$picked
   export ELCHI_MONGO_VERSION_RESOLVED
-  log::info "auto-picked MongoDB ${ELCHI_MONGO_VERSION_RESOLVED} for ${ELCHI_OS_ID} ${ELCHI_OS_VERSION}"
 }
 
 # ----- package install ---------------------------------------------------
@@ -85,7 +84,7 @@ mongodb::_install_debian() {
   # of an opaque "apt-get update" error 30 seconds later.
   local probe="https://repo.mongodb.org/apt/${ELCHI_OS_ID}/dists/${codename}/mongodb-org/${v}/Release"
   if ! curl -fsI --max-time 15 "$probe" >/dev/null 2>&1; then
-    die "MongoDB ${v} has no apt repo for ${ELCHI_OS_ID} ${codename}. Re-run with --mongo-version=8.0 or another supported major."
+    die "MongoDB ${v} has no apt repo for ${ELCHI_OS_ID} ${codename}. The default is 8.0 — if you reached here with an --mongo-version override, drop the flag (or use --mongo-version=8.0 explicitly)."
   fi
 
   mongodb::_clean_stale_debian_repos "$v"

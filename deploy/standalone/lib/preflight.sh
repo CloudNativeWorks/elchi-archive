@@ -52,8 +52,8 @@ preflight::_check_supported_version() {
       ;;
     debian)
       case "$major" in
-        11|12) ;;
-        *) die "Debian $ELCHI_OS_VERSION is not supported. Use 11 (bullseye) or 12 (bookworm)." ;;
+        12) ;;
+        *) die "Debian $ELCHI_OS_VERSION is not supported. Use 12 (bookworm). Debian 11 dropped — MongoDB 8.0 has no apt repo for bullseye." ;;
       esac
       ;;
     rhel|centos|rocky|almalinux|ol|oracle)
@@ -189,19 +189,28 @@ preflight::detect_arch() {
 }
 
 # ----- systemd gate ------------------------------------------------------
-# We rely on a pile of unit hardening directives (ProtectKernelLogs,
-# KeyringMode, ProtectClock, …) that landed in systemd 244 (Nov 2019).
-# Every distro on the supported matrix ships >=249, so 244 is a safe
-# floor. Failing here keeps `systemd-analyze verify` from rejecting our
-# units mid-install.
+# We rely on a pile of unit hardening directives. The newest one we use
+# (ProcSubset=) landed in systemd 247 (Nov 2020); the rest
+# (ProtectKernelLogs, ProtectClock, KeyringMode, ProtectHostname, …)
+# all landed earlier. Every distro on the supported matrix ships
+# systemd ≥ 247 (Ubuntu 22.04→249, Ubuntu 24.04→255, Debian 12→252,
+# RHEL/Rocky/Alma/Oracle 9→252). Failing here keeps `systemd-analyze
+# verify` from silently dropping our hardening directives mid-install.
 preflight::check_systemd() {
   [ -d /run/systemd/system ] || die "systemd is not the active init system — standalone install requires systemd"
   require_cmd systemctl
 
   local sd_ver
   sd_ver=$(systemctl --version 2>/dev/null | awk 'NR==1 {print $2}')
-  if [ -n "$sd_ver" ] && [ "$sd_ver" -lt 244 ] 2>/dev/null; then
-    die "systemd ${sd_ver} is too old — need 244+ for the unit hardening directives shipped with this release"
+  # 247 is the floor — that's when ProcSubset= landed (Nov 2020). Older
+  # systemd silently ignores it, which collapses one of our hardening
+  # layers without failing loudly. Every distro this stack supports
+  # (Ubuntu 22.04 → systemd 249, Ubuntu 24.04 → 255, Debian 12 → 252,
+  # RHEL/Rocky/Alma/Oracle 9 → 252) ships ≥ 247; the only realistic way
+  # to hit this gate is RHEL 8 (systemd 239), which is already rejected
+  # by preflight::_check_supported_version above.
+  if [ -n "$sd_ver" ] && [ "$sd_ver" -lt 247 ] 2>/dev/null; then
+    die "systemd ${sd_ver} is too old — need 247+ for the unit hardening directives (ProcSubset, ProtectClock, ProtectKernelLogs, …) used by this release"
   fi
 
   # journald is mandatory — backend services log straight to the journal

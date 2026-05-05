@@ -1257,8 +1257,16 @@
 
             <h4>11. Supported distros</h4>
             <p style="margin: 0; font-size: 14px; color: #656d76;">
-                Ubuntu 22.04 + 24.04 · Debian 11 + 12 · RHEL / Rocky / Alma / Oracle 9.
+                Ubuntu 22.04 + 24.04 · Debian 12 · RHEL / Rocky / Alma / Oracle 9.
                 amd64 only (arm64 lands when upstream backend ships arm64 binaries).
+            </p>
+            <p style="margin: 4px 0 0 0; font-size: 12px; color: #656d76;">
+                MongoDB 8.0 is the cluster-wide canonical default and pins the apt/yum floor — Debian 11 (bullseye)
+                and Ubuntu 20.04 (focal) are dropped because Mongo 8.0 has no apt repo for them.
+                RHEL / Rocky / Alma / Oracle 8 is dropped on a separate axis: the systemd hardening directives we
+                rely on (ProtectKernelLogs, ProtectClock, ProcSubset, …) require systemd ≥ 247, which RHEL 8 ships
+                older. The pre-flight homogeneity check refuses heterogeneous clusters (mixed major / family / arch)
+                upfront so version drift can't sneak in via a re-imaged node.
             </p>
 
             <p style="margin-top: 16px;">

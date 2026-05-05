@@ -256,7 +256,7 @@ Network / TLS
 Mongo
   --mongo=local|external              default: local
   --mongo-uri=<uri>                   --mongo=external
-  --mongo-version=auto|6.0|7.0|8.0    default: auto
+  --mongo-version=<X.Y>               default: 8.0 (single canonical major across cluster)
 
 VictoriaMetrics
   --vm=local|external                 default: local
@@ -1342,6 +1342,7 @@ _orchestrate_remote_phase() {
     --ui-version="$ELCHI_UI_VERSION" \
     --envoy-version="$ELCHI_ENVOY_VERSION" \
     --coredns-version="$ELCHI_COREDNS_VERSION" \
+    --mongo-version="$ELCHI_MONGO_VERSION" \
     --main-address="$ELCHI_MAIN_ADDRESS" \
     --port="$ELCHI_PORT" \
     --timezone="$ELCHI_TIMEZONE" \

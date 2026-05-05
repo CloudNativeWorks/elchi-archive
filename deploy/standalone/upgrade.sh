@@ -92,7 +92,7 @@ Version flags (omit to keep current):
   --ui-version=<vX.Y.Z>
   --envoy-version=<vX.Y.Z>
   --coredns-version=<vX.Y.Z>
-  --mongo-version=auto|6.0|7.0|8.0
+  --mongo-version=<X.Y>             default: 8.0
   --grafana-user=<user>
   --grafana-password=<pwd>
 
