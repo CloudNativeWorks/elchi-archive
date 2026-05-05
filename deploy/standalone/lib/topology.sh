@@ -249,6 +249,11 @@ topology::compute() {
     printf '  main_address: %s\n' "${ELCHI_MAIN_ADDRESS:-}"
     printf '  port: %d\n' "${ELCHI_PORT:-443}"
     printf '  install_gslb: %s\n' "${ELCHI_INSTALL_GSLB:-0}"
+    # Persist GSLB params so upgrade.sh / add-node can re-supply them
+    # without the operator typing --gslb-zone every rerun. The zone is
+    # the only operator-specific GSLB value (admin defaults from zone).
+    printf '  gslb_zone: %s\n' "${ELCHI_GSLB_ZONE:-elchi.local}"
+    printf '  gslb_admin_email: %s\n' "${ELCHI_GSLB_ADMIN_EMAIL:-}"
     printf 'versions:\n'
     printf '  ui: %s\n' "${ELCHI_UI_VERSION:-}"
     printf '  envoy: %s\n' "${ELCHI_ENVOY_VERSION:-}"

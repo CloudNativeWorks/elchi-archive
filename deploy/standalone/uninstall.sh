@@ -71,9 +71,9 @@ while [ "$#" -gt 0 ]; do
     --purge-all)          PURGE=1; PURGE_MONGO=1; PURGE_VM=1; PURGE_GRAFANA=1; PURGE_NGINX=1 ;;
     --all-nodes)          ALL_NODES=1 ;;
     --continue-on-error)  CONTINUE_ON_ERROR=1 ;;
-    --ssh-user=*)         ELCHI_SSH_USER=${1#*=} ;;
-    --ssh-key=*)          ELCHI_SSH_KEY=${1#*=} ;;
-    --ssh-port=*)         ELCHI_SSH_PORT=${1#*=} ;;
+    --ssh-user=*)         ELCHI_SSH_USER=${1#*=}; _ELCHI_SSH_USER_EXPLICIT=1 ;;
+    --ssh-key=*)          ELCHI_SSH_KEY=${1#*=};  _ELCHI_SSH_KEY_EXPLICIT=1  ;;
+    --ssh-port=*)         ELCHI_SSH_PORT=${1#*=}; _ELCHI_SSH_PORT_EXPLICIT=1 ;;
     --yes-i-mean-it)      CONFIRMED=1 ;;
     -h|--help)
       sed -n '2,30p' "$0"

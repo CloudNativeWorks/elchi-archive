@@ -149,9 +149,9 @@ while [ "$#" -gt 0 ]; do
     --grafana-password=*)                 NEW_GRAFANA_PASSWORD=${1#*=} ;;
     --prune-version=*)                    PRUNE_VERSIONS="${PRUNE_VERSIONS}${PRUNE_VERSIONS:+,}${1#*=}" ;;
     --prune-missing)                      PRUNE_MISSING=1 ;;
-    --ssh-user=*)                         ELCHI_SSH_USER=${1#*=} ;;
-    --ssh-key=*)                          ELCHI_SSH_KEY=${1#*=} ;;
-    --ssh-port=*)                         ELCHI_SSH_PORT=${1#*=} ;;
+    --ssh-user=*)                         ELCHI_SSH_USER=${1#*=}; _ELCHI_SSH_USER_EXPLICIT=1 ;;
+    --ssh-key=*)                          ELCHI_SSH_KEY=${1#*=};  _ELCHI_SSH_KEY_EXPLICIT=1  ;;
+    --ssh-port=*)                         ELCHI_SSH_PORT=${1#*=}; _ELCHI_SSH_PORT_EXPLICIT=1 ;;
     --skip-health-gate)                   SKIP_HEALTH_GATE=1 ;;
     -h|--help)                            print_usage; exit 0 ;;
     *) printf 'unknown flag: %s\n' "$1" >&2; print_usage; exit 2 ;;
@@ -334,6 +334,8 @@ NODES=$(cat /etc/elchi/nodes.list 2>/dev/null | paste -sd, -)
 MAIN_ADDR=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 PORT=$(awk     '/^cluster:/{f=1; next} f && /^[[:space:]]+port:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 INSTALL_GSLB=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+install_gslb:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+GSLB_ZONE=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_zone:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+GSLB_ADMIN_EMAIL=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_admin_email:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 
 # Compose the union explicitly so order is deterministic: kept first
 # (preserves existing port allocations), then added.
@@ -353,6 +355,8 @@ cmd=(bash "${SCRIPT_DIR}/install.sh"
 [ -n "$NEW_GRAFANA_USER" ]       && cmd+=(--grafana-user="$NEW_GRAFANA_USER")
 [ -n "$NEW_GRAFANA_PASSWORD" ]   && cmd+=(--grafana-password="$NEW_GRAFANA_PASSWORD")
 [ "$INSTALL_GSLB" = "1" ]        && cmd+=(--gslb)
+[ -n "$GSLB_ZONE" ]              && cmd+=(--gslb-zone="$GSLB_ZONE")
+[ -n "$GSLB_ADMIN_EMAIL" ]       && cmd+=(--gslb-admin-email="$GSLB_ADMIN_EMAIL")
 [ -n "${ELCHI_SSH_USER:-}" ]     && cmd+=(--ssh-user="$ELCHI_SSH_USER")
 [ -n "${ELCHI_SSH_KEY:-}" ]      && cmd+=(--ssh-key="$ELCHI_SSH_KEY")
 [ -n "${ELCHI_SSH_PORT:-}" ]     && cmd+=(--ssh-port="$ELCHI_SSH_PORT")

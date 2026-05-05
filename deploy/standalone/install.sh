@@ -189,6 +189,7 @@ ELCHI_NODE_HOST=${ELCHI_NODE_HOST:-}
 ELCHI_BUNDLE_PATH=${ELCHI_BUNDLE_PATH:-}
 ELCHI_BUNDLE_KEY=${ELCHI_BUNDLE_KEY:-}
 ELCHI_SKIP_ORCHESTRATION=${ELCHI_SKIP_ORCHESTRATION:-0}
+ELCHI_INSTALL_PHASE=${ELCHI_INSTALL_PHASE:-all}
 
 # ----- usage -------------------------------------------------------------
 print_usage() {
@@ -364,8 +365,8 @@ parse_args() {
     case "$1" in
       --nodes=*)                              ELCHI_NODES=${1#*=} ;;
       --ssh-user=*)                           ELCHI_SSH_USER=${1#*=}; _ELCHI_SSH_USER_EXPLICIT=1 ;;
-      --ssh-port=*)                           ELCHI_SSH_PORT=${1#*=} ;;
-      --ssh-key=*)                            ELCHI_SSH_KEY=${1#*=} ;;
+      --ssh-port=*)                           ELCHI_SSH_PORT=${1#*=}; _ELCHI_SSH_PORT_EXPLICIT=1 ;;
+      --ssh-key=*)                            ELCHI_SSH_KEY=${1#*=};  _ELCHI_SSH_KEY_EXPLICIT=1  ;;
       --ssh-password=*)                       ELCHI_SSH_PASSWORD=${1#*=} ;;
       --ssh-bootstrap)                        ELCHI_SSH_BOOTSTRAP=1 ;;
       --admin-user=*)                         ELCHI_ADMIN_USER=${1#*=} ;;
@@ -442,6 +443,7 @@ parse_args() {
       --keep-bundle)                          ELCHI_KEEP_BUNDLE=1 ;;
       --bundle-key-out=*)                     ELCHI_BUNDLE_KEY_OUT=${1#*=} ;;
       --skip-orchestration)                   ELCHI_SKIP_ORCHESTRATION=1 ;;
+      --install-phase=*)                      ELCHI_INSTALL_PHASE=${1#*=} ;;
       --node-index=*)                         ELCHI_NODE_INDEX=${1#*=} ;;
       --bundle=*)                             ELCHI_BUNDLE_PATH=${1#*=} ;;
       --bundle-key=*)                         ELCHI_BUNDLE_KEY=${1#*=} ;;
@@ -625,7 +627,56 @@ install_helpers() {
 }
 
 # ----- local install (per node) -----------------------------------------
+## Two-phase install
+##
+## A 3-node cluster has a chicken-and-egg between mongo RS initiation and
+## the services that connect to it: rs.initiate() needs every member's
+## mongod to be reachable, but registry/control-plane need a functional
+## RS primary the moment they start. The professional MongoDB pattern
+## solves this by sequencing the work in two clean phases:
+##
+##   Phase 1 (RS-independent infrastructure)
+##     preflight, bundle/secrets/TLS, mongo (mongod up, NO RS),
+##     VictoriaMetrics + Grafana (M1), OTEL, backend binaries + configs,
+##     UI bundle, nginx, envoy
+##
+##   ── orchestrator: rs.initiate(full member list) + wait for converge ──
+##
+##   Phase 2 (RS-dependent services)
+##     registry, controller, control-plane, coredns, firewall, watchdog,
+##     verify::wait
+##
+## `local_install` dispatches to the requested phase via the
+## `--install-phase` flag (`ELCHI_INSTALL_PHASE`). `all` runs both
+## back-to-back (used by 1- and 2-node clusters where there's no RS to
+## initiate, so the gate between phases is a no-op).
+
 local_install() {
+  local phase=${ELCHI_INSTALL_PHASE:-all}
+  case "$phase" in
+    1)   local_install_phase1 ;;
+    2)   local_install_phase2 ;;
+    all) local_install_phase1; local_install_phase2 ;;
+    *)   die "unknown --install-phase: ${phase} (use 1, 2, or all)" ;;
+  esac
+}
+
+# Shared helper — figure out which node we are, export the index/host
+# pair both phases need. Idempotent: safe to call from each phase.
+_local_install_resolve_node() {
+  local idx=${ELCHI_NODE_INDEX:-1}
+  local host=${ELCHI_NODE_HOST:-}
+  if [ -z "$host" ]; then
+    host=$(awk -v i="$idx" '
+      $0 ~ "^  - index: "i"$" {f=1; next}
+      f && /^    host:/ {print $2; exit}
+    ' "${ELCHI_ETC}/topology.full.yaml")
+  fi
+  : "${host:?could not determine this nodes host from topology}"
+  export ELCHI_NODE_INDEX=$idx ELCHI_NODE_HOST=$host
+}
+
+local_install_phase1() {
   preflight::run
 
   user::ensure
@@ -634,10 +685,7 @@ local_install() {
   # Stage the operator helper + uninstall script BEFORE any service
   # actually starts. If a later step (registry / envoy / control-plane)
   # crashes mid-install, the operator can still recover with
-  # `/opt/elchi-installer/uninstall.sh` and `/usr/local/bin/elchi-stack`
-  # — these used to live at the END of local_install which meant a
-  # partial install left the operator with no recovery path beyond
-  # re-downloading the tarball manually.
+  # `/opt/elchi-installer/uninstall.sh` and `/usr/local/bin/elchi-stack`.
   install_helpers
 
   if [ "$ELCHI_SKIP_ORCHESTRATION" = "1" ]; then
@@ -684,30 +732,17 @@ local_install() {
   # a real DNS server.
   hosts::render_managed_block
 
-  # ----- per-node component selection from topology ----------------------
-  # Read this node's row from topology.full.yaml. Fields:
-  #   runs_mongo, runs_registry, runs_otel, runs_victoriametrics,
-  #   runs_grafana, runs_coredns, runs_envoy, runs_nginx_ui,
-  #   runs_controller, runs_control_plane
-  local idx=${ELCHI_NODE_INDEX:-1}
-  local host=${ELCHI_NODE_HOST:-}
-  if [ -z "$host" ]; then
-    # Determine our host from topology + local IPs.
-    host=$(awk -v i="$idx" '
-      $0 ~ "^  - index: "i"$" {f=1; next}
-      f && /^    host:/ {print $2; exit}
-    ' "${ELCHI_ETC}/topology.full.yaml")
-  fi
-  : "${host:?could not determine this nodes host from topology}"
-  export ELCHI_NODE_INDEX=$idx ELCHI_NODE_HOST=$host
+  _local_install_resolve_node
 
   local cluster_size
   cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
 
-  # Mongo — variant per topology row + cluster size.
+  # Mongo — bring mongod up with the RS name set, but DO NOT initiate
+  # the RS here. The orchestrator does that between phase 1 and phase 2,
+  # once every member's mongod is reachable.
   if [ "$ELCHI_MONGO_MODE" = "external" ]; then
     log::info "skipping mongo install (--mongo=external)"
-  elif topology::is_mongo_node "$idx" "$cluster_size"; then
+  elif topology::is_mongo_node "$ELCHI_NODE_INDEX" "$cluster_size"; then
     if [ "$cluster_size" -ge 3 ] 2>/dev/null; then
       mongodb::setup_replica_member
     else
@@ -715,61 +750,63 @@ local_install() {
     fi
   fi
 
-  # M1-only storage services (VM TSDB + Grafana UI singletons).
-  if [ "$idx" = "1" ]; then
+  # M1-only storage tier (VictoriaMetrics + Grafana). These are
+  # singletons and don't depend on the RS — they read/write their own
+  # local stores.
+  if [ "$ELCHI_NODE_INDEX" = "1" ]; then
     victoriametrics::setup
     grafana::setup
   fi
 
-  # OTEL collector on EVERY node — local sink for that node's envoy
-  # /opentelemetry route. Exporter writes to M1 VictoriaMetrics (or
-  # external VM if --vm=external). HA: M1 OTEL down doesn't break
-  # telemetry on M2/M3 since each node owns its own collector.
+  # OTEL collector on EVERY node — local sink for envoy + registry
+  # metrics scrape; remote-writes to VM on M1.
   otel::setup
 
-  # Backend binaries (every node)
+  # Backend binaries + per-version configs. Files only — no service
+  # starts here (registry/controller/control-plane all in phase 2).
   backend::install_binaries
   backend::render_common_env
   backend::render_config_prod_yaml
 
-  # Registry runs on every node. The instances coordinate among
-  # themselves (leader / follower) and Envoy uses a gRPC health check
-  # on the registry-cluster to send ext_proc traffic only to whichever
-  # one currently reports SERVING.
+  # Static assets (UI bundle + nginx vhost). nginx will start serving
+  # static content but the UI's /api calls won't return 200 until
+  # phase 2 brings up envoy's upstreams (controller).
+  ui::install
+  nginx::setup
+
+  # Envoy on every node — bootstrap is peer-aware (full mesh). Envoy
+  # itself doesn't depend on mongo; its upstream clusters
+  # (registry/controller) come up in phase 2 and Envoy retries until
+  # they're healthy.
+  envoy::setup
+}
+
+local_install_phase2() {
+  _local_install_resolve_node
+
+  # Registry runs on every node — connects to the RS for leader
+  # election + xDS snapshot storage. By the time we're here the
+  # orchestrator has already finished rs.initiate() and waited for
+  # convergence, so this connects against a fully formed primary.
   registry::setup
 
-  # Controller + control-plane on every node.
-  # Stale-variant prune runs FIRST: re-installing with a different
+  # Controller + control-plane.
+  # Stale-variant prune FIRST: re-installing with a different
   # backend_variants set previously left the old variant's systemd
   # template unit on remote nodes; the new variant's @0 then collided
-  # on :1990 and crashlooped. prune::stale_variants reads the current
-  # topology, walks /etc/elchi/<variant>/ + /etc/systemd/system/
-  # elchi-control-plane-*@.service, and removes anything not in the
-  # active set before we render the new units.
+  # on :1990 and crashlooped.
   controller::create_instances
   prune::stale_variants
   control_plane::create_instances
 
-  # nginx + UI on every node
-  ui::install
-  nginx::setup
-
-  # Envoy on every node — bootstrap is identical (peer-aware, full mesh).
-  envoy::setup
-
-  # GSLB CoreDNS — every node when enabled.
+  # GSLB CoreDNS — its plugin polls the backend's /dns/snapshot
+  # endpoint, so it depends on controller (and therefore on the RS).
   coredns::setup
 
-  # firewall + verify (install_helpers ran early in local_install).
+  # firewall + watchdog + final verify gate.
   firewall::open
   watchdog::install
   verify::wait
-
-  # M1 finishes the replica set initiate after every member is up.
-  if [ "$idx" = "1" ] && [ "$ELCHI_MONGO_MODE" != "external" ] \
-     && [ "$cluster_size" -ge 3 ] 2>/dev/null; then
-    mongodb::initiate_replica_set
-  fi
 }
 
 # install_bundle_key — return the cluster's bundle decryption key,
@@ -1173,13 +1210,23 @@ EOF
     log::ok "dry-run complete. Inspect rendered configs at: ${ELCHI_ETC:-/etc/elchi}"
     return 0
   fi
-  local_install
 
-  # Build + ship bundle to remote nodes.
+  local cluster_size
+  cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
+
+  # ─── Phase 1: bring up infrastructure on every node ────────────────────
+  # M1 first (synchronous), then build the bundle + ship/install on each
+  # remote with --install-phase=1. After this loop, every cluster
+  # member has its mongod up (no RS yet) plus VM/Grafana/OTEL/binaries/
+  # nginx/envoy. Phase 2 services (registry/control-plane) intentionally
+  # NOT started yet for 3+ node clusters — they'd race against an
+  # unformed RS.
+  ELCHI_INSTALL_PHASE=1 local_install
+
+  local bundle_enc='' bundle_key='' stage_inst=''
   if [ "${#hosts[@]}" -gt 1 ]; then
     local bundle_clear=/tmp/elchi-bundle-$$.tar.gz
-    local bundle_enc=/tmp/elchi-bundle-$$.tar.gz.enc
-    local bundle_key
+    bundle_enc=/tmp/elchi-bundle-$$.tar.gz.enc
     # Storage for the persisted bundle key. We try, in order:
     #
     #   1. systemd-creds encrypt — TPM2-backed if available, else host-key.
@@ -1202,11 +1249,11 @@ EOF
       log::info "(supply this with --bundle-key=... if you ever rerun --skip-orchestration)"
     fi
 
-    # Stage the installer tree under /tmp/elchi-installer for SCP.
-    local stage_inst
+    # Stage the installer tree under /tmp for ssh::scp_dir.
     stage_inst=$(mktemp -d)
     cp -a "${SCRIPT_DIR}/." "$stage_inst/"
 
+    # Phase 1 fanout — every remote ends up with mongod up.
     idx=1
     for host in "${hosts[@]}"; do
       if [ "$idx" = "1" ]; then
@@ -1214,10 +1261,6 @@ EOF
         continue
       fi
       log::node "$host" "preparing remote install"
-      # ssh::scp_dir handles parent-dir creation and dst-replace
-      # semantics; pre-mkdir-ing /opt/elchi-installer here would cause
-      # scp -r to insert the source INSIDE the existing dst (placing
-      # files at /opt/elchi-installer/tmp.XXXXXX/install.sh).
       ssh::scp_dir "$stage_inst" "$host" /opt/elchi-installer
       # Land the bundle inside the just-created installer dir instead
       # of /tmp — the path is persistent (survives reboots and
@@ -1225,28 +1268,39 @@ EOF
       # state), and goes away when uninstall purges /opt/elchi-installer.
       ssh::scp     "$bundle_enc" "$host" /opt/elchi-installer/.bundle.tar.gz.enc
 
-      log::node "$host" "running remote install (this may take several minutes)"
-      ssh::run_sudo "$host" bash /opt/elchi-installer/install.sh \
-        --skip-orchestration \
-        --node-index="$idx" \
-        --nodes="$ELCHI_NODES" \
-        --bundle=/opt/elchi-installer/.bundle.tar.gz.enc \
-        --bundle-key="$bundle_key" \
-        --backend-version="$ELCHI_BACKEND_VARIANTS" \
-        --ui-version="$ELCHI_UI_VERSION" \
-        --envoy-version="$ELCHI_ENVOY_VERSION" \
-        --coredns-version="$ELCHI_COREDNS_VERSION" \
-        --main-address="$ELCHI_MAIN_ADDRESS" \
-        --port="$ELCHI_PORT" \
-        --timezone="$ELCHI_TIMEZONE" \
-        $( [ "$ELCHI_INSTALL_GSLB" = "1" ] && echo --gslb ) \
-        ${ELCHI_GSLB_ZONE:+--gslb-zone="$ELCHI_GSLB_ZONE"} \
-        ${ELCHI_GSLB_ADMIN_EMAIL:+--gslb-admin-email="$ELCHI_GSLB_ADMIN_EMAIL"} \
-        $( [ "$ELCHI_NO_FIREWALL" = "1" ] && echo --no-firewall ) \
-        $( [ "$ELCHI_UPGRADE_OS" = "0" ] && echo --no-upgrade-os ) \
-        --non-interactive \
-        || die "remote install failed on ${host}"
+      log::node "$host" "phase 1: infrastructure (this may take several minutes)"
+      _orchestrate_remote_phase "$host" "$idx" "$bundle_key" 1 \
+        || die "remote install (phase 1) failed on ${host}"
+      idx=$(( idx + 1 ))
+    done
+  fi
 
+  # ─── Mid-orchestration gate: initialize the mongo replica set ──────────
+  # Every member's mongod is up at this point. rs.initiate() with the
+  # FULL member list, then wait for 1 PRIMARY + 2 SECONDARY before
+  # any service that talks to the RS is started.
+  if [ "$ELCHI_MONGO_MODE" != "external" ] && [ "$cluster_size" -ge 3 ] 2>/dev/null; then
+    mongodb::initiate_replica_set
+  fi
+
+  # ─── Phase 2: bring up services that depend on the RS ──────────────────
+  # M1 phase 2 first so the registry/controller it'll soon advertise
+  # via /etc/hosts to peers is already healthy when M2/M3 phase 2
+  # connects in. (Either order works in practice — registry instances
+  # are peer-equivalent and self-register — but this gives slightly
+  # cleaner logs on the remote side.)
+  ELCHI_INSTALL_PHASE=2 local_install
+
+  if [ "${#hosts[@]}" -gt 1 ]; then
+    idx=1
+    for host in "${hosts[@]}"; do
+      if [ "$idx" = "1" ]; then
+        idx=$(( idx + 1 ))
+        continue
+      fi
+      log::node "$host" "phase 2: services"
+      _orchestrate_remote_phase "$host" "$idx" "$bundle_key" 2 \
+        || die "remote install (phase 2) failed on ${host}"
       log::ok "${host}: install complete"
       idx=$(( idx + 1 ))
     done
@@ -1258,17 +1312,36 @@ EOF
     rm -rf "$stage_inst"
   fi
 
-  # Initiate the mongo replica set AFTER every node's mongod is running.
-  local cluster_size
-  cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
-  if [ "$ELCHI_MONGO_MODE" != "external" ] && [ "$cluster_size" -ge 3 ] 2>/dev/null; then
-    mongodb::initiate_replica_set
-    # Restart Envoy on every node so backend's MONGODB_HOSTS pickup of
-    # the now-functional RS triggers a fresh connection cycle. Optional —
-    # backend retries on connect — but quicker convergence.
-  fi
-
   verify::print_summary
+}
+
+# _orchestrate_remote_phase <host> <node-index> <bundle-key> <phase>
+# Helper used by orchestrate() to run install.sh on a remote node for a
+# specific phase. Lifted into its own function so the phase 1 and phase 2
+# fanouts share one canonical command-line — keeps the two flag lists
+# from drifting out of sync on future flag additions.
+_orchestrate_remote_phase() {
+  local host=$1 idx=$2 bundle_key=$3 phase=$4
+  ssh::run_sudo "$host" bash /opt/elchi-installer/install.sh \
+    --skip-orchestration \
+    --install-phase="$phase" \
+    --node-index="$idx" \
+    --nodes="$ELCHI_NODES" \
+    --bundle=/opt/elchi-installer/.bundle.tar.gz.enc \
+    --bundle-key="$bundle_key" \
+    --backend-version="$ELCHI_BACKEND_VARIANTS" \
+    --ui-version="$ELCHI_UI_VERSION" \
+    --envoy-version="$ELCHI_ENVOY_VERSION" \
+    --coredns-version="$ELCHI_COREDNS_VERSION" \
+    --main-address="$ELCHI_MAIN_ADDRESS" \
+    --port="$ELCHI_PORT" \
+    --timezone="$ELCHI_TIMEZONE" \
+    $( [ "$ELCHI_INSTALL_GSLB" = "1" ] && echo --gslb ) \
+    ${ELCHI_GSLB_ZONE:+--gslb-zone="$ELCHI_GSLB_ZONE"} \
+    ${ELCHI_GSLB_ADMIN_EMAIL:+--gslb-admin-email="$ELCHI_GSLB_ADMIN_EMAIL"} \
+    $( [ "$ELCHI_NO_FIREWALL" = "1" ] && echo --no-firewall ) \
+    $( [ "$ELCHI_UPGRADE_OS" = "0" ] && echo --no-upgrade-os ) \
+    --non-interactive
 }
 
 # ----- entry point -------------------------------------------------------

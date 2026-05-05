@@ -81,11 +81,18 @@ ssh::configure() {
 # subsequent upgrade.sh / uninstall.sh runs don't have to re-prompt for
 # --ssh-user / --ssh-key / --ssh-port.
 #
-# Precedence: CLI flag > env var already set in this process > persisted
-# file > built-in default. Anything already non-empty is preserved, so a
-# fresh `--ssh-user=newuser` always wins. Password is intentionally NOT
-# persisted (key-based auth only after install — `--ssh-bootstrap`
-# distributed the key in the first place).
+# Precedence: explicit CLI flag > persisted file > built-in default.
+# Each variable has a companion `_ELCHI_<NAME>_EXPLICIT` flag that script
+# CLI parsers set to 1 when they see the matching --ssh-* option; only
+# then do we keep the operator's choice over the persisted value.
+# Without this flag, any non-empty current value would block the
+# persisted load — which used to silently break uninstall/upgrade after
+# admin-user bootstrap, because `lib/ssh.sh:18`'s `:-root` default kicks
+# in at source time and would forever pin SSH to root, ignoring the
+# `elchi-cluster-admin` value persisted in orchestrator.env.
+#
+# Password is intentionally NOT persisted (key-based auth only after
+# install — `--ssh-bootstrap` distributed the key in the first place).
 #
 # Parsing is line-by-line `KEY=VALUE` instead of `source` to keep the
 # loader immune to accidental shell metacharacters in the file (the file
@@ -100,9 +107,15 @@ ssh::load_persisted_creds() {
     # add them, but be lenient for hand-edited files).
     v=${v#\"}; v=${v%\"}
     case "$k" in
-      ELCHI_SSH_USER) [ -z "${ELCHI_SSH_USER:-}" ] && ELCHI_SSH_USER=$v ;;
-      ELCHI_SSH_KEY)  [ -z "${ELCHI_SSH_KEY:-}"  ] && ELCHI_SSH_KEY=$v  ;;
-      ELCHI_SSH_PORT) [ -z "${ELCHI_SSH_PORT:-}" ] && ELCHI_SSH_PORT=$v ;;
+      ELCHI_SSH_USER)
+        [ "${_ELCHI_SSH_USER_EXPLICIT:-0}" = "1" ] || ELCHI_SSH_USER=$v
+        ;;
+      ELCHI_SSH_KEY)
+        [ "${_ELCHI_SSH_KEY_EXPLICIT:-0}" = "1" ] || ELCHI_SSH_KEY=$v
+        ;;
+      ELCHI_SSH_PORT)
+        [ "${_ELCHI_SSH_PORT_EXPLICIT:-0}" = "1" ] || ELCHI_SSH_PORT=$v
+        ;;
     esac
   done < "$f"
 }

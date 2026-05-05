@@ -326,66 +326,96 @@ mongodb::bootstrap_auth() {
 }
 
 # ----- replica-set initiate (M1-only) ------------------------------------
-# Called AFTER M2 + M3 have started their mongod instances with the
-# replSet flag. M1 issues rs.initiate() with the full member list.
+# Called BETWEEN install phase 1 (mongods up everywhere) and phase 2
+# (services that talk to the RS). Issues a single rs.initiate() with the
+# full member list — the standard MongoDB pattern — then waits until M1
+# is PRIMARY and M2 + M3 are SECONDARY. By the time this returns, the RS
+# is fully formed and any client connecting with `?replicaSet=elchi-rs`
+# sees a healthy 3-member topology.
+#
+# Idempotent: rerunning when the RS is already initialized is a no-op.
 mongodb::initiate_replica_set() {
   local size
   size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
   if [ "$size" -lt 3 ] 2>/dev/null; then
-    log::info "cluster size ${size} — not running rs.initiate()"
+    log::info "cluster size ${size} — standalone mongo, no RS to initiate"
     return 0
   fi
 
   log::step "Initiating mongo replica set (3 members)"
 
-  # Wait for nodes 2 and 3 to become reachable on 27017. M2/M3's install
-  # may still be finishing on slow networks.
-  local n2 n3
+  local n1 n2 n3
+  n1=$(awk '/^  - index: 1/{f=1; next} f && /^    host:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
   n2=$(awk '/^  - index: 2/{f=1; next} f && /^    host:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
   n3=$(awk '/^  - index: 3/{f=1; next} f && /^    host:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
-  log::info "waiting for ${n2}:27017 and ${n3}:27017"
-  wait_for_tcp "$n2" 27017 120 || die "node 2 (${n2}:27017) not reachable"
-  wait_for_tcp "$n3" 27017 120 || die "node 3 (${n3}:27017) not reachable"
 
-  local n1
-  n1=$(awk '/^  - index: 1/{f=1; next} f && /^    host:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
+  # Phase 1 of the orchestration is supposed to have started mongod on
+  # every member already. Re-verify here as a safety net before issuing
+  # rs.initiate — the alternative is rs.initiate succeeding but failing
+  # the implicit majority count when secondaries don't show up, which
+  # leaves the RS in a half-initialized state that's painful to debug.
+  log::info "verifying all mongods are reachable"
+  wait_for_tcp "$n1" 27017 60 || die "M1 (${n1}:27017) mongod not reachable"
+  wait_for_tcp "$n2" 27017 120 || die "M2 (${n2}:27017) mongod not reachable"
+  wait_for_tcp "$n3" 27017 120 || die "M3 (${n3}:27017) mongod not reachable"
 
-  # Already initiated? (Idempotent rerun.)
+  # Idempotent check: is the RS already initialized?
   local rs_state
   rs_state=$(mongodb::eval_root "
     try {
       var s = rs.status();
       print('STATE:' + s.myState);
-      print('EVAL_OK');
     } catch (e) {
       if (e.codeName === 'NotYetInitialized') {
         print('STATE:NEW');
-        print('EVAL_OK');
       } else {
         print('STATE:ERR:' + e.message);
-        print('EVAL_OK');
       }
     }
+    print('EVAL_OK');
   " 2>&1 || true)
 
   if printf '%s' "$rs_state" | grep -q 'STATE:1\|STATE:2'; then
-    log::info "replica set already initialized"
-    return 0
+    log::info "replica set already initialized — verifying member health"
+  else
+    mongodb::eval_root "
+      rs.initiate({
+        _id: 'elchi-rs',
+        members: [
+          {_id: 0, host: '${n1}:27017', priority: 2},
+          {_id: 1, host: '${n2}:27017', priority: 1},
+          {_id: 2, host: '${n3}:27017', priority: 1}
+        ]
+      });
+      print('EVAL_OK');
+    " || die "rs.initiate() failed"
+    log::ok "rs.initiate() issued"
   fi
 
-  mongodb::eval_root "
-    rs.initiate({
-      _id: 'elchi-rs',
-      members: [
-        {_id: 0, host: '${n1}:27017', priority: 2},
-        {_id: 1, host: '${n2}:27017', priority: 1},
-        {_id: 2, host: '${n3}:27017', priority: 1}
-      ]
-    });
-    print('EVAL_OK');
-  " || die "rs.initiate() failed"
-
-  log::ok "replica set initiated"
+  # Wait until M1 is PRIMARY and M2 + M3 are SECONDARY. Without this gate
+  # the next phase's registry / control-plane services would still race
+  # against an electing RS — driver retries cushion this in practice but
+  # the install logs would be noisy with reconnects. 60s is generous;
+  # election typically settles in 5–15s on a healthy network.
+  log::info "waiting for RS to converge (M1=PRIMARY, M2/M3=SECONDARY)"
+  local i out primary_count secondary_count
+  for i in $(seq 1 60); do
+    out=$(mongodb::eval_root "
+      var s = rs.status();
+      var p = s.members.filter(m => m.stateStr === 'PRIMARY').length;
+      var sec = s.members.filter(m => m.stateStr === 'SECONDARY').length;
+      print('P:' + p + ' S:' + sec);
+      print('EVAL_OK');
+    " 2>&1 | grep '^P:' | head -1)
+    primary_count=$(printf '%s' "$out" | sed -n 's/^P:\([0-9]*\).*/\1/p')
+    secondary_count=$(printf '%s' "$out" | sed -n 's/.* S:\([0-9]*\).*/\1/p')
+    if [ "${primary_count:-0}" = "1" ] && [ "${secondary_count:-0}" = "2" ]; then
+      log::ok "RS converged: 1 PRIMARY + 2 SECONDARY"
+      return 0
+    fi
+    sleep 1
+  done
+  die "RS did not converge to 1 PRIMARY + 2 SECONDARY within 60s — check 'rs.status()'"
 }
 
 # ----- top-level entry points --------------------------------------------
