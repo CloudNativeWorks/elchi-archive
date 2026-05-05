@@ -679,6 +679,16 @@ ssh::bootstrap_keys_interactive() {
 
   ELCHI_SSH_KEY=$key_path
   export ELCHI_SSH_KEY
+
+  # Re-prime ssh::_wrap's option array. _ELCHI_SSH_OPTS was built at
+  # the top of orchestration, BEFORE the bootstrap key existed — so it
+  # has no `-i $key_path` and no PreferredAuthentications=publickey.
+  # Without this re-call, the very next ssh::run probe tries the new
+  # admin user but presents no key, BatchMode=yes refuses interactive
+  # password, and the verify step fails with "Permission denied" even
+  # though the key is on disk and authorized on the remote side.
+  ssh::configure "$ELCHI_SSH_USER" "$port" "$key_path" ""
+
   log::ok "SSH key bootstrapped on ${#hosts[@]} node(s); subsequent calls use ${key_path} as ${ELCHI_SSH_USER}"
 }
 
