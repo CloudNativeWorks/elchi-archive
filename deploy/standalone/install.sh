@@ -196,14 +196,17 @@ print_usage() {
   cat <<EOF
 elchi-stack standalone installer
 
-Usage (orchestrator, run on M1):
-  sudo $0 --nodes=ip1[,ip2,...] [options]
+Usage (single VM, default):
+  sudo $0 --main-address=<host-or-ip> [options]
+  # --nodes defaults to this machine's first non-loopback IPv4
 
-Usage (single VM):
-  sudo $0 --nodes=\$(hostname -I | awk '{print \$1}') [options]
+Usage (multi-node cluster, run on M1):
+  sudo $0 --nodes=ip1,ip2,...[,ipN] --main-address=<host-or-ip> [options]
 
 Topology
-  --nodes=<csv>                       comma-separated host list (M1 first)
+  --nodes=<csv>                       comma-separated host list (M1 first).
+                                       Default: this machine's first
+                                       non-loopback IPv4 (single-VM install).
   --ssh-user=<user>                   default: root
   --ssh-port=<port>                   default: 22
   --ssh-key=<path>                    SSH private key (recommended)
@@ -453,10 +456,23 @@ parse_args() {
     shift
   done
 
-  # Light validation. --nodes and --main-address are both required —
+  # --nodes default: single-VM install on the current host. Operator
+  # who runs the curl one-liner without any --nodes flag almost always
+  # means "set up everything right here" — make that the path of least
+  # surprise. We pick the first non-loopback IPv4 from `hostname -I`,
+  # which is the same heuristic ssh::is_local uses, so M1/local match
+  # works in the orchestrator. If the host has no usable IP (rare:
+  # network-namespaced / unconfigured), fall back to 127.0.0.1.
+  if [ -z "$ELCHI_NODES" ]; then
+    local _auto_ip
+    _auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -n "$_auto_ip" ] || _auto_ip=127.0.0.1
+    ELCHI_NODES=$_auto_ip
+    log::info "no --nodes supplied — defaulting to single-VM install on ${_auto_ip}"
+  fi
+
   # main-address is the public DNS / IP the UI's API_URL resolves to,
   # and the cert SAN that any browser hitting any node needs to validate.
-  [ -n "$ELCHI_NODES" ]        || { printf 'error: --nodes is required\n\n' >&2; print_usage; exit 2; }
   [ -n "$ELCHI_MAIN_ADDRESS" ] || { printf 'error: --main-address is required\n\n' >&2; print_usage; exit 2; }
 
   # External-mongo URI parsing. If the operator passed --mongo-uri,

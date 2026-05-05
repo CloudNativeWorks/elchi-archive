@@ -423,13 +423,21 @@ mongodb::initiate_replica_set() {
   log::info "waiting for RS to converge (M1=PRIMARY, M2/M3=SECONDARY)"
   local i out primary_count secondary_count
   for i in $(seq 1 60); do
+    # `mongodb::eval_root` returns non-zero when mongod is briefly
+    # unreachable (mid-election the primary can refuse new connections
+    # for a few hundred ms). Under `set -Eeuo pipefail` that would kill
+    # the whole orchestrator — we must absorb transient errors and just
+    # retry on the next tick. `|| true` swallows the function exit code;
+    # `2>/dev/null` hides the noisy "MongoNetworkError" backtraces from
+    # the operator's screen during the few seconds it takes for the new
+    # primary to start serving rs.status() reads again.
     out=$(mongodb::eval_root "
       var s = rs.status();
       var p = s.members.filter(m => m.stateStr === 'PRIMARY').length;
       var sec = s.members.filter(m => m.stateStr === 'SECONDARY').length;
       print('P:' + p + ' S:' + sec);
       print('EVAL_OK');
-    " 2>&1 | grep '^P:' | head -1)
+    " 2>/dev/null | grep '^P:' | head -1 || true)
     primary_count=$(printf '%s' "$out" | sed -n 's/^P:\([0-9]*\).*/\1/p')
     secondary_count=$(printf '%s' "$out" | sed -n 's/.* S:\([0-9]*\).*/\1/p')
     if [ "${primary_count:-0}" = "1" ] && [ "${secondary_count:-0}" = "2" ]; then

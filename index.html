@@ -274,10 +274,13 @@
             <h4>1. Quick start</h4>
 
             <h5>Single VM (all-in-one)</h5>
+            <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
+                Without <code>--nodes</code> the installer defaults to a single-VM setup on this machine
+                (auto-detects the first non-loopback IPv4 from <code>hostname -I</code>):
+            </p>
             <div class="stdl-cmd">curl -fsSL
                 https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                 | sudo bash -s -- \
-                --nodes=$(hostname -I | awk '{print $1}') \
                 --main-address=elchi.example.com \
                 --gslb-zone=gslb.example.com \
                 --ui-version=v1.1.5 \
