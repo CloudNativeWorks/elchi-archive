@@ -276,12 +276,36 @@ mongodb::bootstrap_auth() {
       auth_enabled=1 ;;
   esac
 
-  # Fast path: rerun with auth + creds in place — leave alone.
+  # Fast path: rerun with auth + creds in place — leave alone UNLESS
+  # the caller wants RS mode and the current mongod.conf is still
+  # standalone. This is the 2-node → 3-node growth path: an earlier
+  # install put M1 in standalone with auth on, the new install asks
+  # for `mode=rs` but the fast path used to short-circuit before
+  # `configure_conf rs` ever ran. Net effect: mongod kept booting
+  # without --replSet, so rs.initiate() crashed with "This node was
+  # not started with replication enabled". Detect the mismatch here
+  # and flip the config + restart before returning.
   if [ "$auth_enabled" = "1" ] && [ -f "${ELCHI_MONGO}/root.env" ]; then
     local app_user
     app_user=$(secrets::value ELCHI_MONGO_USERNAME)
     if [ -n "$app_user" ]; then
-      log::info "mongo auth already configured — preserving"
+      local current_mode=standalone
+      if grep -Eq '^[[:space:]]*replSetName:' /etc/mongod.conf 2>/dev/null; then
+        current_mode=rs
+      fi
+      if [ "$mode" = "rs" ] && [ "$current_mode" != "rs" ]; then
+        log::info "mongo: auth on, but config is standalone — flipping to RS (cluster grew)"
+        mongodb::configure_conf rs
+        mongodb::restart_service
+        log::ok "mongo: flipped from standalone to RS member"
+      elif [ "$mode" = "standalone" ] && [ "$current_mode" != "standalone" ]; then
+        log::info "mongo: auth on, but config is RS — flipping to standalone (cluster shrank)"
+        mongodb::configure_conf standalone
+        mongodb::restart_service
+        log::ok "mongo: flipped from RS to standalone"
+      else
+        log::info "mongo auth already configured (mode=${mode}) — preserving"
+      fi
       return
     fi
   fi
