@@ -798,6 +798,15 @@ local_install_phase1() {
 }
 
 local_install_phase2() {
+  # Phase 2 runs as a SEPARATE SSH session for remote nodes — phase 1's
+  # exported env (ELCHI_OS_FAMILY, ELCHI_ARCH, ELCHI_OS_CODENAME, …)
+  # doesn't survive the gap. Re-detect locally; both calls are
+  # idempotent on a host that already has /etc/os-release. Without
+  # this, downstream modules under `set -u` (e.g. coredns.sh's binary
+  # URL builder reading $ELCHI_ARCH) abort with "unbound variable".
+  preflight::detect_os
+  preflight::detect_arch
+
   _local_install_resolve_node
 
   # Registry runs on every node — connects to the RS for leader
