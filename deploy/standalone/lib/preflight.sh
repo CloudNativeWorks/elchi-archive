@@ -349,6 +349,17 @@ preflight::upgrade_os() {
   fi
   log::step "Applying OS SECURITY patches (general updates are operator responsibility)"
   preflight::wait_apt_lock 600 || true
+
+  # Snapshot reboot-required mtime before the upgrade so we can tell
+  # whether THIS call laid down a new kernel / libc — vs. just finding
+  # a leftover marker file from a previous upgrade and re-warning the
+  # operator about a reboot they already know about. epoch=0 when
+  # the file doesn't exist yet (common case: first install on a clean
+  # cloud image).
+  local _reboot_marker=/var/run/reboot-required
+  local _reboot_mtime_pre=0
+  [ -f "$_reboot_marker" ] && _reboot_mtime_pre=$(stat -c '%Y' "$_reboot_marker" 2>/dev/null || echo 0)
+
   case "$ELCHI_OS_FAMILY" in
     debian)
       DEBIAN_FRONTEND=noninteractive apt-get update -qq \
@@ -380,8 +391,17 @@ preflight::upgrade_os() {
         || log::warn "${pm} --security upgrade-minimal returned non-zero (no advisories applicable, or dnf-plugins-core missing)"
       ;;
   esac
-  if [ -f /var/run/reboot-required ]; then
-    log::warn "security upgrade installed a kernel / libc update — reboot recommended after install completes"
+  # Only warn when THIS run actually created or refreshed the marker —
+  # a stale marker from yesterday's upgrade is a state the operator
+  # already knows about. Compare mtime with the pre-upgrade snapshot.
+  if [ -f "$_reboot_marker" ]; then
+    local _reboot_mtime_post
+    _reboot_mtime_post=$(stat -c '%Y' "$_reboot_marker" 2>/dev/null || echo 0)
+    if [ "$_reboot_mtime_post" != "$_reboot_mtime_pre" ]; then
+      log::warn "security upgrade installed a kernel / libc update — reboot recommended after install completes"
+    else
+      log::info "reboot-required marker is older than this run (pre-existing, not caused by this upgrade)"
+    fi
   fi
   log::ok "OS security patches applied"
 }
@@ -647,10 +667,29 @@ preflight::check_cluster_ports() {
   fi
   if [ "$runs_coredns" = "true" ] || [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
     preflight::check_port "${ELCHI_PORT_COREDNS:-53}"          "coredns-tcp"
-    # CoreDNS binds 53 on UDP too — `ss -ltn` misses it; check
-    # explicitly via UDP listener probe.
+    # UDP :53 is shared territory: Ubuntu / Debian default-on
+    # `systemd-resolved` binds 127.0.0.53:53 for the local stub
+    # resolver, while CoreDNS binds the cluster-public IP (e.g.
+    # 45.13.226.177:53). Different IPs, no collision — both can
+    # coexist on the same machine. The previous unconditional WARN
+    # confused operators because it fired on every healthy install.
+    # Suppress when the only UDP/53 listener is the loopback stub;
+    # warn for real when something binds the cluster IP or 0.0.0.0.
     if preflight::_port_in_use "${ELCHI_PORT_COREDNS:-53}" udp; then
-      log::warn "UDP port 53 appears to be in use (likely systemd-resolved); CoreDNS may fail to bind"
+      local _udp53_owners=""
+      if command -v ss >/dev/null 2>&1; then
+        _udp53_owners=$(ss -lunp 2>/dev/null \
+                          | awk '$5 ~ /:53$/ {print $5}')
+      fi
+      # Only flag when SOMETHING listens on a non-loopback IP for
+      # UDP/53 — that's the genuine collision case for CoreDNS.
+      if printf '%s\n' "$_udp53_owners" \
+           | grep -vE '^127\.0\.0\.53:53$|^127\.0\.0\.1:53$|^\[::1\]:53$' \
+           | grep -qE ':53$'; then
+        log::warn "UDP port 53 has a non-loopback listener; CoreDNS may fail to bind on the cluster IP"
+        log::warn "  current UDP/53 listeners:"
+        printf '%s\n' "$_udp53_owners" | sed 's/^/    /'
+      fi
     fi
     preflight::check_port "${ELCHI_PORT_COREDNS_WEBHOOK:-8053}" "coredns-webhook"
   fi

@@ -35,16 +35,55 @@ fi
 # ----- logging primitives -------------------------------------------------
 # Single source of truth — every other module uses these so format/ordering
 # stays consistent across thousands of log lines from a multi-VM rollout.
-log::info() { printf '%b[INFO]%b %s\n' "$C_BLUE" "$C_RESET" "$*"; }
-log::ok()   { printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
-log::warn() { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-log::err()  { printf '%b[ERR ]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+#
+# Every line is prefixed with `[<ip>(<short-hostname>)]` so the caller can
+# tell at a glance which node a message came from in a multi-VM transcript
+# (M1 phase 1 + remote phase 1 fanout + M1 phase 2 + remote phase 2 fanout
+# all arrive interleaved on the operator's terminal). The tag is cached
+# in `_ELCHI_LOG_TAG` after the first call so per-line shell-outs to
+# `hostname` are avoided.
+
+# log::_self_tag — emit "<ip>(<short-hostname>)" for the current node.
+# Reads ELCHI_NODE_HOST when the orchestrator has resolved it (phase 1/2
+# code paths set it via _local_install_resolve_node). Falls back to the
+# first non-loopback IPv4 reported by `hostname -I` for early
+# orchestration paths where node identity isn't yet known.
+#
+# Cache is keyed on ELCHI_NODE_HOST so a tag computed during the early
+# orchestration phase (using `hostname -I`) gets recomputed once
+# `_local_install_resolve_node` exports the canonical host from the
+# topology — otherwise log lines printed after that point would still
+# show the early fallback IP if it differed.
+log::_self_tag() {
+  local _key=${ELCHI_NODE_HOST:-}
+  if [ "${_ELCHI_LOG_TAG_KEY:-__unset__}" != "$_key" ]; then
+    local _ip _hn
+    _ip=${ELCHI_NODE_HOST:-}
+    if [ -z "$_ip" ]; then
+      _ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    [ -z "$_ip" ] && _ip='?'
+    _hn=$(hostname -s 2>/dev/null || echo '?')
+    _ELCHI_LOG_TAG="${_ip}(${_hn})"
+    _ELCHI_LOG_TAG_KEY=$_key
+    export _ELCHI_LOG_TAG _ELCHI_LOG_TAG_KEY
+  fi
+  printf '%s' "$_ELCHI_LOG_TAG"
+}
+
+log::info() { printf '%b[%s]%b %b[INFO]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_BLUE"   "$C_RESET" "$*"; }
+log::ok()   { printf '%b[%s]%b %b[ OK ]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_GREEN"  "$C_RESET" "$*"; }
+log::warn() { printf '%b[%s]%b %b[WARN]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_YELLOW" "$C_RESET" "$*" >&2; }
+log::err()  { printf '%b[%s]%b %b[ERR ]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_RED"    "$C_RESET" "$*" >&2; }
 
 # log::step — banner-style header before each major phase. The blank
 # leading line gives breathing room in long install transcripts so the
 # eye can spot phase boundaries when scrolling.
 log::step() {
-  printf '\n%b==>%b %b%s%b\n' "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"
+  printf '\n%b[%s]%b %b==>%b %b%s%b\n' \
+    "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" \
+    "$C_BLUE" "$C_RESET" \
+    "$C_BOLD" "$*" "$C_RESET"
 }
 
 # log::node — annotated logger for orchestration mode. When the M1 driver
