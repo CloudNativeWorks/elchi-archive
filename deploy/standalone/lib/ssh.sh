@@ -349,22 +349,28 @@ echo "OK: $ADMIN_USER provisioned"
   fi
 
   # NB: `bash -s arg1 arg2` assigns arg1→$1, arg2→$2 (no $0 slot like
-  # `bash -c <script> name a1 a2`). Earlier versions of this function
-  # inserted a placeholder `_` token between `-s` and the real args,
-  # which silently shifted everything: ADMIN_USER picked up the literal
-  # `_`, the actual admin name landed in PUB_KEY, and a phantom user
-  # named `_` was created on every remote node. Symptom: post-bootstrap
-  # `ssh elchi-cluster-admin@host` failed with "Permission denied"
-  # because that user was never actually created.
+  # `bash -c <script> name a1 a2`). And ssh joins all post-host argv
+  # with single spaces WITHOUT re-quoting before sending the command
+  # to the remote login shell — so a space-bearing argument (the SSH
+  # pubkey is `<keytype> <base64> <comment>`, three space-separated
+  # words) gets split apart on the far side: the script saw $2 =
+  # "ssh-ed25519" only, wrote that single word to authorized_keys, and
+  # SSH then rejected every login attempt with "Permission denied"
+  # even though useradd succeeded. Mirror the sudo branch's pattern:
+  # build ONE quoted local argv with printf %q so the remote shell
+  # re-tokenizes back to the original two-arg shape.
+  local q_admin q_pub
+  q_admin=$(printf '%q' "$admin_user")
+  q_pub=$(printf '%q' "$pub_key")
   if [ "$login_user" = "root" ]; then
     if [ "$use_pwd" = "1" ]; then
       sshpass -p "$login_pwd" ssh "${base_ssh_opts[@]}" \
           "${login_user}@${host}" \
-          bash -s "$admin_user" "$pub_key" <<<"$provision" \
+          "bash -s ${q_admin} ${q_pub}" <<<"$provision" \
         || die "admin user provisioning on ${host} failed"
     else
       ssh "${base_ssh_opts[@]}" "${login_user}@${host}" \
-          bash -s "$admin_user" "$pub_key" <<<"$provision" \
+          "bash -s ${q_admin} ${q_pub}" <<<"$provision" \
         || die "admin user provisioning on ${host} failed (key auth)"
     fi
   else
@@ -377,14 +383,14 @@ echo "OK: $ADMIN_USER provisioned"
         printf '%s\n' "$provision"
       } | sshpass -p "$login_pwd" ssh "${base_ssh_opts[@]}" \
           "${login_user}@${host}" \
-          "sudo -S -p '' bash -s $(printf '%q' "$admin_user") $(printf '%q' "$pub_key")" \
+          "sudo -S -p '' bash -s ${q_admin} ${q_pub}" \
         || die "admin user provisioning on ${host} (via sudo) failed"
     else
       # Key mode: assume NOPASSWD sudo; sudo -n fails fast if the
       # operator's login_user lacks passwordless sudo (clear error rather
       # than hanging on a password prompt).
       ssh "${base_ssh_opts[@]}" "${login_user}@${host}" \
-          "sudo -n bash -s $(printf '%q' "$admin_user") $(printf '%q' "$pub_key")" \
+          "sudo -n bash -s ${q_admin} ${q_pub}" \
           <<<"$provision" \
         || die "admin user provisioning on ${host} (via sudo, key auth) failed — does ${login_user} have NOPASSWD sudo?"
     fi
