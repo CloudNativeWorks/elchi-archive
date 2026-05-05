@@ -190,23 +190,35 @@ ssh::run_sudo() {
 }
 
 # ssh::scp <local> <host> <remote> — copy local→remote.
+#
+# Stream-via-sudo (mirrors ssh::scp_dir's reasoning):
+#   * scp itself doesn't escalate. With the dedicated admin user
+#     (default-on after install), the SSH login user can't write
+#     to /opt or /etc — scp would fail Permission denied.
+#   * Earlier this function expected callers to scp into /tmp and
+#     then run a second `ssh::run_sudo "install -m ..."` step. /tmp
+#     is fragile — systemd-tmpfiles-clean evicts unused entries
+#     after ~10 days, tmpfs /tmp loses contents on reboot, and the
+#     two-step pattern leaks staging files if the second step is
+#     interrupted. Streaming the body straight into `sudo install
+#     /dev/stdin <dst>` lets the caller name the FINAL destination
+#     and avoids any /tmp involvement entirely.
+#   * `install -m` preserves the source file's mode bits; ownership
+#     defaults to root:root which matches what every current caller
+#     expects (caller can chown afterward via ssh::run_sudo if it
+#     needs a different owner — e.g. root:elchi for env files).
 ssh::scp() {
   local src=$1 host=$2 dst=$3
   if ssh::is_local "$host"; then
     install -m "$(stat -c '%a' "$src" 2>/dev/null || stat -f '%Lp' "$src")" "$src" "$dst"
     return $?
   fi
-  # scp uses -P for port (vs ssh's -p) and shares all other options.
-  local opts=()
-  local arg
-  for arg in "${_ELCHI_SSH_OPTS[@]}"; do
-    case "$arg" in
-      -p) opts+=("-P") ;;
-      -p[0-9]*|-p=*) opts+=("-P${arg#-p}") ;;
-      *) opts+=("$arg") ;;
-    esac
-  done
-  ssh::_wrap scp "${opts[@]}" "$src" "${ELCHI_SSH_USER}@${host}:${dst}"
+  local mode q_dst
+  mode=$(stat -c '%a' "$src" 2>/dev/null || stat -f '%Lp' "$src" 2>/dev/null || echo 0644)
+  q_dst=$(printf '%q' "$dst")
+  ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- \
+    "set -e; sudo install -m ${mode} /dev/stdin ${q_dst}" \
+    < "$src"
 }
 
 # ssh::scp_dir <local-dir> <host> <remote-dir> — recursively copy a
@@ -231,18 +243,25 @@ ssh::scp_dir() {
     cp -a "$src" "$dst"
     return $?
   fi
-  ssh::run_sudo "$host" rm -rf "$dst"
-  ssh::run_sudo "$host" mkdir -p "$(dirname "$dst")"
-  local opts=()
-  local arg
-  for arg in "${_ELCHI_SSH_OPTS[@]}"; do
-    case "$arg" in
-      -p) opts+=("-P") ;;
-      -p[0-9]*|-p=*) opts+=("-P${arg#-p}") ;;
-      *) opts+=("$arg") ;;
-    esac
-  done
-  ssh::_wrap scp -r "${opts[@]}" "$src" "${ELCHI_SSH_USER}@${host}:${dst}"
+
+  # scp itself doesn't escalate — it copies as the SSH login user.
+  # When ELCHI_SSH_USER is the dedicated admin user (default-on after
+  # bootstrap), that user has NOPASSWD sudo but is NOT the owner of
+  # /opt or /etc, so scp dies with "Permission denied" for any
+  # privileged target. We also see modern OpenSSH 9.x scp fail with
+  # "stat remote: No such file or directory" when the destination dir
+  # doesn't exist (an SFTP-mode regression vs the legacy rcp protocol).
+  #
+  # Stream the tree over SSH instead and let `sudo tar` extract on the
+  # remote — that way the extract runs with root privilege regardless
+  # of the SSH user, and there is no scp involved at all (so no SFTP
+  # stat dance to fail). Same idempotent replace-semantics as before:
+  # wipe dst, recreate it, extract into it.
+  local q_dst
+  q_dst=$(printf '%q' "$dst")
+  local remote_cmd="set -e; sudo rm -rf ${q_dst}; sudo mkdir -p ${q_dst}; sudo tar -C ${q_dst} -xpf -"
+  tar -C "$src" -cf - . \
+    | ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- "$remote_cmd"
 }
 
 # ssh::test_login <host> — cheap "can I reach this node and run

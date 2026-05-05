@@ -174,8 +174,11 @@ cmd_reload_envoy() {
       # since it derives from /etc/elchi/topology.full.yaml + ports.full.json),
       # then push to the remote and restart over there.
       envoy::render_bootstrap
-      ssh::scp /etc/elchi/config/envoy.yaml "$host" /etc/elchi/config/envoy.yaml.new
-      ssh::run_sudo "$host" "install -m 0640 -o root -g elchi /etc/elchi/config/envoy.yaml.new /etc/elchi/config/envoy.yaml && rm -f /etc/elchi/config/envoy.yaml.new && systemctl restart elchi-envoy.service"
+      # ssh::scp now streams via `sudo install /dev/stdin` so we can
+      # write directly to the final destination with no /tmp dance.
+      # Fix up ownership (install lands it root:root) and restart.
+      ssh::scp /etc/elchi/config/envoy.yaml "$host" /etc/elchi/config/envoy.yaml
+      ssh::run_sudo "$host" "chown root:elchi /etc/elchi/config/envoy.yaml && chmod 0640 /etc/elchi/config/envoy.yaml && systemctl restart elchi-envoy.service"
     fi
   done < /etc/elchi/nodes.list
   log::ok "envoy reloaded cluster-wide"
@@ -420,16 +423,18 @@ cmd_rotate_secret() {
       systemctl restart 'elchi-controller.service' 'elchi-control-plane-*@*.service' 'elchi-registry.service' 2>/dev/null || true
     else
       # M2/M3: ship secrets.env (for completeness/future tooling) + every
-      # variant's common.env, then restart.
-      ssh::scp /etc/elchi/secrets.env "$host" /tmp/.elchi-secrets.env.new
+      # variant's common.env, then restart. ssh::scp streams via
+      # `sudo install /dev/stdin` so we write straight to the final
+      # destination — no /tmp staging that systemd-tmpfiles or a
+      # reboot could evict between two SSH calls.
+      ssh::scp /etc/elchi/secrets.env "$host" /etc/elchi/secrets.env
       for v in "${variants[@]}"; do
-        ssh::scp "/etc/elchi/${v}/common.env" "$host" "/tmp/.elchi-${v}.common.env.new"
+        ssh::scp "/etc/elchi/${v}/common.env" "$host" "/etc/elchi/${v}/common.env"
       done
-      # Build a single remote command that installs everything atomically.
-      local remote_cmd="install -m 0640 -o root -g elchi /tmp/.elchi-secrets.env.new /etc/elchi/secrets.env && rm -f /tmp/.elchi-secrets.env.new"
+      # Fix up ownership (install lands files root:root) and restart.
+      local remote_cmd="chown root:elchi /etc/elchi/secrets.env && chmod 0640 /etc/elchi/secrets.env"
       for v in "${variants[@]}"; do
-        remote_cmd+=" && install -m 0640 -o root -g elchi /tmp/.elchi-${v}.common.env.new /etc/elchi/${v}/common.env"
-        remote_cmd+=" && rm -f /tmp/.elchi-${v}.common.env.new"
+        remote_cmd+=" && chown root:elchi /etc/elchi/${v}/common.env && chmod 0640 /etc/elchi/${v}/common.env"
       done
       remote_cmd+=' && systemctl restart "elchi-controller.service" "elchi-control-plane-*@*.service"'
       ssh::run_sudo "$host" "$remote_cmd"

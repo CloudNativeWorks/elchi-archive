@@ -1219,14 +1219,18 @@ EOF
       # scp -r to insert the source INSIDE the existing dst (placing
       # files at /opt/elchi-installer/tmp.XXXXXX/install.sh).
       ssh::scp_dir "$stage_inst" "$host" /opt/elchi-installer
-      ssh::scp     "$bundle_enc" "$host" /tmp/elchi-bundle.tar.gz.enc
+      # Land the bundle inside the just-created installer dir instead
+      # of /tmp — the path is persistent (survives reboots and
+      # systemd-tmpfiles), root-owned (matches the rest of the install
+      # state), and goes away when uninstall purges /opt/elchi-installer.
+      ssh::scp     "$bundle_enc" "$host" /opt/elchi-installer/.bundle.tar.gz.enc
 
       log::node "$host" "running remote install (this may take several minutes)"
       ssh::run_sudo "$host" bash /opt/elchi-installer/install.sh \
         --skip-orchestration \
         --node-index="$idx" \
         --nodes="$ELCHI_NODES" \
-        --bundle=/tmp/elchi-bundle.tar.gz.enc \
+        --bundle=/opt/elchi-installer/.bundle.tar.gz.enc \
         --bundle-key="$bundle_key" \
         --backend-version="$ELCHI_BACKEND_VARIANTS" \
         --ui-version="$ELCHI_UI_VERSION" \
