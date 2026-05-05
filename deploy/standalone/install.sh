@@ -1121,6 +1121,15 @@ orchestrate() {
     log::node "$host" "ssh ok"
   done
 
+  # Cross-node OS uniformity check. Refuses Ubuntu+Oracle, Ubuntu 22+24,
+  # amd64+arm64 mixes upfront — these all fail catastrophically mid-
+  # install otherwise. Runs BEFORE any side-effect (topology compute,
+  # secrets, fanout) so the operator can fix the mistake without having
+  # to clean up half-installed nodes.
+  preflight::detect_os
+  preflight::detect_arch
+  preflight::check_node_homogeneity "${hosts[@]}"
+
   # Collect each node's system hostname. The hostname becomes the
   # prefix of every backend instance's registry name
   # (`<hostname>-<role>-<MM>`) — Envoy cluster names + /etc/hosts

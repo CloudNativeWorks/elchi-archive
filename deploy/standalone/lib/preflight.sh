@@ -65,6 +65,111 @@ preflight::_check_supported_version() {
   esac
 }
 
+# ----- cluster-wide OS uniformity ----------------------------------------
+# preflight::check_node_homogeneity <hosts...>
+#
+# Refuse to install across mixed OS families / architectures / major
+# versions. Heterogeneous clusters fail in subtle, expensive-to-debug
+# ways:
+#   * mongo / grafana / nginx use family-specific package managers — an
+#     Ubuntu M1 + Oracle Linux M2 cluster catastrophically fails the
+#     moment the M2 install tries `apt-get` (or vice-versa).
+#   * Prebuilt binaries (envoy, victoria-metrics, otelcol, the elchi
+#     backend itself) are linked against the version of glibc / openssl
+#     in M1's bundle build environment. Running them on a node with a
+#     different libc major version surfaces as "GLIBC_X.Y not found"
+#     errors at service start.
+#   * arch mismatches (amd64 + arm64) fail with ENOEXEC, but only at
+#     runtime — phase 1's wait_for_tcp would just time out with no
+#     useful clue why.
+#
+# Detect upfront so the operator gets ONE clear error instead of a
+# confusing crash 5 minutes into the install.
+#
+# Override (NOT recommended): export ELCHI_ALLOW_HETEROGENEOUS=1 — the
+# operator is on their own past that point.
+preflight::check_node_homogeneity() {
+  local -a hosts=("$@")
+
+  # Caller is expected to have run detect_os + detect_arch already, but
+  # be defensive — these are idempotent.
+  [ -n "${ELCHI_OS_FAMILY:-}" ] || preflight::detect_os
+  [ -n "${ELCHI_ARCH:-}" ]      || preflight::detect_arch
+
+  # If there are no remote nodes (single-VM install), uniformity is
+  # trivial.
+  local -a remotes=()
+  local h
+  for h in "${hosts[@]}"; do
+    ssh::is_local "$h" || remotes+=("$h")
+  done
+  if [ "${#remotes[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  log::step "Verifying OS uniformity across cluster"
+
+  local m1_family=$ELCHI_OS_FAMILY
+  local m1_arch=$ELCHI_ARCH
+  local m1_id=$ELCHI_OS_ID
+  local m1_version=$ELCHI_OS_VERSION
+  local m1_major=${m1_version%%.*}
+  log::info "M1 (${hosts[0]}): ${m1_id} ${m1_version} ${m1_arch} (family=${m1_family})"
+
+  local facts OS_ID OS_VERSION ARCH SYSTEMD family major
+  local -a mismatches=()
+  for h in "${remotes[@]}"; do
+    facts=$(ssh::detect_node_facts "$h" 2>/dev/null) || {
+      mismatches+=("${h}: could not collect OS facts (SSH or /etc/os-release issue)")
+      continue
+    }
+    # ssh::detect_node_facts emits "OS_ID=... OS_VERSION=... ARCH=... SYSTEMD=..."
+    # — pure KEY=value tokens from /etc/os-release + uname, no operator
+    # input, so eval is safe in this context.
+    OS_ID= OS_VERSION= ARCH= SYSTEMD=
+    eval "$facts"
+
+    family=
+    case "$OS_ID" in
+      debian|ubuntu)                                family=debian ;;
+      rhel|centos|fedora|almalinux|rocky|oracle|ol) family=rhel ;;
+      *)                                            family=unknown ;;
+    esac
+    major=${OS_VERSION%%.*}
+    log::info "${h}: ${OS_ID} ${OS_VERSION} ${ARCH} (family=${family})"
+
+    if [ "$family" != "$m1_family" ]; then
+      mismatches+=("${h}: family=${family} (${OS_ID} ${OS_VERSION}) ≠ M1 family=${m1_family} (${m1_id} ${m1_version})")
+    elif [ "$ARCH" != "$m1_arch" ]; then
+      mismatches+=("${h}: arch=${ARCH} ≠ M1 arch=${m1_arch}")
+    elif [ "$major" != "$m1_major" ]; then
+      mismatches+=("${h}: major=${OS_ID} ${major} ≠ M1 major=${m1_id} ${m1_major}")
+    fi
+  done
+
+  if [ "${#mismatches[@]}" -eq 0 ]; then
+    log::ok "all nodes are ${m1_id} ${m1_major}.x ${m1_arch} — homogeneous cluster"
+    return 0
+  fi
+
+  log::err "cluster has heterogeneous nodes — refusing to install:"
+  local m
+  for m in "${mismatches[@]}"; do log::err "  • ${m}"; done
+  log::err ""
+  log::err "elchi-stack ships family-specific packages (mongo / grafana / nginx"
+  log::err "via apt-vs-yum) and prebuilt binaries linked against M1's libc."
+  log::err "Mixed OS families fail mid-install; mixed major versions drift in"
+  log::err "subtle ways at runtime. Standardize on ONE base image and re-run."
+  log::err ""
+  log::err "Override (use at your own risk): set ELCHI_ALLOW_HETEROGENEOUS=1"
+
+  if [ "${ELCHI_ALLOW_HETEROGENEOUS:-0}" = "1" ]; then
+    log::warn "ELCHI_ALLOW_HETEROGENEOUS=1 — proceeding despite mismatches"
+    return 0
+  fi
+  die "refusing to install across heterogeneous nodes"
+}
+
 # ----- arch detection ----------------------------------------------------
 preflight::detect_arch() {
   local raw
