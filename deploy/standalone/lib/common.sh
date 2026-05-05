@@ -86,12 +86,17 @@ log::step() {
     "$C_BOLD" "$*" "$C_RESET"
 }
 
-# log::node — annotated logger for orchestration mode. When the M1 driver
-# is fanning out across hosts every line should carry the host so a
-# single grep nails down "what happened on m2 right before the failure".
+# log::node — annotated logger for orchestration mode. Used when the M1
+# driver fans out work across hosts: the line says WHO is logging
+# (self-tag, e.g. M1) and ABOUT WHICH remote it's reporting (the node
+# argument). Same self-tag prefix as log::info / log::ok so the operator
+# never sees a "naked" `[<remote>] ...` line that hides which node
+# emitted it — a confusing artifact when phase 1/2 fanouts interleave.
 log::node() {
   local node=$1 ; shift
-  printf '%b[%s]%b %s\n' "$C_CYAN" "$node" "$C_RESET" "$*"
+  printf '%b[%s]%b %b[%s]%b %s\n' \
+    "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" \
+    "$C_CYAN" "$node" "$C_RESET" "$*"
 }
 
 die() {

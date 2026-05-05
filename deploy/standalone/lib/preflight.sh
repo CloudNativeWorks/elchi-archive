@@ -376,8 +376,21 @@ preflight::upgrade_os() {
       # Non-zero exit when no security updates are available is OK —
       # treat it as success. A genuine config error surfaces in
       # /var/log/unattended-upgrades/ which we point the operator to.
-      if ! DEBIAN_FRONTEND=noninteractive unattended-upgrade -v 2>&1; then
-        log::warn "unattended-upgrade returned non-zero — check /var/log/unattended-upgrades/ if security patches were expected"
+      #
+      # Pipe through sed so each `unattended-upgrade` line carries the
+      # same `[<ip>(<host>)]` prefix as our log::* output — without it
+      # multi-node fanout transcripts have unattributed bare lines like
+      # "Starting unattended upgrades script" that obscure which node
+      # they came from. `pipefail` is set globally; capture rc via
+      # PIPESTATUS so a real upgrade failure isn't masked by the sed
+      # success on its tail.
+      local _ua_tag _ua_rc
+      _ua_tag="${C_MAGENTA}[$(log::_self_tag)]${C_RESET} ${C_BLUE}[apt]${C_RESET} "
+      DEBIAN_FRONTEND=noninteractive unattended-upgrade -v 2>&1 \
+        | sed -u "s|^|${_ua_tag}|"
+      _ua_rc=${PIPESTATUS[0]}
+      if [ "$_ua_rc" -ne 0 ]; then
+        log::warn "unattended-upgrade returned ${_ua_rc} — check /var/log/unattended-upgrades/ if security patches were expected"
       fi
       ;;
     rhel)
