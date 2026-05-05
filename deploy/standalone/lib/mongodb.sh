@@ -465,6 +465,20 @@ mongodb::_apply_keyfile_perms() {
   [ -f "$f" ] || return 0
   chown mongodb:mongodb "$f"
   chmod 0400 "$f"
+  # Mongod runs as `mongodb` and must be able to traverse to the
+  # keyfile path. dirs::ensure / secrets::import_from_bundle create
+  # /etc/elchi/mongo as 0750 root:elchi — the elchi group is meant
+  # for the elchi-stack runtime user, NOT for mongodb. Without this
+  # chgrp, mongodb has zero access (other bits=0) and mongod fails
+  # at startup with "errno:13 Permission denied" reading the
+  # keyfile — which systemd surfaces only as "exited with status 1"
+  # because the real error goes to /var/log/mongodb/mongod.log, not
+  # the journal. Re-grouping to mongodb keeps the directory closed
+  # to non-mongo users while letting mongod do its job.
+  if [ -d "$ELCHI_MONGO" ]; then
+    chgrp mongodb "$ELCHI_MONGO"
+    chmod 0750 "$ELCHI_MONGO"
+  fi
 }
 
 # mongodb::write_dropin — production-grade resource ceiling for the
@@ -488,12 +502,33 @@ mongodb::_apply_keyfile_perms() {
 #   * TasksMax=infinity   — systemd's default cgroup task limit can be
 #                            as low as ~4915 on RHEL — mongod's connection
 #                            pool blows past that on busy clusters.
+#   * Restart=on-failure  — the upstream package unit ships NO Restart=
+#                            directive, which means systemd defaults to
+#                            Restart=no. A crashed mongod (assertion,
+#                            segfault, kernel OOM after our -1000 cushion
+#                            already failed, etc.) would just stay dead.
+#                            For an RS member that's catastrophic — the
+#                            primary's death silently degrades majority
+#                            write capacity. Auto-restart with a 5s
+#                            backoff lets the RS heartbeat re-discover
+#                            the recovered member and re-sync via
+#                            oplog catch-up without operator intervention.
+#   * StartLimitInterval / StartLimitBurst — guard against an actually-
+#                            broken instance crash-looping forever; after
+#                            5 failures in 60s systemd gives up so the
+#                            operator gets paged instead of disk fills.
 mongodb::write_dropin() {
   install -d -m 0755 /etc/systemd/system/mongod.service.d
   cat > /etc/systemd/system/mongod.service.d/10-elchi.conf.tmp <<'EOF'
 # Managed by elchi-stack installer. DO NOT EDIT BY HAND.
 # Re-rendered on every install.sh; removed by uninstall.sh --purge-mongo.
+[Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
+Restart=on-failure
+RestartSec=5s
 LimitNOFILE=64000
 LimitNPROC=64000
 LimitMEMLOCK=infinity
@@ -507,5 +542,5 @@ EOF
     /etc/systemd/system/mongod.service.d/10-elchi.conf
   rm -f /etc/systemd/system/mongod.service.d/10-elchi.conf.tmp
   systemctl daemon-reload
-  log::info "mongod systemd drop-in applied (NOFILE=64000, MEMLOCK=infinity, OOMAdj=-1000)"
+  log::info "mongod systemd drop-in applied (Restart=on-failure, NOFILE=64000, MEMLOCK=infinity, OOMAdj=-1000)"
 }
