@@ -194,18 +194,46 @@ cmd_add_node() {
   # let everything else (e.g. --ssh-key, --ssh-port) pass through to
   # install.sh below. Keeps the flag surface compatible with operator
   # muscle memory from `bash get.sh --uninstall --yes-i-mean-it`.
+  #
+  # CRITICAL: install.sh interprets the LAST --foo=value when a flag
+  # appears twice. We're already forwarding --nodes / --main-address /
+  # --backend-version / --gslb-* read out of topology; if the operator
+  # also typed any of them on the command line, the passthru would
+  # land AFTER our forwards and silently overwrite the cluster's
+  # canonical state. e.g. `add-node 10.0.0.5 --nodes=foo` would bypass
+  # the merged-list logic entirely, partial-installing a single-node
+  # cluster on top of the existing topology. Reject the overlap up
+  # front with a clear error.
   local -a passthru=()
+  local arg flag
   while [ "$#" -gt 0 ]; do
-    case "$1" in
+    arg=$1
+    case "$arg" in
       --yes-i-mean-it|-y) skip_confirm=1 ;;
       -h|--help)
-        printf 'Usage: elchi-stack add-node <ip> [--yes-i-mean-it] [extra flags forwarded to install.sh]\n'
+        printf 'Usage: elchi-stack add-node <ip> [--yes-i-mean-it] [install.sh flags forwarded as-is]\n'
+        printf '  Reserved flags (managed automatically from /etc/elchi/topology.full.yaml):\n'
+        printf '    --nodes  --main-address  --port  --backend-version\n'
+        printf '    --ui-version  --envoy-version  --coredns-version\n'
+        printf '    --gslb  --gslb-zone  --gslb-admin-email  --gslb-nameservers  --gslb-regions\n'
         return 0
         ;;
-      -*) passthru+=("$1") ;;
+      -*)
+        # Strip everything after the first `=` (long-option form) or
+        # treat the whole token as the flag name (short form). Reject
+        # any flag we already manage from topology — silent override
+        # would re-shape the cluster in surprising ways.
+        flag=${arg%%=*}
+        case "$flag" in
+          --nodes|--main-address|--port|--backend-version|--ui-version|--envoy-version|--coredns-version|--gslb|--no-gslb|--gslb-zone|--gslb-admin-email|--gslb-nameservers|--gslb-regions)
+            die "${flag} cannot be passed to add-node — it's managed from /etc/elchi/topology.full.yaml. To change ${flag} use 'sudo bash get.sh --upgrade ${flag}=...' instead."
+            ;;
+        esac
+        passthru+=("$arg")
+        ;;
       *)
-        if [ -z "$new_ip" ]; then new_ip=$1
-        else passthru+=("$1")
+        if [ -z "$new_ip" ]; then new_ip=$arg
+        else passthru+=("$arg")
         fi
         ;;
     esac
@@ -339,13 +367,21 @@ existing M1 data is preserved and replicated to M2/M3 on initial sync"
   fi
 
   # ---- compose + exec install.sh re-run ---------------------------------
+  # --non-interactive is only forced when the operator passed
+  # --yes-i-mean-it (CI / scripted teardown). In the interactive path
+  # we already showed the preview + confirmed manually, so install.sh
+  # should be allowed to prompt for an SSH password if the new node's
+  # cluster key isn't authorized yet. With --non-interactive, the
+  # bootstrap path dies instead of prompting — that's the right
+  # failure mode for automation but a UX trap when the operator is
+  # actually sitting in front of the terminal.
   local -a cmd=(
     bash "${ELCHI_INSTALLER_ROOT}/install.sh"
     --nodes="$merged"
     --main-address="$main_addr"
     --backend-version="$variants_csv"
-    --non-interactive
   )
+  [ "$skip_confirm" = "1" ] && cmd+=(--non-interactive)
   [ -n "$port" ]            && cmd+=(--port="$port")
   [ -n "$ui_version" ]      && cmd+=(--ui-version="$ui_version")
   [ -n "$envoy_version" ]   && cmd+=(--envoy-version="$envoy_version")
@@ -408,32 +444,58 @@ cmd_mongo_status() {
     return 0
   fi
 
-  # RS path. Emit one tagged line per member from inside mongosh —
-  # each line survives the `  [mongosh] ` prefix wrapping that
+  # RS path. Emit one tagged line per member from inside mongosh.
+  # Each line survives the `  [mongosh] ` prefix wrapping that
   # `mongodb::eval_root` adds (lib/mongodb.sh:262), so we parse with
   # `sed -n 's/.*MEMBER|/MEMBER|/p'` rather than line-anchored grep.
   # The pipe (`|`) is the field separator since hostnames can contain
   # ':' and lastHeartbeatMessage can contain spaces / commas.
+  #
+  # try/catch + a NOT_INITIALIZED sentinel: rs.status() throws
+  # NotYetInitialized when mongod is up with replSetName configured
+  # but rs.initiate() hasn't run yet — common state if M1 phase 1
+  # finished but the orchestrator died before the gate. Operator
+  # gets a recovery hint instead of a generic "rs.status() failed".
   local out
   out=$(mongodb::eval_root "
-    var s = rs.status();
-    print('SUMMARY|' + s.set + '|' + (s.term || 0) + '|' + s.ok);
-    var primaryOptime = null;
-    s.members.forEach(function(m) {
-      if (m.stateStr === 'PRIMARY' && m.optimeDate) primaryOptime = m.optimeDate;
-    });
-    s.members.forEach(function(m) {
-      var lag = '-';
-      if (m.optimeDate && primaryOptime) {
-        lag = (primaryOptime - m.optimeDate) + 'ms';
+    try {
+      var s = rs.status();
+      print('SUMMARY|' + s.set + '|' + (s.term || 0) + '|' + s.ok);
+      var primaryOptime = null;
+      s.members.forEach(function(m) {
+        if (m.stateStr === 'PRIMARY' && m.optimeDate) primaryOptime = m.optimeDate;
+      });
+      s.members.forEach(function(m) {
+        var lag = '-';
+        if (m.optimeDate && primaryOptime) {
+          lag = (primaryOptime - m.optimeDate) + 'ms';
+        }
+        var hb = m.lastHeartbeatMessage || '';
+        print('MEMBER|' + m._id + '|' + m.name + '|' + m.stateStr +
+              '|' + m.health + '|' + (m.uptime || 0) + '|' + lag +
+              '|' + hb);
+      });
+    } catch (e) {
+      if (e.codeName === 'NotYetInitialized') {
+        print('NOT_INITIALIZED');
+      } else {
+        print('ERR|' + (e.codeName || 'unknown') + '|' + (e.message || ''));
       }
-      var hb = m.lastHeartbeatMessage || '';
-      print('MEMBER|' + m._id + '|' + m.name + '|' + m.stateStr +
-            '|' + m.health + '|' + (m.uptime || 0) + '|' + lag +
-            '|' + hb);
-    });
+    }
     print('EVAL_OK');
-  " 2>/dev/null) || die "rs.status() failed - is mongod running on M1? (check 'systemctl status mongod')"
+  " 2>/dev/null) || die "rs.status() call failed - is mongod running on M1? (check 'systemctl status mongod')"
+
+  if printf '%s\n' "$out" | grep -q 'NOT_INITIALIZED'; then
+    printf '%bMongo replica set is NOT yet initialized%b\n' "$C_YELLOW" "$C_RESET"
+    printf '  cluster size: %s (RS configured but rs.initiate() never ran)\n' "$size"
+    printf '  recover with: sudo elchi-stack init-replica-set\n\n'
+    return 0
+  fi
+  if printf '%s\n' "$out" | grep -q '^[[:space:]]*\[mongosh\][[:space:]]*ERR|'; then
+    local err_line
+    err_line=$(printf '%s\n' "$out" | sed -n 's/.*ERR|/ERR|/p' | head -1)
+    die "rs.status() error: ${err_line}"
+  fi
 
   local set_name term ok
   read -r set_name term ok < <(
