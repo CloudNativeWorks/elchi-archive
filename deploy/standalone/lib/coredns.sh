@@ -306,7 +306,14 @@ coredns::render_zone() {
   if [ -f "$zfile" ]; then
     prev_serial=$(awk '/; serial/ {print $1; exit}' "$zfile" 2>/dev/null || echo 0)
     [[ "$prev_serial" =~ ^[0-9]+$ ]] || prev_serial=0
-    prev_hash=$(sed -E 's/^[[:space:]]*[0-9]+[[:space:]]*; serial.*$/__SERIAL__ ; serial/' "$zfile" \
+    # Replace serial with __SERIAL__ placeholder for hash comparison.
+    # Capture surrounding whitespace so the normalized form matches the
+    # heredoc render byte-for-byte. Earlier pattern dropped leading
+    # indent, producing "__SERIAL__ ; serial" while the heredoc emits
+    # "    __SERIAL__ ; serial" — the hash mismatch incremented serial
+    # on every rerun, which kept bumping the zone file → coredns
+    # restarted every install/upgrade even when content was identical.
+    prev_hash=$(sed -E 's/^([[:space:]]*)[0-9]+([[:space:]]+; serial.*)$/\1__SERIAL__\2/' "$zfile" \
                   | sha256sum | awk '{print $1}')
   fi
 

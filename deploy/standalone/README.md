@@ -58,13 +58,18 @@ The first node in `--nodes` is treated as M1; if it matches a local
 hostname/IP, `install.sh` runs the M1 install in-process and SSHes only
 to the others.
 
+> **Note on OS patches.** `install.sh` does NOT touch the host OS by
+> default. Add `--upgrade-os` if you want it to apply published security
+> advisories (`unattended-upgrade` on debian, `dnf upgrade-minimal
+> --security` on rhel) before the elchi-stack install. Full
+> dist-upgrades stay the operator's responsibility.
+
 ### Single-VM example
 
 ```bash
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
-  --backend-release=v1.1.2 \
-  --backend-variants=v0.14.0-envoy1.36.2 \
+  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2 \
   --ui-version=v1.1.7 \
   --envoy-version=v1.37.0 \
   --main-address=$(hostname -f)
@@ -72,23 +77,23 @@ sudo bash deploy/standalone/install.sh \
 
 ### Bootstrap (curl | bash)
 
-Once a release is published to `elchi-archive` under tag
-`elchi-stack-standalone-vYYYY.MM.DD`:
+`get.sh` fetches the `elchi-archive` `main` branch as a tarball, extracts
+it, and exec's `install.sh` with the args you forwarded. Pin to a
+specific revision with `--ref=<sha-or-tag>` if you want reproducible runs.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
-  | sudo bash -s -- --version=2026.04.29 \
+  | sudo bash -s -- \
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-      --backend-release=v1.1.2 \
-      --backend-variants=v0.14.0-envoy1.36.2 \
+      --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2 \
       --ui-version=v1.1.7 \
       --envoy-version=v1.37.0 \
       --main-address=elchi.example.com
 ```
 
-`get.sh` downloads + sha256-verifies the pinned tarball before exec'ing
-`install.sh`.
+For an in-place upgrade the same wrapper takes `--upgrade` and forwards
+to `upgrade.sh` (see [Upgrade](#upgrade)).
 
 ---
 
@@ -161,28 +166,89 @@ elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart
 
 ## Upgrade
 
-`upgrade.sh` is topology-aware: it diffs the existing
-`topology.full.yaml` against the new args and applies only what changed.
+`upgrade.sh` is topology-aware: it diffs the active `topology.full.yaml`
+against the new args, prints a plan banner, and re-runs `install.sh`
+with the merged set. SSH credentials persisted at install time
+(`/etc/elchi/orchestrator.env`) are reused, so most reruns only need
+the version flags.
 
 ```bash
-# Add a new backend variant to an existing 3-VM cluster:
-sudo bash deploy/standalone/upgrade.sh \
-  --backend-variants=v0.14.0-envoy1.36.2,v0.14.0-envoy1.38.0,v0.14.0-envoy1.40.0 \
-  --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key
+# Bump the UI only — backend / envoy / coredns are kept as-is.
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.8
 
-# Bump the UI:
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.7 \
-  --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key
-
-# Remove an old variant (use carefully):
+# Replace the backend variant set (declarative — old variants not in
+# this list are AUTO-PRUNED by install.sh's stale-variants pass).
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-variants=v0.14.0-envoy1.38.0,v0.14.0-envoy1.40.0 \
-  --prune-version=v0.14.0-envoy1.36.2 \
-  --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key
+  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
+
+# Additive shortcut — append a variant without re-listing existing ones.
+# Useful when you want N versions live at once.
+sudo bash deploy/standalone/upgrade.sh \
+  --add-backend-version=elchi-v1.2.3-v0.14.0-envoy1.38.0
+
+# Explicit prune — same effect as dropping it from --backend-version,
+# but more visible in the plan banner.
+sudo bash deploy/standalone/upgrade.sh \
+  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.38.0 \
+  --prune-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
+
+# Apply OS security patches as part of this upgrade (default: skipped).
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.8 --upgrade-os
 ```
 
-`install.sh` itself is idempotent — running it again with the same
-arguments is a no-op.
+### Bootstrap (curl | bash) for upgrade
+
+`get.sh` accepts `--upgrade` and forwards everything to `upgrade.sh`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
+  | sudo bash -s -- --upgrade \
+      --ui-version=v1.1.7 \
+      --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
+```
+
+### Behaviour notes
+
+- **Default = no OS patches.** `upgrade.sh` does NOT run apt/dnf on its
+  own anymore. Pass `--upgrade-os` when you want security advisories
+  applied alongside the elchi-stack reconcile. Even with the flag the
+  scope is security-only (`unattended-upgrade` on debian, `dnf
+  upgrade-minimal --security` on rhel) — never a full dist-upgrade.
+- **Auto-prune of dropped variants.** Any variant in the current
+  cluster but absent from `--backend-version` is removed automatically
+  by `install.sh`'s `prune::stale_variants` pass. The plan banner's
+  `removed:` line shows both explicit (`--prune-version` /
+  `--prune-missing`) and auto-prune sets together. `--prune-missing`
+  remains a no-op if you've already dropped variants from
+  `--backend-version` — it's there for operators who prefer the intent
+  to be explicit.
+- **No double-fetch on remote nodes.** Backend binaries and the UI
+  tarball are downloaded once on M1 and shipped to remotes via the
+  encrypted bundle (`/tmp/elchi-bundle-*.tar.gz.enc`), so a 3-node
+  upgrade is one GitHub fetch, not three.
+- **Idempotent.** Rerunning with the same args is a no-op — every
+  systemd unit reconcile uses fingerprint+state to decide whether to
+  restart.
+- **Health gate.** Post-upgrade the orchestrator runs
+  `verify::deep_health` on every node and refuses to declare success
+  unless every service is `active`. Bypass with `--skip-health-gate`
+  only when verify itself is the problem.
+
+### Removing variants safely
+
+If you want to be explicit about a destructive removal (visible in the
+plan banner instead of relying on auto-prune):
+
+```bash
+# Replace the entire variant set + prune anything missing
+sudo bash deploy/standalone/upgrade.sh \
+  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.38.0,elchi-v1.2.3-v0.14.0-envoy1.40.0 \
+  --prune-missing
+```
+
+`--prune-missing` and `--add-backend-version` are mutually exclusive —
+the additive shortcut is for "add without changing existing", the prune
+flag is for "drop everything not in this list".
 
 ---
 
