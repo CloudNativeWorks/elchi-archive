@@ -71,16 +71,26 @@ log::_self_tag() {
   printf '%s' "$_ELCHI_LOG_TAG"
 }
 
-log::info() { printf '%b[%s]%b %b[INFO]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_BLUE"   "$C_RESET" "$*"; }
-log::ok()   { printf '%b[%s]%b %b[ OK ]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_GREEN"  "$C_RESET" "$*"; }
-log::warn() { printf '%b[%s]%b %b[WARN]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_YELLOW" "$C_RESET" "$*" >&2; }
-log::err()  { printf '%b[%s]%b %b[ERR ]%b %s\n' "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_RED"    "$C_RESET" "$*" >&2; }
+# log::_now — UTC timestamp for log prefixes. UTC is intentional: nodes
+# in different timezones still produce comparable transcripts when
+# piped/shipped to a central log store. Uses `date(1)` rather than
+# bash's printf `%(...)T` builtin so we don't require bash 4.2+ —
+# installer is run on whatever shell ships on the host.
+log::_now() {
+  date -u +'%Y-%m-%d %H:%M:%S'
+}
+
+log::info() { printf '%b[%s]%b %b[%s]%b %b[INFO]%b %s\n' "$C_DIM" "$(log::_now)" "$C_RESET" "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_BLUE"   "$C_RESET" "$*"; }
+log::ok()   { printf '%b[%s]%b %b[%s]%b %b[ OK ]%b %s\n' "$C_DIM" "$(log::_now)" "$C_RESET" "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_GREEN"  "$C_RESET" "$*"; }
+log::warn() { printf '%b[%s]%b %b[%s]%b %b[WARN]%b %s\n' "$C_DIM" "$(log::_now)" "$C_RESET" "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_YELLOW" "$C_RESET" "$*" >&2; }
+log::err()  { printf '%b[%s]%b %b[%s]%b %b[ERR ]%b %s\n' "$C_DIM" "$(log::_now)" "$C_RESET" "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" "$C_RED"    "$C_RESET" "$*" >&2; }
 
 # log::step — banner-style header before each major phase. The blank
 # leading line gives breathing room in long install transcripts so the
 # eye can spot phase boundaries when scrolling.
 log::step() {
-  printf '\n%b[%s]%b %b==>%b %b%s%b\n' \
+  printf '\n%b[%s]%b %b[%s]%b %b==>%b %b%s%b\n' \
+    "$C_DIM" "$(log::_now)" "$C_RESET" \
     "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" \
     "$C_BLUE" "$C_RESET" \
     "$C_BOLD" "$*" "$C_RESET"
@@ -94,7 +104,8 @@ log::step() {
 # emitted it — a confusing artifact when phase 1/2 fanouts interleave.
 log::node() {
   local node=$1 ; shift
-  printf '%b[%s]%b %b[%s]%b %s\n' \
+  printf '%b[%s]%b %b[%s]%b %b[%s]%b %s\n' \
+    "$C_DIM" "$(log::_now)" "$C_RESET" \
     "$C_MAGENTA" "$(log::_self_tag)" "$C_RESET" \
     "$C_CYAN" "$node" "$C_RESET" "$*"
 }
