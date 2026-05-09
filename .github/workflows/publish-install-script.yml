@@ -2,11 +2,6 @@ name: Publish Install Script
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag for install.sh (e.g., v1.0.0)'
-        required: true
-        type: string
   push:
     paths:
       - 'install.sh'
@@ -40,12 +35,12 @@ jobs:
       - name: Set version
         id: version
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            # Auto-version based on date for push events
-            VERSION="v$(date -u +%Y.%m.%d)"
-          fi
+          # Date-based tag for every run (manual + push). install_script_releases
+          # holds a single rolling entry, so collisions across same-day runs
+          # just overwrite the index entry; the GitHub Release tag may
+          # already exist for today, in which case action-gh-release updates
+          # it in place.
+          VERSION="v$(date -u +%Y.%m.%d)"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Using version: $VERSION"
 
@@ -81,11 +76,7 @@ jobs:
       - name: Set version
         id: version
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="v$(date -u +%Y.%m.%d)"
-          fi
+          VERSION="v$(date -u +%Y.%m.%d)"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download artifacts
@@ -126,40 +117,25 @@ jobs:
           }
           EOF
 
-          # Update index.json with install script releases section
+          # Update index.json with install script releases section.
+          # Contract: install_script_releases holds exactly one entry — the
+          # latest publish. index.html consumes [0] and the install.sh URL
+          # is "always-current" by design. Older versions stay reachable
+          # via their GitHub Release tags, which we don't delete.
           python3 << 'EOF'
           import json
 
-          # Read existing index
           try:
               with open('index.json', 'r') as f:
                   index = json.load(f)
           except:
               index = {"releases": []}
 
-          # Ensure install_script_releases key exists
-          if 'install_script_releases' not in index:
-              index['install_script_releases'] = []
-
-          # Read new install script release
           with open('temp_install_script_release.json', 'r') as f:
               new_release = json.load(f)
 
-          # Update if same version exists, otherwise add
-          existing = False
-          for i, release in enumerate(index['install_script_releases']):
-              if release['version'] == new_release['version']:
-                  index['install_script_releases'][i] = new_release
-                  existing = True
-                  break
+          index['install_script_releases'] = [new_release]
 
-          if not existing:
-              index['install_script_releases'].append(new_release)
-
-          # Sort by version (newest to oldest)
-          index['install_script_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          # Save
           with open('index.json', 'w') as f:
               json.dump(index, f, indent=2)
           EOF

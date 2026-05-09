@@ -299,9 +299,13 @@ verify::print_summary() {
   printf '\n'
   printf '  %bOperator helper:%b /usr/local/bin/elchi-stack\n' "$C_CYAN" "$C_RESET"
   printf '    elchi-stack status            cluster-wide service summary\n'
+  printf '    elchi-stack mongo-status      mongo replica-set health (M1 only)\n'
   printf '    elchi-stack reload-envoy      re-render bootstrap on every node\n'
-  printf '    elchi-stack add-node IP       extend the cluster\n'
+  printf '    elchi-stack add-node IP       extend the cluster (preview + confirm)\n'
   printf '    elchi-stack logs <unit>       tail journalctl on every node\n'
+  printf '    elchi-stack verify            cluster-wide deep health check\n'
+  printf '    elchi-stack rotate-secret <jwt|gslb|grafana>\n'
+  printf '    elchi-stack show-secret <name>\n'
   printf '\n'
   printf '  %bPer-node audit:%b   sudo /etc/elchi/validate.sh\n' "$C_CYAN" "$C_RESET"
   printf '                     run on EACH machine to confirm topology, systemd,\n'

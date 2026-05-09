@@ -82,7 +82,7 @@ Usage:
 
 Version flags (omit to keep current):
   --backend-version=<csv>           full variant tags, e.g.
-                                     elchi-v1.2.0-v0.14.0-envoy1.36.2,...
+                                     elchi-v1.2.3-v0.14.0-envoy1.36.2,...
                                      Replaces the active variant set.
   --add-backend-version=<csv>       additive shortcut: appends to the
                                      current variant set without making
@@ -117,14 +117,14 @@ Op-mode:
 
 Examples:
   # Add a new variant alongside an existing one
-  sudo $0 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.37.0
+  sudo $0 --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2,elchi-v1.2.3-v0.14.0-envoy1.37.0
 
   # Replace the existing variant with a new one
-  sudo $0 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0 \\
-          --prune-version=elchi-v1.2.0-v0.14.0-envoy1.36.2
+  sudo $0 --backend-version=elchi-v1.2.3-v0.14.0-envoy1.37.0 \\
+          --prune-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
 
   # Replace + add in one step (declarative — new list is the truth)
-  sudo $0 --backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0,elchi-v1.2.0-v0.14.0-envoy1.38.0 \\
+  sudo $0 --backend-version=elchi-v1.2.3-v0.14.0-envoy1.37.0,elchi-v1.2.3-v0.14.0-envoy1.38.0 \\
           --prune-missing
 
 EOF
