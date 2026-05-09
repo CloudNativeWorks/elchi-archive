@@ -21,6 +21,20 @@
 # `mv -f` to /etc/systemd/system/. systemd 249+ rejects verify on files
 # whose extension isn't a known unit type, so the suffix matters.
 
+# Per-run action ledger: every install_and_apply / reconcile_external
+# decision (noop / restart / start) appends one line here. The caller
+# (install.sh main flow) truncates the file at the start of a run so
+# upgrade.sh can read it back at the end and produce a cluster-wide
+# "what changed" summary. Format: <ISO-timestamp>|<unit>|<action>.
+readonly ELCHI_ACTION_LOG=/var/lib/elchi/.last-run-actions.log
+
+systemd::_record_action() {
+  local unit=$1 action=$2
+  install -d -m 0755 -o root -g root "$(dirname "$ELCHI_ACTION_LOG")" 2>/dev/null || true
+  printf '%s|%s|%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$unit" "$action" \
+    >> "$ELCHI_ACTION_LOG" 2>/dev/null || true
+}
+
 # systemd::_verify <staged-path> — best-effort static verification. We
 # treat verify failure as fatal for our own units, but tolerate
 # "missing dependency" warnings for service files that reference
@@ -224,6 +238,7 @@ systemd::install_and_apply() {
   printf '%s' "$new_fp" > "${fp_file}.tmp"
   mv -f "${fp_file}.tmp" "$fp_file"
   log::info "${unit}: ${action}"
+  systemd::_record_action "$unit" "$action"
 }
 
 systemd::restart() {
@@ -300,6 +315,7 @@ systemd::reconcile_external() {
   printf '%s' "$new_fp" > "${fp_file}.tmp"
   mv -f "${fp_file}.tmp" "$fp_file"
   log::info "${unit}: ${action}"
+  systemd::_record_action "$unit" "$action"
 }
 
 # systemd::list_instances <template-base>

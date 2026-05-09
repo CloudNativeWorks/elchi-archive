@@ -1411,6 +1411,20 @@ main() {
   source_libs
   require_root
 
+  # Reset the per-run action ledger before any systemd::install_and_apply
+  # / reconcile_external runs. Truncate ONLY at the start of a run, NOT
+  # between phases — remote nodes are invoked twice (phase 1 + phase 2)
+  # by the orchestrator over separate SSH sessions, each landing in a
+  # fresh install.sh main(). Truncating both times would erase phase 1's
+  # actions before upgrade.sh could collect them. Rule:
+  #   * orchestrator path (no --install-phase set, M1 main flow) → truncate
+  #   * --install-phase=1 (remote phase 1)                       → truncate
+  #   * --install-phase=2 (remote phase 2)                       → append
+  install -d -m 0755 -o root -g root /var/lib/elchi 2>/dev/null || true
+  if [ "${ELCHI_INSTALL_PHASE:-}" != "2" ]; then
+    : > /var/lib/elchi/.last-run-actions.log 2>/dev/null || true
+  fi
+
   if [ "$ELCHI_SKIP_ORCHESTRATION" = "1" ]; then
     # Remote node mode — bundle is the source of truth for shared
     # secrets/TLS/topology; we only run local_install.

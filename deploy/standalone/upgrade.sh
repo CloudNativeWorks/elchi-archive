@@ -61,6 +61,10 @@ export ELCHI_INSTALLER_ROOT
 # shellcheck source=lib/verify.sh
 . "${SCRIPT_DIR}/lib/verify.sh"
 
+# Capture upgrade start so the final summary can show how long this run
+# took end-to-end (from "acquired upgrade lock" to "upgrade complete").
+_UPGRADE_START_TS=$(date +%s)
+
 NEW_BACKEND_VARIANTS=""
 ADD_BACKEND_VARIANTS=""   # additive: appended to current set (UX shortcut)
 NEW_UI_VERSION=""
@@ -477,8 +481,189 @@ else
 fi
 
 log::ok "upgrade complete"
-# Final summary mirrors the plan banner: explicit removals + auto-pruned
-# orphans land in the same "removed" bucket because both are gone after
-# install.sh's prune::stale_variants pass.
+
+# ─── Detailed result banner ──────────────────────────────────────────────
+# Pull each node's per-run action ledger (written by systemd::install_and_apply
+# / reconcile_external in lib/systemd.sh) and produce a cluster-wide
+# "what actually changed" summary. Without this, a successful upgrade is
+# a wall of [ OK ] lines with no quick way to answer "did anything
+# restart?". We surface actions per-node + group services by action so
+# the operator can read the outcome at a glance.
+upgrade::_node_actions() {
+  # Read the action ledger for one host. Local read for M1, ssh for the
+  # rest. Each line is "<iso-ts>|<unit>|<action>". Empty stdout = no
+  # actions (clean noop run, or the node never ran install.sh — both
+  # treated as "nothing to report").
+  local host=$1 idx=$2
+  local path=/var/lib/elchi/.last-run-actions.log
+  if [ "$idx" = "1" ]; then
+    [ -f "$path" ] && cat "$path" || true
+  else
+    ssh::run_sudo "$host" "cat ${path} 2>/dev/null || true" 2>/dev/null || true
+  fi
+}
+
+upgrade::_classify_action() {
+  # Map raw action string → one-word bucket. Keep noop quiet, surface
+  # every form of state change.
+  case "$1" in
+    noop)                                  printf 'noop' ;;
+    'start (was inactive)')                printf 'recovered' ;;
+    'restart (fingerprint changed)')       printf 'restarted' ;;
+    'start (fingerprint changed)')         printf 'started' ;;
+    *)                                     printf 'other' ;;
+  esac
+}
+
+upgrade::_join_csv() {
+  # join words on ", " for human-readable lists. Bash's "${arr[*]}" with
+  # IFS only uses the FIRST char of IFS, which gives "a,b,c" (no space).
+  # We want "a, b, c" so the long unit list wraps better in a terminal.
+  local first=1 v
+  for v in "$@"; do
+    if [ "$first" = "1" ]; then
+      printf '%s' "$v"
+      first=0
+    else
+      printf ', %s' "$v"
+    fi
+  done
+}
+
+upgrade::print_summary() {
+  local end_ts duration_s mins secs
+  end_ts=$(date +%s)
+  duration_s=$(( end_ts - _UPGRADE_START_TS ))
+  mins=$(( duration_s / 60 ))
+  secs=$(( duration_s % 60 ))
+
+  local versions_changed=()
+  [ "$CUR_UI" != "$NEW_UI_VERSION" ] && [ -n "$NEW_UI_VERSION" ]   && versions_changed+=("UI: ${CUR_UI} → ${NEW_UI_VERSION}")
+  [ "$CUR_ENVOY" != "$NEW_ENVOY_VERSION" ] && [ -n "$NEW_ENVOY_VERSION" ] && versions_changed+=("Envoy: ${CUR_ENVOY} → ${NEW_ENVOY_VERSION}")
+  [ "$CUR_COREDNS" != "$NEW_COREDNS_VERSION" ] && [ -n "$NEW_COREDNS_VERSION" ] && versions_changed+=("CoreDNS: ${CUR_COREDNS} → ${NEW_COREDNS_VERSION}")
+  [ -n "$NEW_MONGO_VERSION" ] && versions_changed+=("Mongo: ${NEW_MONGO_VERSION} (forwarded)")
+
+  local _all_removed=()
+  [ "${#REMOVED_VARIANTS[@]}" -gt 0 ] && _all_removed+=("${REMOVED_VARIANTS[@]}")
+  [ "${#ORPHAN_VARIANTS[@]}" -gt 0 ] && _all_removed+=("${ORPHAN_VARIANTS[@]}")
+
+  printf '\n'
+  printf '%b═══════════════════════════════════════════════════════════════%b\n' "$C_GREEN" "$C_RESET"
+  printf '%b           upgrade summary%b\n' "$C_BOLD" "$C_RESET"
+  printf '%b═══════════════════════════════════════════════════════════════%b\n\n' "$C_GREEN" "$C_RESET"
+
+  # ----- Versions ---------------------------------------------------------
+  printf '  %bVersions%b\n' "$C_CYAN" "$C_RESET"
+  if [ "${#versions_changed[@]}" -gt 0 ]; then
+    local v
+    for v in "${versions_changed[@]}"; do
+      printf '    %b●%b %s   ← change\n' "$C_YELLOW" "$C_RESET" "$v"
+    done
+  else
+    printf '    UI: %s, Envoy: %s, CoreDNS: %s — all kept\n' \
+      "${CUR_UI:-<unset>}" "${CUR_ENVOY:-<unset>}" "${CUR_COREDNS:-<unset>}"
+  fi
+
+  # ----- Backend variants -------------------------------------------------
+  printf '\n  %bBackend variants%b\n' "$C_CYAN" "$C_RESET"
+  printf '    added   : %s\n' "${ADDED_VARIANTS[*]:-<none>}"
+  printf '    kept    : %s\n' "${KEPT_VARIANTS[*]:-<none>}"
+  printf '    removed : %s\n' "${_all_removed[*]:-<none>}"
+
+  # ----- Per-node service actions ----------------------------------------
+  printf '\n  %bService actions per node%b\n' "$C_CYAN" "$C_RESET"
+  local -a _summary_hosts
+  mapfile -t _summary_hosts < <(csv_split "$NODES")
+  local idx=0 host
+  local total_restarted=0 total_started=0 total_recovered=0 total_noop=0
+  for host in "${_summary_hosts[@]}"; do
+    idx=$(( idx + 1 ))
+    local raw line unit action bucket
+    local -a noop_units=() restart_units=() start_units=() recover_units=() other_units=()
+    raw=$(upgrade::_node_actions "$host" "$idx")
+    if [ -z "$raw" ]; then
+      printf '    %bnode %d%b %s — %bno action ledger (skipped or pre-helper install)%b\n' \
+        "$C_BOLD" "$idx" "$C_RESET" "$host" "$C_DIM" "$C_RESET"
+      continue
+    fi
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      unit=$(printf '%s' "$line" | cut -d'|' -f2)
+      action=$(printf '%s' "$line" | cut -d'|' -f3-)
+      bucket=$(upgrade::_classify_action "$action")
+      case "$bucket" in
+        noop)      noop_units+=("$unit") ;;
+        restarted) restart_units+=("$unit") ;;
+        started)   start_units+=("$unit") ;;
+        recovered) recover_units+=("$unit") ;;
+        *)         other_units+=("${unit} (${action})") ;;
+      esac
+    done <<< "$raw"
+    total_noop=$(( total_noop + ${#noop_units[@]} ))
+    total_restarted=$(( total_restarted + ${#restart_units[@]} ))
+    total_started=$(( total_started + ${#start_units[@]} ))
+    total_recovered=$(( total_recovered + ${#recover_units[@]} ))
+
+    printf '    %bnode %d%b %s\n' "$C_BOLD" "$idx" "$C_RESET" "$host"
+    if [ "${#restart_units[@]}" -gt 0 ]; then
+      printf '      %brestarted%b   (%d): %s\n' "$C_YELLOW" "$C_RESET" "${#restart_units[@]}" "$(upgrade::_join_csv "${restart_units[@]}")"
+    fi
+    if [ "${#start_units[@]}" -gt 0 ]; then
+      printf '      %bstarted%b     (%d): %s\n' "$C_GREEN"  "$C_RESET" "${#start_units[@]}"   "$(upgrade::_join_csv "${start_units[@]}")"
+    fi
+    if [ "${#recover_units[@]}" -gt 0 ]; then
+      printf '      %brecovered%b   (%d): %s\n' "$C_GREEN"  "$C_RESET" "${#recover_units[@]}" "$(upgrade::_join_csv "${recover_units[@]}")"
+    fi
+    if [ "${#other_units[@]}" -gt 0 ]; then
+      printf '      %bother%b       (%d): %s\n' "$C_MAGENTA" "$C_RESET" "${#other_units[@]}" "$(upgrade::_join_csv "${other_units[@]}")"
+    fi
+    if [ "${#noop_units[@]}" -gt 0 ] \
+       && [ "${#restart_units[@]}" -eq 0 ] \
+       && [ "${#start_units[@]}" -eq 0 ] \
+       && [ "${#recover_units[@]}" -eq 0 ] \
+       && [ "${#other_units[@]}" -eq 0 ]; then
+      printf '      %ball %d services unchanged%b\n' "$C_DIM" "${#noop_units[@]}" "$C_RESET"
+    elif [ "${#noop_units[@]}" -gt 0 ]; then
+      printf '      %bunchanged%b   (%d): %s\n' "$C_DIM" "$C_RESET" "${#noop_units[@]}" "$(upgrade::_join_csv "${noop_units[@]}")"
+    fi
+  done
+
+  # ----- Cluster totals ---------------------------------------------------
+  printf '\n  %bCluster totals%b\n' "$C_CYAN" "$C_RESET"
+  printf '    restarted : %d\n' "$total_restarted"
+  printf '    started   : %d\n' "$total_started"
+  printf '    recovered : %d  (services that were down before this run)\n' "$total_recovered"
+  printf '    unchanged : %d\n' "$total_noop"
+
+  # ----- Untouched / preserved -------------------------------------------
+  # The user explicitly cares about what we DIDN'T do — knowing the OS
+  # wasn't patched / mongo data wasn't reset / secrets stayed put is as
+  # important as knowing what changed. Reflects the actual policy of
+  # this upgrade run (--upgrade-os flag value).
+  printf '\n  %bUntouched / preserved%b\n' "$C_CYAN" "$C_RESET"
+  if [ "$UPGRADE_OS" = "1" ]; then
+    printf '    OS packages       : %bsecurity patches applied%b\n' "$C_YELLOW" "$C_RESET"
+  else
+    printf '    OS packages       : not modified (use --upgrade-os to apply security patches)\n'
+  fi
+  printf '    Secrets / TLS     : preserved (rotate via `elchi-stack rotate-secret <name>`)\n'
+  printf '    MongoDB data      : preserved\n'
+  printf '    Grafana DB        : preserved\n'
+  printf '    VictoriaMetrics   : preserved\n'
+
+  # ----- Health gate ------------------------------------------------------
+  printf '\n  %bHealth gate%b\n' "$C_CYAN" "$C_RESET"
+  if [ "$SKIP_HEALTH_GATE" = "1" ]; then
+    printf '    %bskipped (--skip-health-gate)%b\n' "$C_YELLOW" "$C_RESET"
+  else
+    printf '    %bdeep health check passed on every node%b\n' "$C_GREEN" "$C_RESET"
+  fi
+
+  printf '\n  %bDuration:%b %dm %ds\n' "$C_CYAN" "$C_RESET" "$mins" "$secs"
+  printf '  %bUI:%b https://%s\n\n' "$C_CYAN" "$C_RESET" "$MAIN_ADDR"
+}
+
+upgrade::print_summary
+
 _final_removed=("${REMOVED_VARIANTS[@]}" "${ORPHAN_VARIANTS[@]}")
 log::info "added: ${ADDED_VARIANTS[*]:-<none>} | kept: ${KEPT_VARIANTS[*]:-<none>} | removed: ${_final_removed[*]:-<none>}"
