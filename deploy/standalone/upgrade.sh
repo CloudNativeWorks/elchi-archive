@@ -494,13 +494,22 @@ upgrade::_node_actions() {
   # rest. Each line is "<iso-ts>|<unit>|<action>". Empty stdout = no
   # actions (clean noop run, or the node never ran install.sh — both
   # treated as "nothing to report").
+  #
+  # IMPORTANT: pass the command as separate argv tokens (not a single
+  # shell-snippet string). ssh::run_sudo uses `printf %q` on each arg
+  # to defend against quoting issues, which means a snippet like
+  # `cat /path 2>/dev/null || true` would arrive at the remote with
+  # `2>/dev/null` and `||` literal-escaped — cat would treat them as
+  # filenames, fail, and stdout would be empty. By splitting argv we
+  # let cat receive a clean single-file argument; we do the error
+  # suppression at the local layer with `2>/dev/null || true`.
   local host=$1 idx=$2
   local path=/var/lib/elchi/.last-run-actions.log
   if [ "$idx" = "1" ]; then
-    [ -f "$path" ] && cat "$path" || true
-  else
-    ssh::run_sudo "$host" "cat ${path} 2>/dev/null || true" 2>/dev/null || true
+    [ -f "$path" ] && cat "$path"
+    return 0
   fi
+  ssh::run_sudo "$host" cat "$path" 2>/dev/null || true
 }
 
 upgrade::_classify_action() {
