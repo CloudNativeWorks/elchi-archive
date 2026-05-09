@@ -179,15 +179,19 @@ ELCHI_LOG_FORMAT=${ELCHI_LOG_FORMAT:-text}
 ELCHI_LOG_REPORT_CALLER=${ELCHI_LOG_REPORT_CALLER:-false}
 
 ELCHI_NON_INTERACTIVE=${ELCHI_NON_INTERACTIVE:-0}
+# Upgrade mode flag — set by upgrade.sh when it re-runs install.sh.
+# Currently only suppresses verify::print_summary's first-install
+# banner (credentials + URLs + operator-helper cheat sheet) since the
+# operator already knows the cluster after an upgrade.
+ELCHI_UPGRADE_MODE=${ELCHI_UPGRADE_MODE:-0}
 ELCHI_NO_FIREWALL=${ELCHI_NO_FIREWALL:-0}
-# Default: apply published OS SECURITY patches before any service
-# install — `unattended-upgrade` on debian, `dnf upgrade-minimal
-# --security` on rhel. NOT a full apt/dnf upgrade: general updates
-# (random userspace bumps, config drift, surprise mongo / nginx
-# minor revs) are the operator's call. Opt out entirely with
-# --no-upgrade-os when the VM image is pinned / air-gapped / iteration
-# speed matters more than security currency.
-ELCHI_UPGRADE_OS=${ELCHI_UPGRADE_OS:-1}
+# Default: do NOT touch the OS. Operators run upgrade.sh frequently
+# (UI / backend variant churn) and don't expect every rerun to also
+# update kernel/libc/dpkg. Opt in with --upgrade-os when you want the
+# install loop to apply published OS SECURITY patches —
+# `unattended-upgrade` on debian, `dnf upgrade-minimal --security` on
+# rhel. Either way it stays SECURITY ONLY (no full dist-upgrade).
+ELCHI_UPGRADE_OS=${ELCHI_UPGRADE_OS:-0}
 ELCHI_DRY_RUN=${ELCHI_DRY_RUN:-0}
 ELCHI_KEEP_BUNDLE=${ELCHI_KEEP_BUNDLE:-0}
 ELCHI_BUNDLE_KEY_OUT=${ELCHI_BUNDLE_KEY_OUT:-}
@@ -289,13 +293,14 @@ GSLB (CoreDNS — default ON)
 Op-mode
   --non-interactive                   never prompt
   --no-firewall                       skip firewalld/ufw configuration
-  --no-upgrade-os                     skip the OS security-patch step
-                                       (default: ON — applies security advisories
-                                       only; general/full upgrades remain the
-                                       operator's responsibility)
-                                       step run before any service install
-                                       (default: ON; use this on pinned base
-                                       images / air-gapped / fast iteration)
+  --upgrade-os                        opt in to the OS security-patch step
+                                       (default: OFF). Security-only:
+                                         debian → unattended-upgrade
+                                         rhel   → dnf upgrade-minimal --security
+                                       Full / general upgrades remain the
+                                       operator's responsibility.
+  --no-upgrade-os                     explicit opt-out (matches the default;
+                                       provided for symmetry / scripting)
   --dry-run                           render config; skip SSH/SCP and side-effects
   --keep-bundle                       preserve the bundle artifact (default: deleted)
   --bundle-key-out=<path>             write the bundle decryption key to a file
@@ -454,6 +459,7 @@ parse_args() {
       --no-firewall)                          ELCHI_NO_FIREWALL=1 ;;
       --upgrade-os)                           ELCHI_UPGRADE_OS=1 ;;
       --no-upgrade-os)                        ELCHI_UPGRADE_OS=0 ;;
+      --upgrade-mode)                         ELCHI_UPGRADE_MODE=1 ;;
       --dry-run)                              ELCHI_DRY_RUN=1 ;;
       --keep-bundle)                          ELCHI_KEEP_BUNDLE=1 ;;
       --bundle-key-out=*)                     ELCHI_BUNDLE_KEY_OUT=${1#*=} ;;
@@ -526,7 +532,7 @@ parse_args() {
   export ELCHI_GSLB_NAMESERVERS ELCHI_GSLB_REGIONS ELCHI_GSLB_TLS_SKIP_VERIFY
   export ELCHI_GSLB_TTL ELCHI_GSLB_SYNC_INTERVAL ELCHI_GSLB_TIMEOUT
   export ELCHI_GSLB_STATIC_RECORDS ELCHI_GSLB_SECRET ELCHI_GSLB_FORWARDERS
-  export ELCHI_NON_INTERACTIVE ELCHI_NO_FIREWALL ELCHI_UPGRADE_OS ELCHI_DRY_RUN
+  export ELCHI_NON_INTERACTIVE ELCHI_NO_FIREWALL ELCHI_UPGRADE_OS ELCHI_UPGRADE_MODE ELCHI_DRY_RUN
   export ELCHI_NODE_INDEX ELCHI_NODE_HOST
   export ELCHI_SKIP_ORCHESTRATION
 }
@@ -707,8 +713,18 @@ _local_install_resolve_node() {
 local_install_phase1() {
   preflight::run
 
-  user::ensure
-  dirs::ensure
+  # On M1 (the orchestrator), user::ensure / dirs::ensure / secrets::generate
+  # / tls::setup were ALREADY executed by orchestrate() before the bundle
+  # was built — they had to be, since bundle::build ships secrets.env +
+  # tls/* and chowns paths to elchi:elchi. Re-running them here is a
+  # no-op but each fires its own log::step, which produced duplicated
+  # "Ensuring system user/group" / "Configuring TLS" banners on M1 and
+  # confused operators into thinking work was being repeated.
+  # On remote nodes (--skip-orchestration) they're load-bearing.
+  if [ "$ELCHI_SKIP_ORCHESTRATION" = "1" ]; then
+    user::ensure
+    dirs::ensure
+  fi
 
   # Stage the operator helper + uninstall script BEFORE any service
   # actually starts. If a later step (registry / envoy / control-plane)
@@ -729,11 +745,8 @@ local_install_phase1() {
     secrets::import_from_bundle "$broot"
     tls::install_from_bundle "$broot"
     rm -rf "$extracted"
-  else
-    # Orchestrator OR single-VM: secrets minted locally, TLS generated.
-    secrets::generate
-    tls::setup
   fi
+  # Else (M1): secrets::generate + tls::setup already done by orchestrate().
 
   # Topology is now on disk (either from orchestrator's compute or from
   # the bundle). Run the topology-aware port atlas check before any
@@ -1387,7 +1400,8 @@ _orchestrate_remote_phase() {
     ${ELCHI_GSLB_ZONE:+--gslb-zone="$ELCHI_GSLB_ZONE"} \
     ${ELCHI_GSLB_ADMIN_EMAIL:+--gslb-admin-email="$ELCHI_GSLB_ADMIN_EMAIL"} \
     $( [ "$ELCHI_NO_FIREWALL" = "1" ] && echo --no-firewall ) \
-    $( [ "$ELCHI_UPGRADE_OS" = "0" ] && echo --no-upgrade-os ) \
+    $( [ "$ELCHI_UPGRADE_OS" = "1" ] && echo --upgrade-os ) \
+    $( [ "$ELCHI_UPGRADE_MODE" = "1" ] && echo --upgrade-mode ) \
     --non-interactive
 }
 

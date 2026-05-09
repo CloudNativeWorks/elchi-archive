@@ -15,16 +15,31 @@ ui::install() {
   local v=${ELCHI_UI_VERSION:?ELCHI_UI_VERSION not set}
   local v_no_v=${v#v}
   local dest_dir="${ELCHI_WEB}/elchi-${v}"
+  # Persistent tarball cache. Two reasons:
+  #   1. Repeat ui::install runs (rerun on same version) hit the cache
+  #      instead of GitHub.
+  #   2. bundle::build picks the cached tarball up so M2/M3 don't fan
+  #      out to GitHub — they pull from M1's bundle over LAN.
+  local cache_dir=/var/cache/elchi/ui
+  local cache_file="${cache_dir}/elchi-dist-${v}.tar.gz"
+  install -d -m 0755 "$cache_dir"
 
   if [ -d "$dest_dir" ] && [ -f "${dest_dir}/index.html" ]; then
     log::info "UI bundle ${v} already extracted at ${dest_dir}"
   else
-    local url="https://github.com/CloudNativeWorks/elchi/releases/download/${v}/elchi-dist-${v}.tar.gz"
     local tmp
     tmp=$(mktemp -d)
-    log::info "downloading UI bundle ${v}"
-    retry 3 5 curl -fL --retry 3 --retry-delay 2 -o "${tmp}/elchi-dist.tar.gz" "$url" \
-      || { rm -rf "$tmp"; die "UI bundle download failed: $url"; }
+    if [ -f "$cache_file" ]; then
+      log::info "using cached UI bundle ${v}"
+      cp "$cache_file" "${tmp}/elchi-dist.tar.gz"
+    else
+      local url="https://github.com/CloudNativeWorks/elchi/releases/download/${v}/elchi-dist-${v}.tar.gz"
+      log::info "downloading UI bundle ${v}"
+      retry 3 5 curl -fL --retry 3 --retry-delay 2 -o "${tmp}/elchi-dist.tar.gz" "$url" \
+        || { rm -rf "$tmp"; die "UI bundle download failed: $url"; }
+      # Persist for next rerun + bundle::build pickup.
+      install -m 0644 "${tmp}/elchi-dist.tar.gz" "$cache_file"
+    fi
     install -d -m 0755 "$dest_dir"
     tar -xzf "${tmp}/elchi-dist.tar.gz" -C "$dest_dir" \
       || { rm -rf "$tmp"; die "UI tarball extract failed"; }

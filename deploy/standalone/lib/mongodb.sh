@@ -222,19 +222,25 @@ mongodb::configure_conf() {
     sed -i '/# BEGIN elchi-stack managed/,/# END elchi-stack managed/d' "$conf"
   fi
 
+  # Trim trailing blank lines so repeat runs don't accumulate them.
+  # Without this, every rerun grows mongod.conf by one empty line and
+  # systemd::reconcile_external sees a fingerprint diff → spurious mongod
+  # restart on M2/M3 (M1 escapes only because its fingerprint is captured
+  # before configure_conf runs, via setup_replica_member's start_service
+  # → bootstrap_auth ordering).
+  sed -i -e :a -e '/^$/{$d;N;ba' -e '}' "$conf"
+
   # Update bindIp in the existing net: section. mongod.conf is YAML.
   if grep -Eq '^[[:space:]]*bindIp:' "$conf"; then
     sed -i "s|^[[:space:]]*bindIp:.*|  bindIp: ${bind_ip}|" "$conf"
   fi
 
   {
-    echo
     echo '# BEGIN elchi-stack managed'
     echo 'security:'
     echo '  authorization: enabled'
     if [ "$mode" = "rs" ]; then
       echo "  keyFile: ${ELCHI_MONGO}/keyfile"
-      echo
       echo 'replication:'
       echo '  replSetName: elchi-rs'
     fi

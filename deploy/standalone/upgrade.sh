@@ -72,6 +72,10 @@ NEW_GRAFANA_PASSWORD=""
 PRUNE_VERSIONS=""
 PRUNE_MISSING=0
 SKIP_HEALTH_GATE=0
+# OS security-patch step. Default OFF for upgrade.sh — operators who
+# rerun upgrade frequently don't want every iteration to also apt-get
+# their kernel/libc/dpkg. Opt in with --upgrade-os when they want it.
+UPGRADE_OS=0
 
 print_usage() {
   cat <<EOF
@@ -113,6 +117,13 @@ Op-mode:
   --skip-health-gate                bypass post-upgrade verify (faster but
                                      unsafer; only use when verify itself
                                      is the problem).
+  --upgrade-os                      apply OS security patches during this
+                                     upgrade (default: skipped — most
+                                     reruns just refresh elchi-stack code,
+                                     not the host OS). Security-only:
+                                       debian → unattended-upgrade
+                                       rhel   → dnf upgrade-minimal --security
+  --no-upgrade-os                   explicit opt-out (matches default)
   -h | --help
 
 Examples:
@@ -153,6 +164,8 @@ while [ "$#" -gt 0 ]; do
     --ssh-key=*)                          ELCHI_SSH_KEY=${1#*=};  _ELCHI_SSH_KEY_EXPLICIT=1  ;;
     --ssh-port=*)                         ELCHI_SSH_PORT=${1#*=}; _ELCHI_SSH_PORT_EXPLICIT=1 ;;
     --skip-health-gate)                   SKIP_HEALTH_GATE=1 ;;
+    --upgrade-os)                         UPGRADE_OS=1 ;;
+    --no-upgrade-os)                      UPGRADE_OS=0 ;;
     -h|--help)                            print_usage; exit 0 ;;
     *) printf 'unknown flag: %s\n' "$1" >&2; print_usage; exit 2 ;;
   esac
@@ -267,24 +280,25 @@ if [ "$union_count" -lt 1 ]; then
   die "refusing to apply: post-upgrade variant set is empty"
 fi
 
-# Sanity guard 2: ensure every CUR variant the operator did NOT list as
-# removed AND did NOT keep is flagged. This catches the "I forgot to
-# pass --prune-version=old" foot-gun where the operator drops a variant
-# from the --backend-version list expecting it to be removed but
-# without --prune-missing the OLD instance keeps running stale.
+# Sanity guard 2: surface variants that exist in the current cluster
+# but were dropped from --backend-version. Even without --prune-missing
+# / --prune-version, install.sh's prune::stale_variants pass
+# (lib/prune.sh:139, invoked unconditionally before
+# control_plane::create_instances) will remove them — the new topology
+# no longer lists them, so they're "stale on disk" by definition.
+# Surface this as auto-prune so the operator isn't surprised.
+ORPHAN_VARIANTS=()
 if [ "$PRUNE_MISSING" = "0" ] && [ -z "$PRUNE_VERSIONS" ]; then
-  ORPHAN_VARIANTS=()
   for v in "${CUR_VARIANTS[@]}"; do
     if ! contains "$v" "${NEW_VARIANTS[@]}"; then
       ORPHAN_VARIANTS+=("$v")
     fi
   done
   if [ "${#ORPHAN_VARIANTS[@]}" -gt 0 ]; then
-    log::warn "${#ORPHAN_VARIANTS[@]} variant(s) present in current cluster but absent from --backend-version:"
+    log::info "${#ORPHAN_VARIANTS[@]} variant(s) dropped from --backend-version — will be auto-pruned by install.sh's stale-variants pass:"
     for v in "${ORPHAN_VARIANTS[@]}"; do
       printf '    - %s\n' "$v" >&2
     done
-    log::warn "they will keep running. Pass --prune-missing or --prune-version=<tag> to remove them."
   fi
 fi
 
@@ -319,7 +333,18 @@ printf '    current : %s\n' "${CUR_VARIANTS[*]}"
 printf '    new     : %s\n' "${NEW_VARIANTS[*]}"
 printf '    added   : %s\n' "${ADDED_VARIANTS[*]:-<none>}"
 printf '    kept    : %s\n' "${KEPT_VARIANTS[*]:-<none>}"
-printf '    removed : %s\n\n' "${REMOVED_VARIANTS[*]:-<none>}"
+# Show explicit removals AND the auto-prune set together — both end up
+# gone after this run, so the operator should see one consolidated list.
+if [ "${#REMOVED_VARIANTS[@]}" -gt 0 ] || [ "${#ORPHAN_VARIANTS[@]}" -gt 0 ]; then
+  _all_removed=("${REMOVED_VARIANTS[@]}" "${ORPHAN_VARIANTS[@]}")
+  if [ "${#ORPHAN_VARIANTS[@]}" -gt 0 ] && [ "${#REMOVED_VARIANTS[@]}" -eq 0 ]; then
+    printf '    removed : %s   (auto-prune)\n\n' "${_all_removed[*]}"
+  else
+    printf '    removed : %s\n\n' "${_all_removed[*]}"
+  fi
+else
+  printf '    removed : <none>\n\n'
+fi
 
 # ----- compose the install.sh re-run -------------------------------------
 # install.sh is the source of truth for "make this cluster look like X".
@@ -340,8 +365,13 @@ GSLB_NAMESERVERS=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_nameserve
 GSLB_REGIONS=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_regions:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 
 # Compose the union explicitly so order is deterministic: kept first
-# (preserves existing port allocations), then added.
-UNION_VARIANTS=$(IFS=,; printf '%s' "${KEPT_VARIANTS[*]}${ADDED_VARIANTS[*]:+,${ADDED_VARIANTS[*]}}")
+# (preserves existing port allocations), then added. Build via array
+# concatenation so we never produce a leading/trailing comma when one
+# half is empty (older `${KEPT[*]}${ADDED[*]:+,${ADDED[*]}}` form
+# emitted ",elchi-..." when KEPT was empty — ugly in logs and a sign
+# of accidental empty-element passthrough).
+_union=("${KEPT_VARIANTS[@]}" "${ADDED_VARIANTS[@]}")
+UNION_VARIANTS=$(IFS=,; printf '%s' "${_union[*]}")
 
 cmd=(bash "${SCRIPT_DIR}/install.sh"
   --nodes="$NODES"
@@ -351,6 +381,7 @@ cmd=(bash "${SCRIPT_DIR}/install.sh"
   --main-address="$MAIN_ADDR"
   --port="$PORT"
   --non-interactive
+  --upgrade-mode
 )
 [ -n "$NEW_COREDNS_VERSION" ]    && cmd+=(--coredns-version="$NEW_COREDNS_VERSION")
 [ -n "$NEW_MONGO_VERSION" ]      && cmd+=(--mongo-version="$NEW_MONGO_VERSION")
@@ -361,6 +392,9 @@ cmd=(bash "${SCRIPT_DIR}/install.sh"
 [ -n "$GSLB_ADMIN_EMAIL" ]       && cmd+=(--gslb-admin-email="$GSLB_ADMIN_EMAIL")
 [ -n "$GSLB_NAMESERVERS" ]       && cmd+=(--gslb-nameservers="$GSLB_NAMESERVERS")
 [ -n "$GSLB_REGIONS" ]           && cmd+=(--gslb-regions="$GSLB_REGIONS")
+# OS patch flag: install.sh defaults to --no-upgrade-os, so we only
+# need to forward when the operator opted in via --upgrade-os here.
+[ "$UPGRADE_OS" = "1" ]          && cmd+=(--upgrade-os)
 [ -n "${ELCHI_SSH_USER:-}" ]     && cmd+=(--ssh-user="$ELCHI_SSH_USER")
 [ -n "${ELCHI_SSH_KEY:-}" ]      && cmd+=(--ssh-key="$ELCHI_SSH_KEY")
 [ -n "${ELCHI_SSH_PORT:-}" ]     && cmd+=(--ssh-port="$ELCHI_SSH_PORT")
@@ -443,4 +477,8 @@ else
 fi
 
 log::ok "upgrade complete"
-log::info "added: ${ADDED_VARIANTS[*]:-<none>} | kept: ${KEPT_VARIANTS[*]:-<none>} | removed: ${REMOVED_VARIANTS[*]:-<none>}"
+# Final summary mirrors the plan banner: explicit removals + auto-pruned
+# orphans land in the same "removed" bucket because both are gone after
+# install.sh's prune::stale_variants pass.
+_final_removed=("${REMOVED_VARIANTS[@]}" "${ORPHAN_VARIANTS[@]}")
+log::info "added: ${ADDED_VARIANTS[*]:-<none>} | kept: ${KEPT_VARIANTS[*]:-<none>} | removed: ${_final_removed[*]:-<none>}"

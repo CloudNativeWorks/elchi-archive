@@ -86,6 +86,35 @@ bundle::build() {
     install -m 0755 "${script_dir}/install.sh" "${stage}/bundle/installer/install.sh"
   fi
 
+  # Backend binaries — every variant in topology that M1 has already
+  # downloaded + sha256-verified. Shipping them in the bundle saves
+  # remote nodes from each fanning out to GitHub for the same 79MB
+  # release asset (3 nodes × 79MB = 237MB of WAN traffic on every
+  # upgrade). The binary on M1 is trusted because M1 itself ran
+  # binary::download_and_verify before we get here.
+  install -d -m 0755 "${stage}/bundle/binaries"
+  local _bv
+  while IFS= read -r _bv; do
+    [ -z "$_bv" ] && continue
+    local _bsrc="${ELCHI_BIN}/${_bv}"
+    if [ -x "$_bsrc" ]; then
+      install -m 0755 "$_bsrc" "${stage}/bundle/binaries/${_bv}"
+    fi
+  done < <(awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
+                f && /^[a-zA-Z]/{exit}' "${ELCHI_ETC}/topology.full.yaml")
+
+  # UI tarball — same reasoning. ui::install caches the downloaded
+  # tarball at /var/cache/elchi/ui/; pick it up here so remotes don't
+  # re-fetch from GitHub. ELCHI_UI_VERSION is set by the orchestrator's
+  # parse_args, so this works for both first install and upgrade reruns.
+  if [ -n "${ELCHI_UI_VERSION:-}" ]; then
+    local _uisrc="/var/cache/elchi/ui/elchi-dist-${ELCHI_UI_VERSION}.tar.gz"
+    if [ -f "$_uisrc" ]; then
+      install -d -m 0755 "${stage}/bundle/ui"
+      install -m 0644 "$_uisrc" "${stage}/bundle/ui/elchi-dist-${ELCHI_UI_VERSION}.tar.gz"
+    fi
+  fi
+
   # Manifest — content hash + timestamp. Lets remote nodes verify the
   # bundle is complete (catch a truncated SCP) before they trust it.
   bundle::_write_manifest "${stage}/bundle"
@@ -223,5 +252,30 @@ bundle::install_layout() {
   install -m 0644 "${root}/ports.full.json"    "${ELCHI_ETC}/ports.full.json"
   if [ -f "${root}/nodes.list" ]; then
     install -m 0644 "${root}/nodes.list"       "${ELCHI_ETC}/nodes.list"
+  fi
+
+  # Backend binaries shipped via bundle land directly in /opt/elchi/bin/.
+  # backend::install_binaries skips any variant whose binary is already
+  # present, so this path completely replaces the GitHub fetch on remote
+  # nodes (M1 already downloaded + verified them before bundle::build).
+  if [ -d "${root}/binaries" ]; then
+    install -d -m 0755 "$ELCHI_BIN"
+    local _b
+    for _b in "${root}/binaries"/*; do
+      [ -f "$_b" ] || continue
+      install -m 0755 "$_b" "${ELCHI_BIN}/$(basename "$_b")"
+    done
+  fi
+
+  # UI tarball cache — ui::install checks /var/cache/elchi/ui/ before
+  # falling back to GitHub. Populating it here means remote nodes never
+  # touch the public download.
+  if [ -d "${root}/ui" ]; then
+    install -d -m 0755 /var/cache/elchi/ui
+    local _u
+    for _u in "${root}/ui"/elchi-dist-*.tar.gz; do
+      [ -f "$_u" ] || continue
+      install -m 0644 "$_u" "/var/cache/elchi/ui/$(basename "$_u")"
+    done
   fi
 }

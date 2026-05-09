@@ -246,6 +246,15 @@ verify::print_summary() {
   local proto=https
   [ "$port" = "80" ] && proto=http
 
+  # When invoked from upgrade.sh, the operator already knows the cluster
+  # — no need to re-print credentials, URLs, and the operator-helper
+  # cheat sheet on every rerun. Emit a one-line success and bail.
+  if [ "${ELCHI_UPGRADE_MODE:-0}" = "1" ]; then
+    printf '\n%b[ OK ]%b cluster reconciled — UI: %s://%s\n\n' \
+      "$C_GREEN" "$C_RESET" "$proto" "$main"
+    return 0
+  fi
+
   printf '\n'
   printf '%b═══════════════════════════════════════════════════════════════%b\n' "$C_GREEN" "$C_RESET"
   printf '%b           elchi-stack installation complete%b\n' "$C_BOLD" "$C_RESET"
