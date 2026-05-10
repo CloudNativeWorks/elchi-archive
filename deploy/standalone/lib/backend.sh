@@ -204,13 +204,24 @@ ELCHI_CORS_ALLOWED_ORIGINS=${ELCHI_CORS_ALLOWED_ORIGINS:-*}
 CONTROLLER_PORT=${controller_port_default}
 # Controller gRPC port (Helm default: 50051).
 CONTROLLER_GRPC_PORT=${controller_grpc_default}
-# Registry gRPC port (server listen + client dial — same number; Helm default: 9090).
-REGISTRY_PORT=${ELCHI_PORT_REGISTRY_GRPC}
+# Registry gRPC port — controller / control-plane CLIENT default. Points
+# at envoy's public listener (mainAddress:${port}, TLS), which routes
+# /bridge.* to registry-cluster (3 endpoints + grpc_health_check, so
+# only the active leader receives traffic). The registry BINARY itself
+# overrides this in registry.env back to ${ELCHI_PORT_REGISTRY_GRPC}
+# so it binds the canonical 1870 — same env key, two layers, last wins.
+REGISTRY_PORT=${port}
 # Control-plane gRPC xDS port (Helm default: 18000).
 CONTROL_PLANE_PORT=${control_plane_port_default}
 
 # --- Service discovery ---
-REGISTRY_ADDRESS=${m1_host}
+# mainAddress: controller / control-plane gRPC clients dial the public
+# envoy listener (TLS), which leader-pins on registry-cluster. Helm uses
+# a headless k8s service (single registry pod); bare-metal needs the
+# envoy proxy because backend's pkg/registry/connection.go does pick_first
+# with no client-side leader-aware HC.
+REGISTRY_ADDRESS=${main}
+REGISTRY_TLS_ENABLED=true
 
 # --- Mongo ---
 MONGODB_HOSTS=${mongo_hosts}
@@ -294,12 +305,21 @@ ELCHI_CORS_ALLOWED_ORIGINS: "${ELCHI_CORS_ALLOWED_ORIGINS:-*}"
 # Without these the binaries fall back to Helm defaults (8099/50051/9090/18000).
 CONTROLLER_PORT: ${controller_rest_port}
 CONTROLLER_GRPC_PORT: ${controller_grpc_port}
-REGISTRY_PORT: ${ELCHI_PORT_REGISTRY_GRPC}
+# Controller / control-plane CLIENT default — the public envoy listener
+# (TLS) routes /bridge.* to registry-cluster (leader-pinned via
+# grpc_health_check). Registry binary's bind port is the canonical
+# ${ELCHI_PORT_REGISTRY_GRPC}, overridden in registry.env back to that
+# value so the binary's --port fallback hits 1870.
+REGISTRY_PORT: ${port}
 CONTROL_PLANE_PORT: ${control_plane_port}
 
-# Registry service discovery — every controller / control-plane dials
-# this address to register and to fetch routing decisions.
-REGISTRY_ADDRESS: "${m1_host}"
+# Registry service discovery — controller / control-plane dial mainAddress
+# (envoy public listener TLS). Envoy fronts registry-cluster's 3-endpoint
+# leader-aware HA. Helm has a single registry pod behind a headless service
+# so it skips the proxy; bare-metal needs envoy because backend's
+# pkg/registry/connection.go uses pick_first with no client-side leader HC.
+REGISTRY_ADDRESS: "${main}"
+REGISTRY_TLS_ENABLED: true
 
 # Registry HA tunables (commented = backend defaults: 30s lock TTL,
 # 10s renewal, 5m snapshot write, 30s snapshot poll). Uncomment +

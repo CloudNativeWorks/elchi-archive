@@ -319,6 +319,28 @@ envoy::_emit_route_config() {
             - name: elchi_services
               domains: ["*"]
               routes:
+              # Backend's controller / control-plane gRPC clients
+              # (pkg/registry/connection.go) dial mainAddress:443 with
+              # REGISTRY_TLS_ENABLED=true. This route forwards every
+              # service in proto3 `package bridge;` (ControllerRoutingService,
+              # EnvoyRoutingService, SnapshotService, PokeService,
+              # ResourceService, MetricsService) to registry-cluster, which
+              # is 3 endpoints + grpc_health_check — only the active leader
+              # reports SERVING (registry/server/health.go), so envoy pins
+              # traffic to whichever node currently holds the lock. Without
+              # this route, clients would land on the catch-all and fail.
+              # Helm avoids this entirely because it has a single registry
+              # pod behind a headless service; bare-metal needs the proxy
+              # because pick_first + no client-side leader HC would otherwise
+              # keep talking to a stale follower.
+              - match: {prefix: "/bridge."}
+                route:
+                  cluster: registry-cluster
+                  timeout: 0s
+                  idle_timeout: 0s
+                  max_stream_duration:
+                    max_stream_duration: 0s
+                    grpc_timeout_header_max: 0s
               - match: {prefix: "/api/v1/"}
                 route: {cluster: victoriametrics-cluster}
                 typed_per_filter_config:
