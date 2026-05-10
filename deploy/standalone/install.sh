@@ -79,11 +79,11 @@ ELCHI_ADMIN_USER=${ELCHI_ADMIN_USER:-elchi-cluster-admin}
 ELCHI_CREATE_ADMIN_USER=${ELCHI_CREATE_ADMIN_USER:-1}
 
 # Backend variants. Each entry is a full asset name, e.g.
-#   elchi-v1.2.3-v0.14.0-envoy1.35.3
-# The release tag (v1.1.7) is derived per-variant; a single install can
-# mix variants from different elchi-backend releases.
-ELCHI_BACKEND_VARIANTS=${ELCHI_BACKEND_VARIANTS:-elchi-v1.2.3-v0.14.0-envoy1.36.2}
-ELCHI_UI_VERSION=${ELCHI_UI_VERSION:-v1.1.7}
+#   elchi-v1.2.5-v0.14.0-envoy1.35.3
+# The release tag (e.g. v1.2.5) is derived per-variant; a single install
+# can mix variants from different elchi-backend releases.
+ELCHI_BACKEND_VARIANTS=${ELCHI_BACKEND_VARIANTS:-elchi-v1.2.5-v0.14.0-envoy1.36.2}
+ELCHI_UI_VERSION=${ELCHI_UI_VERSION:-v1.1.9}
 ELCHI_ENVOY_VERSION=${ELCHI_ENVOY_VERSION:-v1.37.0}
 ELCHI_COREDNS_VERSION=${ELCHI_COREDNS_VERSION:-v0.1.3}
 
@@ -251,9 +251,9 @@ Topology
 Versioning
   --backend-version=<csv>             one or more elchi-backend variant tags;
                                        each one is the release-asset basename, e.g.
-                                       elchi-v1.2.3-v0.14.0-envoy1.36.2
+                                       elchi-v1.2.5-v0.14.0-envoy1.36.2
                                        (release tag derived per-variant)
-  --ui-version=<vX.Y.Z>               UI bundle version (default: v1.1.7)
+  --ui-version=<vX.Y.Z>               UI bundle version (default: v1.1.9)
   --envoy-version=<vX.Y.Z>            envoy proxy version (default: v1.37.0)
   --coredns-version=<vX.Y.Z>          GSLB plugin version (default: v0.1.3)
 

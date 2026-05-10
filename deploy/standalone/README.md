@@ -47,8 +47,8 @@ shipped to every other node, and applied via a recursive
 sudo bash deploy/standalone/install.sh \
   --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2,elchi-v1.2.3-v0.14.0-envoy1.38.0 \
-  --ui-version=v1.1.7 \
+  --backend-version=elchi-v1.2.5-v0.14.0-envoy1.36.2,elchi-v1.2.5-v0.14.0-envoy1.38.0 \
+  --ui-version=v1.1.9 \
   --envoy-version=v1.37.0 \
   --main-address=elchi.example.com \
   --hostnames=elchi.example.com,m1,m2,m3
@@ -69,8 +69,8 @@ to the others.
 ```bash
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
-  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2 \
-  --ui-version=v1.1.7 \
+  --backend-version=elchi-v1.2.5-v0.14.0-envoy1.36.2 \
+  --ui-version=v1.1.9 \
   --envoy-version=v1.37.0 \
   --main-address=$(hostname -f)
 ```
@@ -86,8 +86,8 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
   | sudo bash -s -- \
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-      --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2 \
-      --ui-version=v1.1.7 \
+      --backend-version=elchi-v1.2.5-v0.14.0-envoy1.36.2 \
+      --ui-version=v1.1.9 \
       --envoy-version=v1.37.0 \
       --main-address=elchi.example.com
 ```
@@ -174,26 +174,26 @@ the version flags.
 
 ```bash
 # Bump the UI only — backend / envoy / coredns are kept as-is.
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.8
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.9
 
 # Replace the backend variant set (declarative — old variants not in
 # this list are AUTO-PRUNED by install.sh's stale-variants pass).
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
+  --backend-version=elchi-v1.2.5-v0.14.0-envoy1.36.2
 
 # Additive shortcut — append a variant without re-listing existing ones.
 # Useful when you want N versions live at once.
 sudo bash deploy/standalone/upgrade.sh \
-  --add-backend-version=elchi-v1.2.3-v0.14.0-envoy1.38.0
+  --add-backend-version=elchi-v1.2.5-v0.14.0-envoy1.38.0
 
 # Explicit prune — same effect as dropping it from --backend-version,
 # but more visible in the plan banner.
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.38.0 \
-  --prune-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
+  --backend-version=elchi-v1.2.5-v0.14.0-envoy1.38.0 \
+  --prune-version=elchi-v1.2.5-v0.14.0-envoy1.36.2
 
 # Apply OS security patches as part of this upgrade (default: skipped).
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.8 --upgrade-os
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.9 --upgrade-os
 ```
 
 ### Bootstrap (curl | bash) for upgrade
@@ -203,8 +203,8 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.1.8 --upgrade-os
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
   | sudo bash -s -- --upgrade \
-      --ui-version=v1.1.7 \
-      --backend-version=elchi-v1.2.3-v0.14.0-envoy1.36.2
+      --ui-version=v1.1.9 \
+      --backend-version=elchi-v1.2.5-v0.14.0-envoy1.36.2
 ```
 
 ### Behaviour notes
@@ -242,7 +242,7 @@ plan banner instead of relying on auto-prune):
 ```bash
 # Replace the entire variant set + prune anything missing
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.2.3-v0.14.0-envoy1.38.0,elchi-v1.2.3-v0.14.0-envoy1.40.0 \
+  --backend-version=elchi-v1.2.5-v0.14.0-envoy1.38.0,elchi-v1.2.5-v0.14.0-envoy1.40.0 \
   --prune-missing
 ```
 
@@ -432,7 +432,7 @@ different and why — read this if you're cross-checking against
 | `pullPolicy: Always` | Re-download triggered when remote sha256 differs from on-disk binary, or `--force-redownload` | Idempotent; same effect, no wasted bandwidth |
 | Helm hooks (`pre-install`, `post-upgrade`) | systemd unit lifecycle (`After=`, `Wants=`, `PartOf=`) + ordered install pipeline | Each does what's appropriate for its layer |
 | `global.envoy.service.type=NodePort` | Envoy binds 0.0.0.0:443 directly on every node | Removes a layer — operator's external LB or DNS round-robin is what fronts the cluster |
-| Helm chart's UI `image.tag: v1.0.0` | Default `--ui-version=v1.1.7` | Helm chart pin is older than the latest UI release; bare-metal default tracks the current release |
+| Helm chart's UI `image.tag: v1.0.0` | Default `--ui-version=v1.1.9` | Helm chart pin is older than the latest UI release; bare-metal default tracks the current release |
 | Registry metrics port hardcoded 9091 | No env override (`cmd/registry.go:129`) | Operator can't change it; OTel scrape config and preflight target 9091 |
 | `ToK8sServiceName` is k8s-only | Bare-metal returns `<id>:<port>` directly (`pkg/registry/identity.go:72-80`) | `ELCHI_NAMESPACE` is set but ignored in bare-metal; controller HTTP address resolves via /etc/hosts entries |
 | `CONTROL_PLANE_ID` override | Operator-set env (`pkg/config/model.go:55-62`) | Lets operator publish a custom control-plane name for multi-replica-per-host setups |

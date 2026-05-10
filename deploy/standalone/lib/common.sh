@@ -364,11 +364,11 @@ elchi_backend_binary() {
 }
 
 # Per-variant config directory:
-#   /etc/elchi/elchi-v1.2.3-v0.14.0-envoy1.36.2/config-prod.yaml
-#   /etc/elchi/elchi-v1.2.3-v0.14.0-envoy1.36.2/common.env
-#   /etc/elchi/elchi-v1.2.3-v0.14.0-envoy1.36.2/controller-<idx>.env
-#   /etc/elchi/elchi-v1.2.3-v0.14.0-envoy1.36.2/control-plane-<idx>.env
-#   /etc/elchi/elchi-v1.2.3-v0.14.0-envoy1.36.2/registry.env       (only for versions[0])
+#   /etc/elchi/elchi-v1.2.5-v0.14.0-envoy1.36.2/config-prod.yaml
+#   /etc/elchi/elchi-v1.2.5-v0.14.0-envoy1.36.2/common.env
+#   /etc/elchi/elchi-v1.2.5-v0.14.0-envoy1.36.2/controller-<idx>.env
+#   /etc/elchi/elchi-v1.2.5-v0.14.0-envoy1.36.2/control-plane-<idx>.env
+#   /etc/elchi/elchi-v1.2.5-v0.14.0-envoy1.36.2/registry.env       (only for versions[0])
 elchi_version_dir() {
   local variant=$1
   printf '%s/%s' "$ELCHI_ETC" "$variant"
