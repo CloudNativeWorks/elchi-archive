@@ -221,15 +221,35 @@ topology::compute() {
   mapfile -t variants < <(csv_split "$variants_csv")
   [ "${#variants[@]}" -ge 1 ] || die "at least one backend variant required"
 
-  # Reject duplicate variant tags — same variant twice on the same
-  # node would collide on registry name (`<host>-controlplane-<X.Y.Z>`)
-  # and produce no useful redundancy.
+  # Reject duplicate variant tags — same variant twice on the same node
+  # would collide on registry name (`<host>-controlplane-<X.Y.Z>`) and
+  # produce no useful redundancy.
   local seen=""
   for v in "${variants[@]}"; do
     if [[ ",$seen," == *",$v,"* ]]; then
       die "duplicate backend variant: ${v} (each variant tag may appear at most once in --backend-version)"
     fi
     seen="${seen:+$seen,}$v"
+  done
+
+  # Reject DIFFERENT variants that ship the SAME envoy version. The
+  # control-plane cluster name in envoy.yaml is built from the embedded
+  # envoy semver only (`<host>-controlplane-<X.Y.Z>` — see lib/envoy.sh's
+  # control-plane block + backend's identity.go ResolveControlPlaneID),
+  # so two variants like elchi-v1.2.3-...envoy1.36.2 and
+  # elchi-v1.2.4-...envoy1.36.2 both render to `<host>-controlplane-1.36.2`.
+  # Envoy refuses to start with two clusters sharing a name (1273-line
+  # config that fails to bind :443 is the visible symptom). Operators
+  # picking one envoy version per node is the only sensible mode anyway —
+  # the variant suffix is meant to advertise different envoy releases,
+  # not different backend builds for the same release.
+  local seen_envoy="" envoy_ver
+  for v in "${variants[@]}"; do
+    envoy_ver=$(topology::extract_envoy_version "$v")
+    if [[ ",$seen_envoy," == *",$envoy_ver,"* ]]; then
+      die "duplicate envoy version across variants: ${envoy_ver} appears in more than one --backend-version entry. Pick a single backend release per envoy version (control-plane cluster name '<host>-controlplane-${envoy_ver#v}' would collide in envoy.yaml otherwise). Variants supplied: ${variants[*]}"
+    fi
+    seen_envoy="${seen_envoy:+$seen_envoy,}$envoy_ver"
   done
 
   log::info "cluster size: ${node_count} node(s)"

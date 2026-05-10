@@ -48,7 +48,16 @@ Environment=HOME=${home}
 Environment=TZ=${ELCHI_TIMEZONE:-UTC}
 EnvironmentFile=${conf}/common.env
 EnvironmentFile=${conf}/registry.env
-ExecStart=${bin} elchi-registry --config ${conf}/config-prod.yaml
+# --port=${ELCHI_PORT_REGISTRY_GRPC} forces the registry binary to bind
+# the canonical 1870. config-prod.yaml's REGISTRY_PORT is set to the
+# envoy public port (443) for controller / control-plane CLIENTS, and
+# the backend's viper config layer ONLY reads YAML on bare-metal (env
+# overrides require isKBs=1 to be set, which is k8s-only — see
+# elchi-backend/pkg/config/config.go:18). cmd/registry.go:60 prefers
+# the --port flag over the YAML value, so this flag is the cleanest
+# way to give the registry process its own bind port without forking
+# config-prod.yaml.
+ExecStart=${bin} elchi-registry --config ${conf}/config-prod.yaml --port=${ELCHI_PORT_REGISTRY_GRPC}
 WorkingDirectory=${ELCHI_LIB}
 Restart=on-failure
 RestartSec=5s
@@ -103,18 +112,15 @@ registry::_render_env() {
   local out="${ELCHI_ETC}/${variant}/registry.env"
   cat > "${out}.tmp" <<EOF
 # Managed by elchi-stack installer.
-# Registry-specific overrides on top of variant ${variant}'s common.env.
+# Registry-specific systemd EnvironmentFile (sourced after common.env).
 #
-# common.env defaults REGISTRY_PORT to ${ELCHI_PORT} (mainAddress envoy
-# listener) and REGISTRY_ADDRESS to mainAddress — that's the bridge the
-# controller / control-plane CLIENTS use to reach the active leader.
-# The registry BINARY itself needs to BIND the canonical
-# ${ELCHI_PORT_REGISTRY_GRPC}; it reads REGISTRY_PORT for both server
-# bind (cmd/registry.go:60) and client dial (cmd/control-plane.go:64),
-# so we override here. systemd loads EnvironmentFile= entries in order;
-# the last one wins, so this file's REGISTRY_PORT replaces common.env's
-# for the registry process only.
-REGISTRY_PORT=${ELCHI_PORT_REGISTRY_GRPC}
+# Note: backend's viper config (pkg/config/config.go:18) only reads env
+# vars when isKBs=1 (k8s mode). Bare-metal reads strictly from YAML, so
+# any REGISTRY_PORT / REGISTRY_ADDRESS override here would be ignored.
+# The registry binary's bind port is forced via the systemd unit's
+# --port=${ELCHI_PORT_REGISTRY_GRPC} flag (cmd/registry.go:60 prefers
+# the flag over the YAML value), not via this file.
+#
 # Metrics port (9091) is hardcoded in the backend binary — no env override.
 REGISTRY_LISTEN_ADDR=0.0.0.0:${ELCHI_PORT_REGISTRY_GRPC}
 EOF
