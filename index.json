@@ -82,7 +82,7 @@
   "install_script_releases": [
     {
       "version": "v2026.05.19",
-      "date": "2026-05-19T19:36:06Z",
+      "date": "2026-05-19T20:04:06Z",
       "files": [
         {
           "name": "install.sh",
