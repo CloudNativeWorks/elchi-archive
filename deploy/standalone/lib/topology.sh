@@ -55,6 +55,15 @@ readonly ELCHI_PORT_ENVOY_INTERNAL=8080            # plaintext loopback listener
                                                     # API through this without TLS)
 readonly ELCHI_PORT_COREDNS=53                     # fixed
 readonly ELCHI_PORT_COREDNS_WEBHOOK=8053           # fixed, loopback
+# ClickHouse — columnar store for the elchi-collector event stream.
+readonly ELCHI_PORT_CLICKHOUSE_NATIVE=9000         # native TCP (clients + distributed)
+readonly ELCHI_PORT_CLICKHOUSE_HTTP=8123           # HTTP (used only for the /ping probe)
+readonly ELCHI_PORT_CLICKHOUSE_INTERSERVER=9009    # interserver replication fetch (cluster)
+readonly ELCHI_PORT_CLICKHOUSE_KEEPER=9181         # embedded ClickHouse Keeper client port (cluster)
+readonly ELCHI_PORT_CLICKHOUSE_RAFT=9234           # embedded ClickHouse Keeper Raft port (cluster)
+# elchi-collector — Envoy ALS ingestion.
+readonly ELCHI_PORT_COLLECTOR_GRPC=18090           # Envoy ALS StreamAccessLogs gRPC
+readonly ELCHI_PORT_COLLECTOR_HTTP=18091           # health / readiness / metrics, loopback
 
 # ----- string sanitization -------------------------------------------------
 # Helm formula:
@@ -161,6 +170,18 @@ topology::node_count() {
 #   N=2: only node 1
 #   N>=3: nodes 1, 2, 3
 topology::is_mongo_node() {
+  local idx=$1 count=$2
+  case "$count" in
+    1|2) [ "$idx" = "1" ] ;;
+    *)   [ "$idx" -le 3 ] ;;
+  esac
+}
+
+# topology::is_clickhouse_node <node-index> <node-count>
+# Same first-3-nodes rule as is_mongo_node:
+#   N=1|2: only node 1 (standalone ClickHouse)
+#   N>=3:  nodes 1, 2, 3 (Keeper + ReplicatedMergeTree cluster)
+topology::is_clickhouse_node() {
   local idx=$1 count=$2
   case "$count" in
     1|2) [ "$idx" = "1" ] ;;
@@ -282,10 +303,19 @@ topology::compute() {
     # install time.
     printf '  gslb_nameservers: %s\n' "${ELCHI_GSLB_NAMESERVERS:-}"
     printf '  gslb_regions: %s\n'     "${ELCHI_GSLB_REGIONS:-}"
+    # elchi-collector / ClickHouse feature state — persisted so
+    # upgrade.sh / add-node reruns reconstruct the same install shape
+    # (whether the collector is on, and whether ClickHouse is local or
+    # an operator-supplied external endpoint).
+    printf '  install_collector: %s\n' "${ELCHI_INSTALL_COLLECTOR:-1}"
+    printf '  clickhouse_mode: %s\n'    "${ELCHI_CLICKHOUSE_MODE:-local}"
     printf 'versions:\n'
     printf '  ui: %s\n' "${ELCHI_UI_VERSION:-}"
     printf '  envoy: %s\n' "${ELCHI_ENVOY_VERSION:-}"
     printf '  coredns: %s\n' "${ELCHI_COREDNS_VERSION:-v0.1.1}"
+    # Persisted so upgrade.sh / add-node reruns can re-supply
+    # --collector-version without the operator typing it every time.
+    printf '  collector: %s\n' "${ELCHI_COLLECTOR_VERSION:-}"
     printf '  backend_variants:\n'
     local v
     for v in "${variants[@]}"; do
@@ -302,6 +332,18 @@ topology::compute() {
       i=$(( i + 1 ))
       local is_mongo=false
       topology::is_mongo_node "$i" "$node_count" && is_mongo=true
+      # ClickHouse follows the same first-3-nodes rule as mongo, but only
+      # when the collector feature is enabled AND ClickHouse is locally
+      # hosted (an external endpoint installs nothing here).
+      local is_clickhouse=false
+      if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] \
+         && [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ]; then
+        topology::is_clickhouse_node "$i" "$node_count" && is_clickhouse=true
+      fi
+      # The collector is stateless and runs on every node (each Envoy
+      # forwards its ALS stream to the local collector over loopback).
+      local runs_collector=false
+      [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] && runs_collector=true
       local is_m1=false
       [ "$i" = "1" ] && is_m1=true
       local hn=${hostnames[$(( i - 1 ))]:-node${i}}
@@ -310,6 +352,11 @@ topology::compute() {
       printf '    hostname: %s\n' "$hn"
       printf '    is_m1: %s\n' "$is_m1"
       printf '    runs_mongo: %s\n' "$is_mongo"
+      # ClickHouse: first 3 nodes (standalone on M1 for N<3). Stores the
+      # raw event stream the collector ingests.
+      printf '    runs_clickhouse: %s\n' "$is_clickhouse"
+      # elchi-collector: every node when the feature is enabled.
+      printf '    runs_collector: %s\n' "$runs_collector"
       # Registry: HA peer set — every node runs an instance. Envoy fronts
       # them with gRPC health checks and pins traffic to whichever one
       # currently advertises SERVING. Leader/follower coordination lives
@@ -436,6 +483,25 @@ topology::print_plan() {
       fi
     else
       printf '    mongo            : (none — connects to M1)\n'
+    fi
+
+    # ClickHouse — only when the collector feature is on + local CH.
+    if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+      if [ "${ELCHI_CLICKHOUSE_MODE:-local}" = "external" ]; then
+        # Never echo the URI — it carries the operator's credentials.
+        [ "$i" = "1" ] && printf '    clickhouse       : external (operator-supplied --clickhouse-uri)\n'
+      elif topology::is_clickhouse_node "$i" "$node_count"; then
+        if [ "$node_count" -ge 3 ] 2>/dev/null; then
+          printf '    clickhouse       : cluster member + Keeper (native :%s, keeper :%s)\n' \
+            "$ELCHI_PORT_CLICKHOUSE_NATIVE" "$ELCHI_PORT_CLICKHOUSE_KEEPER"
+        else
+          printf '    clickhouse       : standalone (native :%s)\n' "$ELCHI_PORT_CLICKHOUSE_NATIVE"
+        fi
+      else
+        printf '    clickhouse       : (none — collector reaches ClickHouse over the network)\n'
+      fi
+      printf '    elchi-collector  : :%s gRPC (ALS), :%s HTTP\n' \
+        "$ELCHI_PORT_COLLECTOR_GRPC" "$ELCHI_PORT_COLLECTOR_HTTP"
     fi
 
     # Registry runs on every node (HA peer set; gRPC HC picks the leader).

@@ -103,6 +103,16 @@ bundle::build() {
   done < <(awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
                 f && /^[a-zA-Z]/{exit}' "${ELCHI_ETC}/topology.full.yaml")
 
+  # elchi-collector binary — same WAN-saving rationale. M1 downloads +
+  # sha-verifies it in phase 1 (collector::install_binary); shipping it
+  # here saves every remote node a duplicate GitHub fetch. bundle::
+  # install_layout copies everything under binaries/ into /opt/elchi/bin,
+  # so naming it `elchi-collector` lands it at the path collector.sh
+  # expects, and collector::install_binary then skips the download.
+  if [ -x "${ELCHI_BIN}/elchi-collector" ]; then
+    install -m 0755 "${ELCHI_BIN}/elchi-collector" "${stage}/bundle/binaries/elchi-collector"
+  fi
+
   # UI tarball — same reasoning. ui::install caches the downloaded
   # tarball at /var/cache/elchi/ui/; pick it up here so remotes don't
   # re-fetch from GitHub. ELCHI_UI_VERSION is set by the orchestrator's

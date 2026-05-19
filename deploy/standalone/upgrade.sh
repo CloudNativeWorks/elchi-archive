@@ -70,6 +70,7 @@ ADD_BACKEND_VARIANTS=""   # additive: appended to current set (UX shortcut)
 NEW_UI_VERSION=""
 NEW_ENVOY_VERSION=""
 NEW_COREDNS_VERSION=""
+NEW_COLLECTOR_VERSION=""
 NEW_MONGO_VERSION=""
 NEW_GRAFANA_USER=""
 NEW_GRAFANA_PASSWORD=""
@@ -100,6 +101,7 @@ Version flags (omit to keep current):
   --ui-version=<vX.Y.Z>
   --envoy-version=<vX.Y.Z>
   --coredns-version=<vX.Y.Z>
+  --collector-version=<vX.Y.Z>      elchi-collector binary
   --mongo-version=<X.Y>             default: 8.0
   --grafana-user=<user>
   --grafana-password=<pwd>
@@ -159,6 +161,7 @@ while [ "$#" -gt 0 ]; do
     --ui-version=*)                       NEW_UI_VERSION=${1#*=} ;;
     --envoy-version=*)                    NEW_ENVOY_VERSION=${1#*=} ;;
     --coredns-version=*)                  NEW_COREDNS_VERSION=${1#*=} ;;
+    --collector-version=*)                NEW_COLLECTOR_VERSION=${1#*=} ;;
     --mongo-version=*)                    NEW_MONGO_VERSION=${1#*=} ;;
     --grafana-user=*)                     NEW_GRAFANA_USER=${1#*=} ;;
     --grafana-password=*)                 NEW_GRAFANA_PASSWORD=${1#*=} ;;
@@ -208,12 +211,17 @@ log::info "acquired upgrade lock at ${LOCK_FILE}"
 CUR_UI=$(awk '/^  ui:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 CUR_ENVOY=$(awk '/^  envoy:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 CUR_COREDNS=$(awk '/^  coredns:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+CUR_COLLECTOR=$(awk '/^  collector:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+# elchi-collector / ClickHouse feature state persisted in the cluster block.
+CUR_INSTALL_COLLECTOR=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+install_collector:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+CUR_CLICKHOUSE_MODE=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+clickhouse_mode:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 mapfile -t CUR_VARIANTS < <(awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
                                  f && /^[a-zA-Z]/{exit}' /etc/elchi/topology.full.yaml)
 
 NEW_UI_VERSION=${NEW_UI_VERSION:-$CUR_UI}
 NEW_ENVOY_VERSION=${NEW_ENVOY_VERSION:-$CUR_ENVOY}
 NEW_COREDNS_VERSION=${NEW_COREDNS_VERSION:-$CUR_COREDNS}
+NEW_COLLECTOR_VERSION=${NEW_COLLECTOR_VERSION:-$CUR_COLLECTOR}
 
 if [ -z "$NEW_BACKEND_VARIANTS" ]; then
   NEW_BACKEND_VARIANTS=$(IFS=,; printf '%s' "${CUR_VARIANTS[*]}")
@@ -326,9 +334,11 @@ _diff_line() {
 }
 
 printf '\n%selchi-stack upgrade plan%s\n' "$C_BOLD" "$C_RESET"
-_diff_line "UI"      "$CUR_UI"      "$NEW_UI_VERSION"
-_diff_line "Envoy"   "$CUR_ENVOY"   "$NEW_ENVOY_VERSION"
-_diff_line "CoreDNS" "$CUR_COREDNS" "$NEW_COREDNS_VERSION"
+_diff_line "UI"        "$CUR_UI"        "$NEW_UI_VERSION"
+_diff_line "Envoy"     "$CUR_ENVOY"     "$NEW_ENVOY_VERSION"
+_diff_line "CoreDNS"   "$CUR_COREDNS"   "$NEW_COREDNS_VERSION"
+[ -n "$CUR_COLLECTOR$NEW_COLLECTOR_VERSION" ] \
+  && _diff_line "Collector" "${CUR_COLLECTOR:-<unset>}" "$NEW_COLLECTOR_VERSION"
 [ -n "$NEW_MONGO_VERSION" ] && \
   printf '  %-10s %s   ← change requested\n' "Mongo:" "$NEW_MONGO_VERSION"
 
@@ -388,6 +398,20 @@ cmd=(bash "${SCRIPT_DIR}/install.sh"
   --upgrade-mode
 )
 [ -n "$NEW_COREDNS_VERSION" ]    && cmd+=(--coredns-version="$NEW_COREDNS_VERSION")
+# elchi-collector / ClickHouse — preserve the feature state captured at
+# install time so an upgrade rerun doesn't silently flip it.
+[ -n "$NEW_COLLECTOR_VERSION" ]  && cmd+=(--collector-version="$NEW_COLLECTOR_VERSION")
+[ "$CUR_INSTALL_COLLECTOR" = "0" ] && cmd+=(--no-collector)
+[ -n "$CUR_CLICKHOUSE_MODE" ]    && cmd+=(--clickhouse="$CUR_CLICKHOUSE_MODE")
+# External ClickHouse: re-supply the operator's URI so the upgrade rerun
+# of install.sh doesn't abort ("external ClickHouse requires
+# --clickhouse-uri"). It was never persisted to topology.full.yaml
+# (which is world-readable + bundled) because it carries credentials —
+# read it back from the collector's env file instead (mode 0640 root).
+if [ "$CUR_CLICKHOUSE_MODE" = "external" ] && [ -f /etc/elchi/collector.env ]; then
+  CUR_CLICKHOUSE_URI=$(grep -E '^CLICKHOUSE_URI=' /etc/elchi/collector.env 2>/dev/null | head -n1 | cut -d= -f2-)
+  [ -n "$CUR_CLICKHOUSE_URI" ] && cmd+=(--clickhouse-uri="$CUR_CLICKHOUSE_URI")
+fi
 [ -n "$NEW_MONGO_VERSION" ]      && cmd+=(--mongo-version="$NEW_MONGO_VERSION")
 [ -n "$NEW_GRAFANA_USER" ]       && cmd+=(--grafana-user="$NEW_GRAFANA_USER")
 [ -n "$NEW_GRAFANA_PASSWORD" ]   && cmd+=(--grafana-password="$NEW_GRAFANA_PASSWORD")

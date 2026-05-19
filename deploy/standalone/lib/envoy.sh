@@ -383,6 +383,24 @@ envoy::_emit_route_config() {
                 route: {cluster: otel-cluster}
 EOF
 
+  # ALS stream → elchi-collector. External Envoy data-plane proxies push
+  # their Access Log Service gRPC streams through this gateway; this
+  # route forwards them to the local collector. timeout / idle_timeout 0s
+  # keep the long-lived bidirectional stream open. MUST precede the
+  # catch-all `/` routes below.
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+    cat <<'EOF'
+              - match: {prefix: "/envoy.service.accesslog.v3.AccessLogService/"}
+                route:
+                  cluster: elchi-collector-cluster
+                  timeout: 0s
+                  idle_timeout: 0s
+                  max_stream_duration:
+                    max_stream_duration: 0s
+                    grpc_timeout_header_max: 0s
+EOF
+  fi
+
   local v full host
   local -a hostnames
   mapfile -t hostnames < <(topology::node_hostnames)
@@ -754,6 +772,36 @@ EOF
             address:
               socket_address: {address: ${vm_addr}, port_value: ${vm_port}}
 EOF
+
+  # elchi-collector — receives the Envoy ALS gRPC stream (HTTP/2). The
+  # collector runs on EVERY node, so each Envoy forwards to its OWN
+  # node's collector over loopback: no cross-node hop, and one node's
+  # collector dying never starves another node's ingestion. Same
+  # STATIC-loopback shape as otel-cluster above.
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+    cat <<EOF
+
+  - name: elchi-collector-cluster
+    connect_timeout: 1s
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options:
+            connection_keepalive:
+              interval: 30s
+              timeout: 10s
+    load_assignment:
+      cluster_name: elchi-collector-cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: {address: 127.0.0.1, port_value: ${ELCHI_PORT_COLLECTOR_GRPC}}
+EOF
+  fi
 }
 
 envoy::_emit_admin() {

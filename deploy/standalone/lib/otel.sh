@@ -13,7 +13,9 @@
 # The cross-node M1 path uses the same /etc/hosts trick lib/envoy.sh
 # uses for its M1-targeted clusters.
 
-readonly OTEL_VERSION_DEFAULT=0.89.0
+# OTel Collector version: the default lives in lib/versions.sh
+# (ELCHI_DEFAULT_OTEL_VERSION) and reaches here as ELCHI_OTEL_VERSION,
+# which install.sh sets + exports.
 readonly OTEL_BIN=/opt/elchi/bin/otelcol-contrib
 readonly OTEL_CONFIG=${ELCHI_CONFIG}/otel-config.yaml
 readonly OTEL_UNIT=/etc/systemd/system/elchi-otel.service
@@ -21,7 +23,7 @@ readonly OTEL_UNIT=/etc/systemd/system/elchi-otel.service
 otel::setup() {
   log::step "Installing OpenTelemetry Collector"
 
-  local v=${ELCHI_OTEL_VERSION:-$OTEL_VERSION_DEFAULT}
+  local v=${ELCHI_OTEL_VERSION:?ELCHI_OTEL_VERSION not set (install.sh sources lib/versions.sh)}
 
   if [ ! -x "$OTEL_BIN" ]; then
     local url="https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${v}/otelcol-contrib_${v}_linux_${ELCHI_ARCH}.tar.gz"

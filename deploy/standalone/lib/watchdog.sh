@@ -87,6 +87,14 @@ if [ -f "$ETC/topology.full.yaml" ]; then
     check_tcp "otel-health"     127.0.0.1 13133                        || warn=$((warn+1))
     check_tcp "grafana"         127.0.0.1 3000                         || warn=$((warn+1))
   fi
+
+  # ClickHouse — probed wherever clickhouse-server is installed (the
+  # collector feature's first-3-nodes columnar store). clickhouse-server
+  # is not an "elchi-*" unit, so the systemd-state loop above misses it.
+  # The elchi-collector itself IS "elchi-*" and is already covered there.
+  if systemctl list-unit-files --no-legend clickhouse-server.service 2>/dev/null | grep -q .; then
+    check_tcp "clickhouse"     127.0.0.1 8123                          || failed=$((failed+1))
+  fi
 fi
 
 # 3. Backend registration — confirm at least one controller logged

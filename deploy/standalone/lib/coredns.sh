@@ -83,7 +83,9 @@ coredns::setup() {
   # v0.1.3 = first elchi-gslb release built with the corrected CI that
   # actually runs `go generate` before `go build` (v0.1.1 shipped a
   # vanilla coredns by mistake — "Unknown directive 'elchi'" at runtime).
-  local v=${ELCHI_COREDNS_VERSION:-v0.1.3}
+  # Default lives in lib/versions.sh (ELCHI_DEFAULT_COREDNS_VERSION);
+  # install.sh sets + exports ELCHI_COREDNS_VERSION from it.
+  local v=${ELCHI_COREDNS_VERSION:?ELCHI_COREDNS_VERSION not set (install.sh sources lib/versions.sh)}
   # Normalize: accept both "v0.1.1" and "0.1.1" inputs; the tag and the
   # filename in upstream releases both use the "v"-prefixed form.
   local tag=v${v#v}

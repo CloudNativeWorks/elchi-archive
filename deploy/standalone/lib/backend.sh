@@ -281,6 +281,16 @@ backend::_render_config_prod_yaml() {
   fi
   jwt_secret=$(secrets::value ELCHI_JWT_SECRET)
 
+  # ClickHouse — the backend opens a READ-ONLY connection to the
+  # collector's event tables for its inventory_detail endpoints. An empty
+  # CLICKHOUSE_URI disables those endpoints (returns 503) — exactly the
+  # Helm behaviour when installClickhouse + an external endpoint are both
+  # off. Only resolve a URI when the collector feature is enabled.
+  local clickhouse_uri=""
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+    clickhouse_uri=$(clickhouse::resolve_uri)
+  fi
+
   cat > "${out}.tmp" <<EOF
 # Managed by elchi-stack installer. Backend reads this YAML via viper
 # (--config flag in the systemd unit's ExecStart). Per-variant copy.
@@ -350,6 +360,20 @@ MONGODB_TIMEOUTMS: "${ELCHI_MONGO_TIMEOUT_MS:-9000}"
 MONGODB_TLS_ENABLED: "${ELCHI_MONGO_TLS_ENABLED:-false}"
 MONGODB_AUTH_SOURCE: "${ELCHI_MONGO_AUTH_SOURCE:-admin}"
 MONGODB_AUTH_MECHANISM: "${mongo_auth_mech}"
+
+# ClickHouse — read-only access to the elchi-collector event tables.
+# An empty CLICKHOUSE_URI disables the inventory_detail endpoints (503).
+CLICKHOUSE_URI: "${clickhouse_uri}"
+CLICKHOUSE_DATABASE: "${ELCHI_CLICKHOUSE_DATABASE:-elchi}"
+CLICKHOUSE_TABLE: "${ELCHI_CLICKHOUSE_TABLE:-api_events_raw}"
+CLICKHOUSE_ROLLUP_1M: "api_events_1m"
+CLICKHOUSE_ROLLUP_1H: "api_events_1h"
+CLICKHOUSE_ROLLUP_1D: "api_events_1d"
+CLICKHOUSE_CONNECT_TIMEOUT_SEC: 5
+CLICKHOUSE_QUERY_TIMEOUT_SEC: 30
+CLICKHOUSE_MAX_OPEN_CONNS: 50
+CLICKHOUSE_MAX_IDLE_CONNS: 20
+CLICKHOUSE_CONN_MAX_LIFETIME_MIN: 60
 
 LOGGING:
   level: ${ELCHI_LOG_LEVEL:-info}

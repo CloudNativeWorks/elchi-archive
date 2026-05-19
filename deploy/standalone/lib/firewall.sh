@@ -59,6 +59,17 @@ firewall::_open_firewalld() {
     if [ "$size" -ge 2 ] 2>/dev/null; then
       firewall-cmd --quiet --zone="$zone" --add-port=27017/tcp --permanent || true
       firewall-cmd --quiet --zone="$zone" --add-port=9090/tcp --permanent || true
+      # ClickHouse native port — collectors on CH-less nodes reach the
+      # first-3 over the LAN.
+      [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] \
+        && firewall-cmd --quiet --zone="$zone" --add-port=9000/tcp --permanent || true
+    fi
+    # ClickHouse cluster (3+ nodes): interserver replication fetch +
+    # embedded Keeper client/Raft ports.
+    if [ "$size" -ge 3 ] 2>/dev/null && [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+      firewall-cmd --quiet --zone="$zone" --add-port=9009/tcp --permanent || true
+      firewall-cmd --quiet --zone="$zone" --add-port=9181/tcp --permanent || true
+      firewall-cmd --quiet --zone="$zone" --add-port=9234/tcp --permanent || true
     fi
   fi
   if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
@@ -76,12 +87,50 @@ firewall::_open_ufw() {
     if [ "$size" -ge 2 ] 2>/dev/null; then
       ufw allow 27017/tcp >/dev/null 2>&1 || true
       ufw allow 9090/tcp >/dev/null 2>&1 || true
+      [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] \
+        && ufw allow 9000/tcp >/dev/null 2>&1 || true
+    fi
+    if [ "$size" -ge 3 ] 2>/dev/null && [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+      ufw allow 9009/tcp >/dev/null 2>&1 || true
+      ufw allow 9181/tcp >/dev/null 2>&1 || true
+      ufw allow 9234/tcp >/dev/null 2>&1 || true
     fi
   fi
   if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
     ufw allow 53/tcp >/dev/null 2>&1 || true
     ufw allow 53/udp >/dev/null 2>&1 || true
   fi
+}
+
+# firewall::open_clickhouse — open ONLY the ClickHouse native + cluster
+# ports (native 9000, interserver 9009, Keeper client 9181, Keeper Raft
+# 9234). Called from install phase 1 on ClickHouse cluster members so the
+# embedded Keeper can form its Raft quorum straight away — phase 2's
+# firewall::open would otherwise be too late (the Replicated-database
+# creation at the start of phase 2 needs a live quorum). This matters
+# most when mongo is external: with a local mongo, the replica-set
+# mid-gate has already proven inter-node connectivity, but an external
+# mongo skips that gate. Idempotent — phase 2's firewall::open re-applies
+# the very same rules.
+firewall::open_clickhouse() {
+  if [ "${ELCHI_NO_FIREWALL:-0}" = "1" ]; then
+    return 0
+  fi
+  local backend p
+  backend=$(firewall::detect_backend)
+  case "$backend" in
+    firewalld)
+      for p in 9000 9009 9181 9234; do
+        firewall-cmd --quiet --zone=public --add-port="${p}/tcp" --permanent 2>/dev/null || true
+      done
+      firewall-cmd --quiet --reload 2>/dev/null || true
+      ;;
+    ufw)
+      for p in 9000 9009 9181 9234; do
+        ufw allow "${p}/tcp" >/dev/null 2>&1 || true
+      done
+      ;;
+  esac
 }
 
 # firewall::close — best-effort revert of the rules opened by
@@ -111,6 +160,10 @@ firewall::_close_firewalld() {
   firewall-cmd --quiet --zone="$zone" --remove-port="${public_port}/tcp" --permanent 2>/dev/null || true
   firewall-cmd --quiet --zone="$zone" --remove-port=27017/tcp --permanent 2>/dev/null || true
   firewall-cmd --quiet --zone="$zone" --remove-port=9090/tcp  --permanent 2>/dev/null || true
+  firewall-cmd --quiet --zone="$zone" --remove-port=9000/tcp  --permanent 2>/dev/null || true
+  firewall-cmd --quiet --zone="$zone" --remove-port=9009/tcp  --permanent 2>/dev/null || true
+  firewall-cmd --quiet --zone="$zone" --remove-port=9181/tcp  --permanent 2>/dev/null || true
+  firewall-cmd --quiet --zone="$zone" --remove-port=9234/tcp  --permanent 2>/dev/null || true
   firewall-cmd --quiet --zone="$zone" --remove-port=53/tcp    --permanent 2>/dev/null || true
   firewall-cmd --quiet --zone="$zone" --remove-port=53/udp    --permanent 2>/dev/null || true
   firewall-cmd --quiet --reload 2>/dev/null || true
@@ -121,6 +174,10 @@ firewall::_close_ufw() {
   ufw delete allow "${public_port}/tcp" >/dev/null 2>&1 || true
   ufw delete allow 27017/tcp            >/dev/null 2>&1 || true
   ufw delete allow 9090/tcp             >/dev/null 2>&1 || true
+  ufw delete allow 9000/tcp             >/dev/null 2>&1 || true
+  ufw delete allow 9009/tcp             >/dev/null 2>&1 || true
+  ufw delete allow 9181/tcp             >/dev/null 2>&1 || true
+  ufw delete allow 9234/tcp             >/dev/null 2>&1 || true
   ufw delete allow 53/tcp               >/dev/null 2>&1 || true
   ufw delete allow 53/udp               >/dev/null 2>&1 || true
 }

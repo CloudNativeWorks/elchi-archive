@@ -21,6 +21,20 @@ verify::wait() {
   # Registry runs on every node now (HA peer set).
   verify::_tcp 127.0.0.1 "$ELCHI_PORT_REGISTRY_GRPC"          "elchi-registry" || fails=$(( fails + 1 ))
 
+  # elchi-collector runs on every node; ClickHouse only on the nodes
+  # that host it (the elchi-collector.service systemd state is covered
+  # by the generic elchi-* loop further down).
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ]; then
+    verify::_tcp 127.0.0.1 "$ELCHI_PORT_COLLECTOR_HTTP" "elchi-collector" || fails=$(( fails + 1 ))
+    if systemctl list-unit-files --no-legend clickhouse-server.service 2>/dev/null | grep -q .; then
+      verify::_tcp 127.0.0.1 "$ELCHI_PORT_CLICKHOUSE_HTTP" "clickhouse-server" || fails=$(( fails + 1 ))
+      if ! systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+        log::err "clickhouse-server NOT active"
+        fails=$(( fails + 1 ))
+      fi
+    fi
+  fi
+
   # M1-only checks (single-instance state-holders)
   if topology::is_m1_local 2>/dev/null; then
     verify::_tcp 127.0.0.1 27017                                "mongod" || fails=$(( fails + 1 ))

@@ -3,7 +3,9 @@
 # release tarball. Runs only on M1 (per topology). Provides the TSDB that
 # OTel writes to and Grafana queries.
 
-readonly VM_VERSION_DEFAULT=v1.93.5
+# VictoriaMetrics version: the default lives in lib/versions.sh
+# (ELCHI_DEFAULT_VM_VERSION) and reaches here as ELCHI_VM_VERSION,
+# which install.sh sets + exports.
 readonly VM_BIN=/opt/elchi/bin/victoria-metrics-prod
 readonly VM_UNIT=/etc/systemd/system/elchi-victoriametrics.service
 # Data directory — operator-overridable via --vm-data-dir. Default
@@ -17,7 +19,7 @@ victoriametrics::setup() {
   fi
   log::step "Installing VictoriaMetrics (single-node)"
 
-  local v=${ELCHI_VM_VERSION:-$VM_VERSION_DEFAULT}
+  local v=${ELCHI_VM_VERSION:?ELCHI_VM_VERSION not set (install.sh sources lib/versions.sh)}
   v=${v#v}  # strip leading v if present
 
   VM_DATA=${ELCHI_VM_DATA_DIR:-/var/lib/elchi/victoriametrics}

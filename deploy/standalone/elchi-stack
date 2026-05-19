@@ -94,7 +94,7 @@ cmd_status() {
   local query=$(cat <<'EOF'
 systemctl list-units --no-pager --no-legend --type=service \
   'elchi-*' 'elchi-control-plane-*@*' \
-  mongod.service grafana-server.service nginx.service 2>/dev/null
+  mongod.service grafana-server.service nginx.service clickhouse-server.service 2>/dev/null
 EOF
 )
   local host

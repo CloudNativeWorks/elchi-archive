@@ -135,7 +135,7 @@ mapfile -t units < <(
     | awk '$1 ~ /^elchi-/ {print $1}'
 )
 # Add managed external services if their unit files exist
-for ext in mongod grafana-server nginx; do
+for ext in mongod grafana-server nginx clickhouse-server; do
   if systemctl list-unit-files --type=service --no-legend "${ext}.service" 2>/dev/null | grep -q .; then
     units+=("${ext}.service")
   fi

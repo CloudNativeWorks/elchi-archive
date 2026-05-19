@@ -549,7 +549,7 @@ preflight::check_port() {
   # -ltnp` show the actual COMM, not the systemd unit, so we have to
   # whitelist each binary basename.
   case "$holder" in
-    *elchi*|*envoy*|*mongod*|*nginx*|*otelcol*|*victoria*|*grafana*|*coredns*)
+    *elchi*|*envoy*|*mongod*|*nginx*|*otelcol*|*victoria*|*grafana*|*coredns*|*clickhouse*|*collector*)
       log::info "port ${port} (${label}) is held by an existing elchi-stack-related process — assuming rerun"
       return 0
       ;;
@@ -640,9 +640,20 @@ preflight::check_cluster_ports() {
   log::info "checking cluster-specific listener ports"
 
   local idx=${ELCHI_NODE_INDEX:-1}
+  local cluster_size_for_ports
+  cluster_size_for_ports=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "$topo")
 
   # Per-role flags from this node's topology row.
   local runs_mongo runs_otel runs_vm runs_grafana runs_coredns
+  local runs_clickhouse runs_collector
+  runs_clickhouse=$(awk -v want="$idx" '
+    /^  - index:/ { in_node = (($3+0) == want) }
+    in_node && /^    runs_clickhouse:/ { print $2; exit }
+  ' "$topo")
+  runs_collector=$(awk -v want="$idx" '
+    /^  - index:/ { in_node = (($3+0) == want) }
+    in_node && /^    runs_collector:/ { print $2; exit }
+  ' "$topo")
   runs_mongo=$(awk -v want="$idx" '
     /^  - index:/ { in_node = (($3+0) == want) }
     in_node && /^    runs_mongo:/ { print $2; exit }
@@ -677,6 +688,20 @@ preflight::check_cluster_ports() {
   fi
   if [ "$runs_grafana" = "true" ]; then
     preflight::check_port "${ELCHI_PORT_GRAFANA:-3000}" "grafana"
+  fi
+  if [ "$runs_clickhouse" = "true" ]; then
+    preflight::check_port "${ELCHI_PORT_CLICKHOUSE_NATIVE:-9000}" "clickhouse-native"
+    preflight::check_port "${ELCHI_PORT_CLICKHOUSE_HTTP:-8123}"   "clickhouse-http"
+    # Embedded Keeper ports — only bound by 3+ node cluster members.
+    if [ "${cluster_size_for_ports:-1}" -ge 3 ] 2>/dev/null; then
+      preflight::check_port "${ELCHI_PORT_CLICKHOUSE_INTERSERVER:-9009}" "clickhouse-interserver"
+      preflight::check_port "${ELCHI_PORT_CLICKHOUSE_KEEPER:-9181}"      "clickhouse-keeper"
+      preflight::check_port "${ELCHI_PORT_CLICKHOUSE_RAFT:-9234}"        "clickhouse-keeper-raft"
+    fi
+  fi
+  if [ "$runs_collector" = "true" ]; then
+    preflight::check_port "${ELCHI_PORT_COLLECTOR_GRPC:-18090}" "elchi-collector-grpc"
+    preflight::check_port "${ELCHI_PORT_COLLECTOR_HTTP:-18091}" "elchi-collector-http"
   fi
   if [ "$runs_coredns" = "true" ] || [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
     preflight::check_port "${ELCHI_PORT_COREDNS:-53}"          "coredns-tcp"

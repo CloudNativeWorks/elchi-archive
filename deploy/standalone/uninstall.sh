@@ -13,7 +13,8 @@
 #
 # Flags:
 #   --purge / --purge-mongo / --purge-vm / --purge-grafana / --purge-nginx /
-#     --purge-all                wipe data on top of the default removal
+#     --purge-clickhouse / --purge-all
+#                                wipe data on top of the default removal
 #   --all-nodes                  fan out to every node from /etc/elchi/nodes.list
 #                                (M1 last, in reverse, so shared state goes last)
 #   --continue-on-error          with --all-nodes: don't abort when a node
@@ -57,6 +58,7 @@ PURGE_MONGO=0
 PURGE_VM=0
 PURGE_GRAFANA=0
 PURGE_NGINX=0
+PURGE_CLICKHOUSE=0
 ALL_NODES=0
 CONFIRMED=0
 CONTINUE_ON_ERROR=0
@@ -68,7 +70,8 @@ while [ "$#" -gt 0 ]; do
     --purge-vm)           PURGE_VM=1; PURGE=1 ;;
     --purge-grafana)      PURGE_GRAFANA=1; PURGE=1 ;;
     --purge-nginx)        PURGE_NGINX=1; PURGE=1 ;;
-    --purge-all)          PURGE=1; PURGE_MONGO=1; PURGE_VM=1; PURGE_GRAFANA=1; PURGE_NGINX=1 ;;
+    --purge-clickhouse)   PURGE_CLICKHOUSE=1; PURGE=1 ;;
+    --purge-all)          PURGE=1; PURGE_MONGO=1; PURGE_VM=1; PURGE_GRAFANA=1; PURGE_NGINX=1; PURGE_CLICKHOUSE=1 ;;
     --all-nodes)          ALL_NODES=1 ;;
     --continue-on-error)  CONTINUE_ON_ERROR=1 ;;
     --ssh-user=*)         ELCHI_SSH_USER=${1#*=}; _ELCHI_SSH_USER_EXPLICIT=1 ;;
@@ -151,6 +154,8 @@ uninstall::preview_and_confirm() {
   printf '    --purge-grafana  %s  also remove the grafana package + /var/lib/grafana data\n'        "$marker"
   marker=$( [ "$PURGE_NGINX" = "1" ]   && printf 'ON ' || printf '   ' )
   printf '    --purge-nginx    %s  also remove the nginx package (only if WE installed it)\n'        "$marker"
+  marker=$( [ "$PURGE_CLICKHOUSE" = "1" ] && printf 'ON ' || printf '   ' )
+  printf '    --purge-clickhouse %s also remove the clickhouse-server package + /var/lib/clickhouse data\n' "$marker"
   printf '\n'
 
   if [ "$PURGE" = "1" ]; then
@@ -198,6 +203,7 @@ remove_units_binaries() {
         /etc/systemd/system/elchi-coredns.service \
         /etc/systemd/system/elchi-victoriametrics.service \
         /etc/systemd/system/elchi-otel.service \
+        /etc/systemd/system/elchi-collector.service \
         /etc/systemd/system/elchi-stack.target
   rm -f /etc/systemd/system/elchi-control-plane-*@.service
   rm -rf /etc/systemd/system/grafana-server.service.d/10-elchi.conf
@@ -376,6 +382,34 @@ purge_grafana() {
   rm -rf /var/lib/grafana /var/log/grafana
 }
 
+purge_clickhouse() {
+  log::step "Purging ClickHouse"
+  systemctl stop clickhouse-server 2>/dev/null || true
+  systemctl disable clickhouse-server 2>/dev/null || true
+  rm -rf /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf \
+         /etc/systemd/system/clickhouse-server.service.d
+  systemctl daemon-reload 2>/dev/null || true
+  preflight::detect_os 2>/dev/null || true
+  case "${ELCHI_OS_FAMILY:-}" in
+    debian)
+      preflight::wait_apt_lock 600 || true
+      apt-get -o DPkg::Lock::Timeout=600 purge -y \
+        'clickhouse-server*' 'clickhouse-client*' 'clickhouse-common-static*' >/dev/null || true
+      apt-get -o DPkg::Lock::Timeout=600 autoremove -y >/dev/null || true
+      rm -f /etc/apt/sources.list.d/clickhouse.list /usr/share/keyrings/clickhouse-keyring.gpg
+      apt-get -o DPkg::Lock::Timeout=600 update -qq >/dev/null || true
+      ;;
+    rhel)
+      local pm
+      pm=$(command -v dnf || command -v yum)
+      "$pm" remove -y 'clickhouse-server*' 'clickhouse-client*' 'clickhouse-common-static*' >/dev/null || true
+      rm -f /etc/yum.repos.d/clickhouse.repo
+      ;;
+  esac
+  rm -rf /var/lib/clickhouse /var/log/clickhouse-server \
+         /etc/clickhouse-server /etc/clickhouse-client
+}
+
 purge_ssh_bootstrap() {
   # Only touch SSH artifacts when --purge is set — the cluster key + the
   # known_hosts pin are operator material and shouldn't disappear on a
@@ -473,6 +507,9 @@ local_uninstall() {
   if [ "$PURGE_NGINX" = "1" ]; then
     purge_nginx
   fi
+  if [ "$PURGE_CLICKHOUSE" = "1" ]; then
+    purge_clickhouse
+  fi
 
   log::ok "uninstall complete on $(hostname)"
 }
@@ -488,6 +525,7 @@ orchestrated_uninstall() {
   [ "$PURGE_VM" = "1" ]      && flags+=(--purge-vm)
   [ "$PURGE_GRAFANA" = "1" ] && flags+=(--purge-grafana)
   [ "$PURGE_NGINX" = "1" ]   && flags+=(--purge-nginx)
+  [ "$PURGE_CLICKHOUSE" = "1" ] && flags+=(--purge-clickhouse)
   flags+=(--yes-i-mean-it)
 
   # Reverse order so M1 (which holds shared state) is purged last.

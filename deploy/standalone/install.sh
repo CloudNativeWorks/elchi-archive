@@ -42,6 +42,20 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd -P)
 ELCHI_INSTALLER_ROOT="$SCRIPT_DIR"
 export ELCHI_INSTALLER_ROOT
 
+# ----- component version defaults ----------------------------------------
+# lib/versions.sh is the single source of truth for every statically
+# pinned component version (operator edits ONE file). Sourced here, ahead
+# of the defaults block below, so each ELCHI_<x>_VERSION can fall back to
+# its ELCHI_DEFAULT_<x> value. log:: / die aren't defined this early —
+# use a plain message + exit on a missing file.
+if [ -r "${SCRIPT_DIR}/lib/versions.sh" ]; then
+  # shellcheck source=lib/versions.sh
+  . "${SCRIPT_DIR}/lib/versions.sh"
+else
+  printf 'fatal: lib/versions.sh not found at %s\n' "${SCRIPT_DIR}/lib/versions.sh" >&2
+  exit 1
+fi
+
 # ----- defaults ----------------------------------------------------------
 ELCHI_NODES=${ELCHI_NODES:-}
 # Track whether the operator explicitly chose an SSH user (via env var or
@@ -82,10 +96,12 @@ ELCHI_CREATE_ADMIN_USER=${ELCHI_CREATE_ADMIN_USER:-1}
 #   elchi-v1.2.5-v0.14.0-envoy1.35.3
 # The release tag (e.g. v1.2.5) is derived per-variant; a single install
 # can mix variants from different elchi-backend releases.
-ELCHI_BACKEND_VARIANTS=${ELCHI_BACKEND_VARIANTS:-elchi-v1.2.5-v0.14.0-envoy1.36.2}
-ELCHI_UI_VERSION=${ELCHI_UI_VERSION:-v1.1.9}
-ELCHI_ENVOY_VERSION=${ELCHI_ENVOY_VERSION:-v1.37.0}
-ELCHI_COREDNS_VERSION=${ELCHI_COREDNS_VERSION:-v0.1.3}
+# Component versions — defaults come from lib/versions.sh (sourced
+# above). An explicit env var or CLI flag still overrides.
+ELCHI_BACKEND_VARIANTS=${ELCHI_BACKEND_VARIANTS:-$ELCHI_DEFAULT_BACKEND_VARIANTS}
+ELCHI_UI_VERSION=${ELCHI_UI_VERSION:-$ELCHI_DEFAULT_UI_VERSION}
+ELCHI_ENVOY_VERSION=${ELCHI_ENVOY_VERSION:-$ELCHI_DEFAULT_ENVOY_VERSION}
+ELCHI_COREDNS_VERSION=${ELCHI_COREDNS_VERSION:-$ELCHI_DEFAULT_COREDNS_VERSION}
 
 # Replicas-per-node is fixed at 1:
 #   * Controller is version-agnostic — exactly ONE per node, using
@@ -128,6 +144,29 @@ ELCHI_FORCE_REDOWNLOAD=${ELCHI_FORCE_REDOWNLOAD:-0}
 
 ELCHI_VM_MODE=${ELCHI_VM_MODE:-local}
 ELCHI_VM_ENDPOINT=${ELCHI_VM_ENDPOINT:-}
+# VictoriaMetrics + OpenTelemetry Collector versions — defaults from
+# lib/versions.sh. No CLI flag (these are not routinely re-pinned); set
+# the env var, or edit lib/versions.sh, to change them.
+ELCHI_VM_VERSION=${ELCHI_VM_VERSION:-$ELCHI_DEFAULT_VM_VERSION}
+ELCHI_OTEL_VERSION=${ELCHI_OTEL_VERSION:-$ELCHI_DEFAULT_OTEL_VERSION}
+
+# elchi-collector + ClickHouse. Default-ON, mirroring the Helm chart's
+# installCollector / installClickhouse defaults. The collector ingests
+# the Envoy ALS gRPC stream; ClickHouse is its columnar event store.
+# Disable the whole feature with --no-collector.
+ELCHI_INSTALL_COLLECTOR=${ELCHI_INSTALL_COLLECTOR:-1}
+# ClickHouse deployment: local (installed on the first 3 nodes — like
+# mongo) or external (operator-supplied endpoint, nothing installed).
+ELCHI_CLICKHOUSE_MODE=${ELCHI_CLICKHOUSE_MODE:-local}
+ELCHI_CLICKHOUSE_URI=${ELCHI_CLICKHOUSE_URI:-}        # external: full clickhouse:// URI (creds embedded)
+ELCHI_CLICKHOUSE_USERNAME=${ELCHI_CLICKHOUSE_USERNAME:-elchi}
+ELCHI_CLICKHOUSE_DATABASE=${ELCHI_CLICKHOUSE_DATABASE:-elchi}
+ELCHI_CLICKHOUSE_TABLE=${ELCHI_CLICKHOUSE_TABLE:-api_events_raw}
+# ClickHouse version: "stable" installs current stable from the official
+# repo; a fully-qualified version (e.g. 24.8.14.39) is pinned exactly.
+ELCHI_CLICKHOUSE_VERSION=${ELCHI_CLICKHOUSE_VERSION:-stable}
+ELCHI_COLLECTOR_VERSION=${ELCHI_COLLECTOR_VERSION:-$ELCHI_DEFAULT_COLLECTOR_VERSION}
+ELCHI_COLLECTOR_RETENTION_DAYS=${ELCHI_COLLECTOR_RETENTION_DAYS:-7}
 
 ELCHI_GRAFANA_USER=${ELCHI_GRAFANA_USER:-elchi}
 ELCHI_GRAFANA_PASSWORD=${ELCHI_GRAFANA_PASSWORD:-}
@@ -253,9 +292,9 @@ Versioning
                                        each one is the release-asset basename, e.g.
                                        elchi-v1.2.5-v0.14.0-envoy1.36.2
                                        (release tag derived per-variant)
-  --ui-version=<vX.Y.Z>               UI bundle version (default: v1.1.9)
-  --envoy-version=<vX.Y.Z>            envoy proxy version (default: v1.37.0)
-  --coredns-version=<vX.Y.Z>          GSLB plugin version (default: v0.1.3)
+  --ui-version=<vX.Y.Z>               UI bundle version (default: ${ELCHI_DEFAULT_UI_VERSION})
+  --envoy-version=<vX.Y.Z>            envoy proxy version (default: ${ELCHI_DEFAULT_ENVOY_VERSION})
+  --coredns-version=<vX.Y.Z>          GSLB plugin version (default: ${ELCHI_DEFAULT_COREDNS_VERSION})
 
 Network / TLS
   --main-address=<dns|ip>             public address — REQUIRED. Cert SAN.
@@ -277,6 +316,17 @@ Mongo
 VictoriaMetrics
   --vm=local|external                 default: local
   --vm-endpoint=<url|host:port>       --vm=external
+
+elchi-collector + ClickHouse (Envoy ALS ingestion — default ON)
+  --no-collector                      opt out of the collector + ClickHouse
+  --collector-version=<vX.Y.Z>        elchi-collector release (default: ${ELCHI_DEFAULT_COLLECTOR_VERSION})
+  --collector-retention-days=<n>      raw-event retention (default: 7)
+  --clickhouse=local|external         default: local. local installs
+                                       ClickHouse on the first 3 nodes
+                                       (standalone for N<3, Keeper +
+                                       ReplicatedMergeTree cluster for N>=3)
+  --clickhouse-uri=<uri>              --clickhouse=external (full clickhouse:// URI)
+  --clickhouse-version=<X.Y.Z|stable> default: stable
 
 Grafana
   --grafana-user=<user>               default: elchi
@@ -429,6 +479,14 @@ parse_args() {
       --mongo-data-dir=*)                     ELCHI_MONGO_DATA_DIR=${1#*=} ;;
       --vm=*)                                 ELCHI_VM_MODE=${1#*=} ;;
       --vm-endpoint=*)                        ELCHI_VM_ENDPOINT=${1#*=} ;;
+      --collector)                            ELCHI_INSTALL_COLLECTOR=1 ;;
+      --no-collector)                         ELCHI_INSTALL_COLLECTOR=0 ;;
+      --clickhouse=*)                         ELCHI_CLICKHOUSE_MODE=${1#*=} ;;
+      --clickhouse-uri=*)                     ELCHI_CLICKHOUSE_URI=${1#*=} ;;
+      --clickhouse-version=*)                 ELCHI_CLICKHOUSE_VERSION=${1#*=} ;;
+      --clickhouse-database=*)                ELCHI_CLICKHOUSE_DATABASE=${1#*=} ;;
+      --collector-version=*)                  ELCHI_COLLECTOR_VERSION=${1#*=} ;;
+      --collector-retention-days=*)           ELCHI_COLLECTOR_RETENTION_DAYS=${1#*=} ;;
       --vm-data-dir=*)                        ELCHI_VM_DATA_DIR=${1#*=} ;;
       --vm-retention=*)                       ELCHI_VM_RETENTION=${1#*=} ;;
       --grafana-user=*)                       ELCHI_GRAFANA_USER=${1#*=} ;;
@@ -523,6 +581,11 @@ parse_args() {
   export ELCHI_MONGO_AUTH_SOURCE ELCHI_MONGO_AUTH_MECHANISM ELCHI_MONGO_TIMEOUT_MS
   export ELCHI_MONGO_DATA_DIR
   export ELCHI_VM_MODE ELCHI_VM_ENDPOINT ELCHI_VM_DATA_DIR ELCHI_VM_RETENTION
+  export ELCHI_VM_VERSION ELCHI_OTEL_VERSION
+  export ELCHI_INSTALL_COLLECTOR ELCHI_CLICKHOUSE_MODE ELCHI_CLICKHOUSE_URI
+  export ELCHI_CLICKHOUSE_USERNAME ELCHI_CLICKHOUSE_DATABASE
+  export ELCHI_CLICKHOUSE_TABLE ELCHI_CLICKHOUSE_VERSION
+  export ELCHI_COLLECTOR_VERSION ELCHI_COLLECTOR_RETENTION_DAYS
   export ELCHI_FORCE_REDOWNLOAD
   export ELCHI_INTERNAL_COMMUNICATION ELCHI_CORS_ALLOWED_ORIGINS
   export ELCHI_JWT_ACCESS_TOKEN_DURATION ELCHI_JWT_REFRESH_TOKEN_DURATION
@@ -577,6 +640,8 @@ source_libs() {
   . "${lib}/watchdog.sh"
   # shellcheck source=lib/mongodb.sh
   . "${lib}/mongodb.sh"
+  # shellcheck source=lib/clickhouse.sh
+  . "${lib}/clickhouse.sh"
   # shellcheck source=lib/victoriametrics.sh
   . "${lib}/victoriametrics.sh"
   # shellcheck source=lib/otel.sh
@@ -601,6 +666,8 @@ source_libs() {
   . "${lib}/ui.sh"
   # shellcheck source=lib/nginx.sh
   . "${lib}/nginx.sh"
+  # shellcheck source=lib/collector.sh
+  . "${lib}/collector.sh"
   # shellcheck source=lib/verify.sh
   . "${lib}/verify.sh"
 }
@@ -791,6 +858,30 @@ local_install_phase1() {
     fi
   fi
 
+  # ClickHouse — the elchi-collector's columnar event store. Same
+  # first-3-nodes placement as mongo. Cluster members bring up their
+  # server + embedded Keeper here; the Replicated `elchi` database is
+  # created in phase 2 (once every node's Keeper has joined the quorum).
+  # The collector binary is pre-fetched in phase 1 too so bundle::build
+  # can ship it to the remote nodes — collector::setup itself is phase 2
+  # (it depends on the mongo RS + the ClickHouse database).
+  if [ "$ELCHI_INSTALL_COLLECTOR" = "1" ]; then
+    if [ "$ELCHI_CLICKHOUSE_MODE" = "external" ]; then
+      [ "$ELCHI_NODE_INDEX" = "1" ] && log::info "skipping ClickHouse install (--clickhouse=external)"
+    elif topology::is_clickhouse_node "$ELCHI_NODE_INDEX" "$cluster_size"; then
+      if [ "$cluster_size" -ge 3 ] 2>/dev/null; then
+        clickhouse::setup_cluster_member
+        # Open the ClickHouse + Keeper ports NOW (phase 1) so the Raft
+        # quorum can form before phase 2's create-database step needs
+        # it. firewall::open in phase 2 re-applies the same rules.
+        firewall::open_clickhouse
+      else
+        clickhouse::setup_local_standalone
+      fi
+    fi
+    collector::install_binary
+  fi
+
   # M1-only storage tier (VictoriaMetrics + Grafana). These are
   # singletons and don't depend on the RS — they read/write their own
   # local stores.
@@ -852,6 +943,23 @@ local_install_phase2() {
   # GSLB CoreDNS — its plugin polls the backend's /dns/snapshot
   # endpoint, so it depends on controller (and therefore on the RS).
   coredns::setup
+
+  # elchi-collector + the ClickHouse Replicated database it writes into.
+  # By the time ANY node reaches phase 2 the orchestrator has finished
+  # phase 1 on EVERY node, so all the ClickHouse servers — and therefore
+  # the Keeper Raft quorum — are up: each cluster member can now create
+  # its replica of the Replicated `elchi` database. The collector then
+  # connects to mongo (RS already initiated by the mid-gate) + ClickHouse.
+  if [ "$ELCHI_INSTALL_COLLECTOR" = "1" ]; then
+    local cluster_size2
+    cluster_size2=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
+    if [ "$ELCHI_CLICKHOUSE_MODE" != "external" ] \
+       && [ "${cluster_size2:-1}" -ge 3 ] 2>/dev/null \
+       && topology::is_clickhouse_node "$ELCHI_NODE_INDEX" "$cluster_size2"; then
+      clickhouse::create_cluster_database
+    fi
+    collector::setup
+  fi
 
   # firewall + watchdog + final verify gate.
   firewall::open
@@ -947,7 +1055,7 @@ orchestrate_port_check() {
       holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\" {print; exit}")
       if [ -n "$holder" ]; then
         case "$holder" in
-          *elchi*|*envoy*|*mongod*|*nginx*|*coredns*|*grafana*|*otelcol*|*victoria*) ;;
+          *elchi*|*envoy*|*mongod*|*nginx*|*coredns*|*grafana*|*otelcol*|*victoria*|*clickhouse*) ;;
           *)
             echo "[FAIL] port $port ($label) is in use: $holder" >&2
             exit 1
@@ -1012,6 +1120,31 @@ orchestrate_collect_ports_for() {
   if [ "$runs_coredns" = "true" ]; then
     printf '%d:coredns\n'         "${ELCHI_PORT_COREDNS:-53}"
     printf '%d:coredns-webhook\n' "${ELCHI_PORT_COREDNS_WEBHOOK:-8053}"
+  fi
+
+  # ClickHouse + elchi-collector ports.
+  local runs_clickhouse runs_collector ch_size
+  runs_clickhouse=$(awk -v want="$idx" '
+    /^  - index:/ { in_node = (($3+0) == want) }
+    in_node && /^    runs_clickhouse:/ { print $2; exit }
+  ' "$topo")
+  runs_collector=$(awk -v want="$idx" '
+    /^  - index:/ { in_node = (($3+0) == want) }
+    in_node && /^    runs_collector:/ { print $2; exit }
+  ' "$topo")
+  ch_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "$topo")
+  if [ "$runs_clickhouse" = "true" ]; then
+    printf '%d:clickhouse-native\n' "${ELCHI_PORT_CLICKHOUSE_NATIVE:-9000}"
+    printf '%d:clickhouse-http\n'   "${ELCHI_PORT_CLICKHOUSE_HTTP:-8123}"
+    if [ "${ch_size:-1}" -ge 3 ] 2>/dev/null; then
+      printf '%d:clickhouse-interserver\n' "${ELCHI_PORT_CLICKHOUSE_INTERSERVER:-9009}"
+      printf '%d:clickhouse-keeper\n'      "${ELCHI_PORT_CLICKHOUSE_KEEPER:-9181}"
+      printf '%d:clickhouse-keeper-raft\n' "${ELCHI_PORT_CLICKHOUSE_RAFT:-9234}"
+    fi
+  fi
+  if [ "$runs_collector" = "true" ]; then
+    printf '%d:elchi-collector-grpc\n' "${ELCHI_PORT_COLLECTOR_GRPC:-18090}"
+    printf '%d:elchi-collector-http\n' "${ELCHI_PORT_COLLECTOR_HTTP:-18091}"
   fi
 
   # Backend ports — controller + every variant's control-plane.
@@ -1396,6 +1529,13 @@ _orchestrate_remote_phase() {
     --main-address="$ELCHI_MAIN_ADDRESS" \
     --port="$ELCHI_PORT" \
     --timezone="$ELCHI_TIMEZONE" \
+    $( [ "$ELCHI_INSTALL_COLLECTOR" = "0" ] && echo --no-collector ) \
+    --clickhouse="$ELCHI_CLICKHOUSE_MODE" \
+    --clickhouse-version="$ELCHI_CLICKHOUSE_VERSION" \
+    --clickhouse-database="$ELCHI_CLICKHOUSE_DATABASE" \
+    ${ELCHI_CLICKHOUSE_URI:+--clickhouse-uri="$ELCHI_CLICKHOUSE_URI"} \
+    --collector-version="$ELCHI_COLLECTOR_VERSION" \
+    --collector-retention-days="$ELCHI_COLLECTOR_RETENTION_DAYS" \
     $( [ "$ELCHI_INSTALL_GSLB" = "1" ] && echo --gslb ) \
     ${ELCHI_GSLB_ZONE:+--gslb-zone="$ELCHI_GSLB_ZONE"} \
     ${ELCHI_GSLB_ADMIN_EMAIL:+--gslb-admin-email="$ELCHI_GSLB_ADMIN_EMAIL"} \

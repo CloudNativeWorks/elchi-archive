@@ -45,13 +45,17 @@ secrets::generate() {
   else
     log::info "minting fresh secrets"
     local jwt_secret mongo_app_pwd mongo_root_pwd gslb_secret grafana_pwd
+    local clickhouse_pwd collector_hash_salt
     # 32-byte hex (256 bit) for everything that goes through HMAC / Argon2;
-    # alnum form (avoid special chars) for mongo passwords because the
-    # mongo URI parser is finicky about embedded `@:/?#%`.
+    # alnum form (avoid special chars) for mongo / clickhouse passwords
+    # because their connection-URI parsers are finicky about embedded
+    # `@:/?#%`.
     jwt_secret=$(rand_hex 32)
     mongo_app_pwd=$(rand_alnum 40)
     mongo_root_pwd=$(rand_alnum 40)
     gslb_secret=$(rand_alnum 48)
+    clickhouse_pwd=$(rand_alnum 40)
+    collector_hash_salt=$(rand_hex 32)
     # Grafana admin password — short alnum, easier for operators to type.
     # Operator can override via --grafana-password=... at install time.
     grafana_pwd=${ELCHI_GRAFANA_PASSWORD:-elchi-$(rand_hex 4)}
@@ -79,16 +83,54 @@ ELCHI_MONGO_ROOT_PASSWORD=${mongo_root_pwd}
 # before the DB is initialised.
 ELCHI_GRAFANA_USER=${ELCHI_GRAFANA_USER:-admin}
 ELCHI_GRAFANA_PASSWORD=${grafana_pwd}
+
+# ClickHouse — the "elchi" user the collector + backend connect with.
+# HASH_SALT seeds the collector's SHA-256 hashing of source IP /
+# user-agent / consumer values; rotating it would break event
+# correlation, so it is minted once and preserved.
+ELCHI_CLICKHOUSE_USERNAME=elchi
+ELCHI_CLICKHOUSE_PASSWORD=${clickhouse_pwd}
+ELCHI_COLLECTOR_HASH_SALT=${collector_hash_salt}
 EOF
     chmod 0640 "${out}.tmp"
     chown root:"$ELCHI_GROUP" "${out}.tmp"
     mv -f "${out}.tmp" "$out"
   fi
 
+  # ClickHouse / collector secrets were added after the first releases
+  # of this installer. A cluster installed before that has a preserved
+  # secrets.env without them — append (never rotate) the missing keys so
+  # an upgrade onto the collector feature works without a secret reset.
+  secrets::ensure_collector_secrets
+
   secrets::generate_mongo_keyfile
   secrets::write_mongo_root_env
 
   log::ok "secrets ready at ${out}"
+}
+
+# secrets::ensure_collector_secrets — append the ClickHouse + collector
+# secret keys to secrets.env if (and only if) they are absent. Idempotent;
+# never overwrites an existing value.
+secrets::ensure_collector_secrets() {
+  local out="${ELCHI_ETC}/secrets.env"
+  [ -f "$out" ] || return 0
+  local appended=0
+  _ensure_one() {
+    local key=$1 val=$2
+    grep -qE "^${key}=" "$out" 2>/dev/null && return 0
+    printf '%s=%s\n' "$key" "$val" >> "$out"
+    appended=1
+  }
+  _ensure_one ELCHI_CLICKHOUSE_USERNAME elchi
+  _ensure_one ELCHI_CLICKHOUSE_PASSWORD "$(rand_alnum 40)"
+  _ensure_one ELCHI_COLLECTOR_HASH_SALT "$(rand_hex 32)"
+  unset -f _ensure_one
+  if [ "$appended" = "1" ]; then
+    chmod 0640 "$out"
+    chown root:"$ELCHI_GROUP" "$out"
+    log::info "appended ClickHouse / collector secrets to existing secrets.env"
+  fi
 }
 
 # secrets::generate_mongo_keyfile — 1024-byte random file used by all

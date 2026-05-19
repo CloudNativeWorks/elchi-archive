@@ -109,6 +109,30 @@ systemd >= 244 is required (every distro on the matrix ships ≥249).
 
 ---
 
+## Default component versions
+
+Every statically-pinned component version lives in **one file** —
+`deploy/standalone/lib/versions.sh`. Edit it to change what installs by
+default:
+
+| Component        | Variable                         | Default |
+|------------------|----------------------------------|---------|
+| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.2.5-v0.14.0-envoy1.36.2` |
+| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.1.9` |
+| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.37.0` |
+| CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.3` |
+| elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.1` |
+| VictoriaMetrics  | `ELCHI_DEFAULT_VM_VERSION`       | `v1.93.5` |
+| OTel Collector   | `ELCHI_DEFAULT_OTEL_VERSION`     | `0.89.0` |
+
+A CLI flag (`--ui-version=`, `--envoy-version=`, …) or the matching
+environment variable still overrides the file — `versions.sh` only sets
+the fallback. The remaining components pick their version automatically
+and have no knob: **mongodb** (canonical major `8.0`), **clickhouse**
+(`stable` channel), **grafana** and **nginx** (latest from their repos).
+
+---
+
 ## What gets installed
 
 ### On every node
@@ -133,6 +157,11 @@ systemd >= 244 is required (every distro on the matrix ships ≥249).
   `timeout=1s`. The registry binary runs leader/follower coordination
   internally and only one instance reports SERVING at a time. Failover
   happens within ~10s when the leader goes down.)
+- elchi-collector (Envoy ALS ingestion → ClickHouse). The central
+  Envoy's `/envoy.service.accesslog.v3.AccessLogService/` route forwards
+  every data-plane proxy's Access Log Service gRPC stream to that node's
+  *local* collector over loopback — no cross-node hop. Default ON;
+  disable the whole feature with `--no-collector`.
 
 ### On M1 only
 
@@ -140,6 +169,47 @@ systemd >= 244 is required (every distro on the matrix ships ≥249).
 - VictoriaMetrics
 - OTel Collector
 - Grafana
+
+### On the first 3 nodes
+
+- ClickHouse — the columnar store the collector writes its raw event
+  stream into. Same first-3-nodes placement rule as mongo:
+  - **1-2 VMs:** standalone ClickHouse on M1.
+  - **3+ VMs:** a replicated cluster on M1+M2+M3. Each member runs an
+    embedded ClickHouse Keeper (Raft coordination) and the `elchi`
+    database is created with `ENGINE = Replicated`, so every table the
+    collector creates inside it is transparently upgraded to
+    `ReplicatedMergeTree` and its DDL fanned out to all 3 replicas — the
+    collector itself stays cluster-unaware.
+
+  The installer always creates the `elchi` database (as `Replicated` in
+  cluster mode) **before** starting any collector, and each ClickHouse
+  node's collector writes to its own *local* replica — so a collector
+  never races a peer's database creation and never pins a node to a
+  plain, non-replicated database. The operator does not have to
+  pre-create anything.
+
+  > **Standalone → cluster is not an in-place grow.** A 1-2 VM install
+  > creates the `elchi` database with the plain `Atomic` engine.
+  > ClickHouse cannot convert an `Atomic` database to `Replicated` in
+  > place, so an `elchi-stack add-node` that grows the cluster to 3
+  > nodes is **refused** (with a clear message) rather than producing a
+  > split-brain. If you intend to run a ClickHouse cluster, install 3+
+  > nodes from the start; mongo, by contrast, *does* migrate
+  > standalone → replica-set on the 2→3 grow.
+
+  Use `--clickhouse=external --clickhouse-uri=<uri>` to point at an
+  operator-managed ClickHouse instead. (An external ClickHouse must
+  already have the `elchi` database — created as `Replicated` if that
+  external instance is itself a cluster.)
+
+  A 3+ node ClickHouse cluster needs TCP `9000` (native), `9009`
+  (interserver replication), `9181` + `9234` (embedded Keeper)
+  reachable **between the cluster nodes** — the same intra-cluster
+  connectivity the mongo replica set already requires on `27017`. The
+  installer opens these on the local host firewall (ufw / firewalld);
+  any network-level ACLs / security groups remain the operator's
+  responsibility.
 
 ### Optional, every node
 
