@@ -1,0 +1,240 @@
+name: Download Elchi Collector
+
+# Mirrors the elchi-collector binary from its PRIVATE source repo
+# (CloudNativeWorks/elchi-collector) into THIS public elchi-archive
+# release mirror — the same idea as build-elchi-gslb.yml.
+#
+# Why this exists: the standalone installer (deploy/standalone) fetches
+# every component binary with an UNAUTHENTICATED curl. elchi-collector
+# is a private repo, so its own release assets 404 for the installer.
+# Re-publishing the binary here (a public repo) makes it reachable —
+# lib/collector.sh downloads from:
+#   github.com/CloudNativeWorks/elchi-archive/releases/download/
+#     elchi-collector-<version>/elchi-collector-linux-amd64
+#
+# ── PREREQUISITES ───────────────────────────────────────────────────
+#  1. A secret `GH_PAT` reachable by this workflow. Cross-repo access to
+#     a PRIVATE repo cannot use the default GITHUB_TOKEN — it is scoped
+#     to elchi-archive only and cannot read another repo, even one in
+#     the SAME organization. So a token is required; manage it once,
+#     org-wide:
+#       • Best: an ORGANIZATION secret on CloudNativeWorks
+#         (Org → Settings → Secrets and variables → Actions → New
+#          organization secret → name it GH_PAT), shared with the repos
+#         that need it. One token for the whole group, no per-repo copy.
+#       • A plain repository secret on elchi-archive also works.
+#     The token must carry read access to CloudNativeWorks/elchi-collector:
+#       • classic PAT  → `repo` scope, OR
+#       • fine-grained → repo CloudNativeWorks/elchi-collector,
+#                        permission Contents: Read-only.
+#     (The elchi-collector repo's own create-release.yml already uses a
+#     GH_PAT secret — a token of equivalent scope works here too.)
+#  2. The elchi-collector release must already exist — cut it first with
+#     that repo's "Create Release" workflow, THEN run this one.
+#
+# Trigger: Actions tab → "Download Elchi Collector" → Run workflow →
+#          enter the version (e.g. v0.1.4).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'elchi-collector version to mirror (e.g., v0.1.4)'
+        required: true
+        type: string
+
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20. Drop this block once every
+  # action used here ships a native Node 24 manifest.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-collector-download"
+  cancel-in-progress: false
+
+jobs:
+  download-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download elchi-collector binary from the private repo
+        env:
+          # gh authenticates with GH_TOKEN. The default GITHUB_TOKEN is
+          # scoped to elchi-archive only and cannot read the private
+          # elchi-collector repo — a cross-repo PAT is required.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          SRC_REPO="CloudNativeWorks/elchi-collector"
+          # elchi-collector's create-release.yml builds the asset as
+          # elchi-collector-v<X.Y.Z>-linux-amd64 (+ .sha256).
+          SRC_ASSET="elchi-collector-${VERSION}-linux-amd64"
+
+          mkdir -p "releases/elchi-collector-${VERSION}"
+          cd "releases/elchi-collector-${VERSION}"
+
+          echo "Downloading ${SRC_ASSET} from ${SRC_REPO}@${VERSION}..."
+          gh release download "${VERSION}" \
+            --repo "${SRC_REPO}" \
+            --pattern "${SRC_ASSET}" \
+            --pattern "${SRC_ASSET}.sha256"
+
+          # Integrity check against the upstream checksum before we
+          # re-publish the binary.
+          sha256sum -c "${SRC_ASSET}.sha256"
+
+          # Re-name to the version-less asset the installer expects
+          # (lib/collector.sh → elchi-collector-linux-<arch>), then
+          # regenerate the checksum file for the new name. The hash is
+          # unchanged — same bytes — only the filename in it differs.
+          mv "${SRC_ASSET}" elchi-collector-linux-amd64
+          rm -f "${SRC_ASSET}.sha256"
+          sha256sum elchi-collector-linux-amd64 > elchi-collector-linux-amd64.sha256
+          chmod +x elchi-collector-linux-amd64
+          ls -la
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: elchi-collector-${{ github.event.inputs.version }}
+          path: releases/elchi-collector-${{ github.event.inputs.version }}/*
+
+  update-index:
+    needs: download-files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: elchi-collector-${{ github.event.inputs.version }}
+          path: releases/elchi-collector-${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+
+          BINARY_SHA256=$(cut -d' ' -f1 "releases/elchi-collector-${VERSION}/elchi-collector-linux-amd64.sha256")
+
+          cat > temp_elchi_collector_release.json << EOF
+          {
+            "version": "${VERSION}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "elchi-collector-linux-amd64",
+                "type": "binary",
+                "arch": "linux-amd64",
+                "description": "elchi-collector — Envoy ALS ingestion service — for Linux AMD64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-collector-${VERSION}/elchi-collector-linux-amd64",
+                "sha256": "$BINARY_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with an elchi_collector_releases section.
+          python3 << 'EOF'
+          import json
+
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except Exception:
+              index = {"releases": []}
+
+          if 'elchi_collector_releases' not in index:
+              index['elchi_collector_releases'] = []
+
+          with open('temp_elchi_collector_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          # Update if the same version exists, otherwise append.
+          existing = False
+          for i, release in enumerate(index['elchi_collector_releases']):
+              if release['version'] == new_release['version']:
+                  index['elchi_collector_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['elchi_collector_releases'].append(new_release)
+
+          # Sort by version (newest to oldest).
+          index['elchi_collector_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: elchi-collector-${{ github.event.inputs.version }}
+          name: Elchi Collector ${{ github.event.inputs.version }}
+          body: |
+            ## elchi-collector ${{ github.event.inputs.version }}
+
+            elchi-collector binary — ingests the Envoy ALS (Access Log
+            Service) gRPC stream into ClickHouse + MongoDB.
+
+            Mirrored from the private source repo
+            `CloudNativeWorks/elchi-collector@${{ github.event.inputs.version }}`
+            so the standalone installer's unauthenticated download works.
+
+            ### Installation (handled automatically by the installer)
+
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/elchi-collector-${{ github.event.inputs.version }}/elchi-collector-linux-amd64
+            chmod +x elchi-collector-linux-amd64
+            sudo mv elchi-collector-linux-amd64 /opt/elchi/bin/elchi-collector
+            ```
+          files: |
+            releases/elchi-collector-${{ github.event.inputs.version }}/elchi-collector-linux-amd64
+            releases/elchi-collector-${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi Collector ${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -845,6 +845,16 @@ local_install_phase1() {
   local cluster_size
   cluster_size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
 
+  # elchi-collector binary — fetched FIRST among the component installs.
+  # It is just a small GitHub download, so doing it up front fails fast
+  # on a bad --collector-version (404) within seconds, before the slow
+  # mongo + ClickHouse package installs are wasted. The binary is needed
+  # in phase 1 anyway so bundle::build can ship it to the remote nodes;
+  # collector::setup itself runs in phase 2.
+  if [ "$ELCHI_INSTALL_COLLECTOR" = "1" ]; then
+    collector::install_binary
+  fi
+
   # Mongo — bring mongod up with the RS name set, but DO NOT initiate
   # the RS here. The orchestrator does that between phase 1 and phase 2,
   # once every member's mongod is reachable.
@@ -862,9 +872,6 @@ local_install_phase1() {
   # first-3-nodes placement as mongo. Cluster members bring up their
   # server + embedded Keeper here; the Replicated `elchi` database is
   # created in phase 2 (once every node's Keeper has joined the quorum).
-  # The collector binary is pre-fetched in phase 1 too so bundle::build
-  # can ship it to the remote nodes — collector::setup itself is phase 2
-  # (it depends on the mongo RS + the ClickHouse database).
   if [ "$ELCHI_INSTALL_COLLECTOR" = "1" ]; then
     if [ "$ELCHI_CLICKHOUSE_MODE" = "external" ]; then
       [ "$ELCHI_NODE_INDEX" = "1" ] && log::info "skipping ClickHouse install (--clickhouse=external)"
@@ -879,7 +886,6 @@ local_install_phase1() {
         clickhouse::setup_local_standalone
       fi
     fi
-    collector::install_binary
   fi
 
   # M1-only storage tier (VictoriaMetrics + Grafana). These are

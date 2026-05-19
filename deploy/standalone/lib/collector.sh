@@ -29,13 +29,20 @@ readonly COLLECTOR_UNIT=/etc/systemd/system/elchi-collector.service
 readonly COLLECTOR_DATA=${ELCHI_LIB}/collector
 
 # ----- binary install ----------------------------------------------------
-# elchi-collector release assets are published at:
-#   https://github.com/CloudNativeWorks/elchi-collector/releases/download/<version>/elchi-collector-<version>-linux-<arch>
-# with a sibling .sha256 — same convention as the elchi-gslb / envoy
-# archive assets.
+# The elchi-collector SOURCE repo (CloudNativeWorks/elchi-collector) is
+# PRIVATE, so its release assets are unreachable to the installer's
+# unauthenticated curl. The collector binary is therefore published to
+# the PUBLIC elchi-archive release mirror — exactly where the envoy /
+# coredns-elchi / elchi-gslb / elchi-client binaries already live.
+#
+# Per release, in github.com/CloudNativeWorks/elchi-archive:
+#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.4
+#   assets      : elchi-collector-linux-<arch>   e.g. elchi-collector-linux-amd64
+#                 elchi-collector-linux-<arch>.sha256
+# (same tag/asset convention as elchi-gslb-vX.Y.Z / coredns-elchi-linux-amd64).
 collector::install_binary() {
   local v=${ELCHI_COLLECTOR_VERSION:?ELCHI_COLLECTOR_VERSION not set}
-  local url="https://github.com/CloudNativeWorks/elchi-collector/releases/download/${v}/elchi-collector-${v}-linux-${ELCHI_ARCH}"
+  local url="https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-collector-${v}/elchi-collector-linux-${ELCHI_ARCH}"
   # binary::download_and_verify fast-skips when the on-disk binary's
   # sha256 already matches the published checksum, and re-downloads when
   # it differs. Letting it make that call (rather than a bare `[ -x ]`
