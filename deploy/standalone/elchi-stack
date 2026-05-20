@@ -80,6 +80,30 @@ Usage:
   elchi-stack verify                  end-to-end cluster health check
                                        (registration logs, Envoy admin, listener ports)
 
+  Day-2 quality-of-life:
+  elchi-stack mongosh [args...]       open mongosh against the local mongod
+                                       with creds pre-loaded (root on M1, app
+                                       elsewhere) — pass-through args, e.g.
+                                       `mongosh --eval 'rs.status()'`
+  elchi-stack ch-client [args...]     open clickhouse-client locally as the
+                                       \`elchi\` user (CH-node only — first 3)
+  elchi-stack ssh <node> [cmd...]     open SSH to a cluster node using the
+                                       persisted cluster key. <node> = m1/m2/m3,
+                                       hostname, or IP. No args → interactive
+                                       admin-user shell; with args → run them
+                                       as root via sudo.
+  elchi-stack stack-version           one-screen "what's installed where" —
+                                       topology version block + the actual
+                                       binary versions on this node.
+  elchi-stack tls-info                cluster TLS cert: subject, SANs, validity
+                                       window, days-to-expiry, sha256 fingerprint.
+  elchi-stack endpoint-test           synthetic HTTPS probes through this node's
+                                       envoy listener — UI, VictoriaMetrics,
+                                       Grafana, internal :8080.
+  elchi-stack collector-stats         per-node elchi-collector Prometheus
+                                       counters (events in/out, drops, queue,
+                                       ClickHouse rows, error counts).
+
 EOF
 }
 
@@ -644,6 +668,297 @@ cmd_clickhouse_status() {
   printf '\n'
 }
 
+# ─────────────────────────────────────────────────────────────────────
+# Operator quality-of-life subcommands. Each one wraps a tedious bit of
+# "ssh to node X, grep some creds, type a long command" into a single
+# `elchi-stack <verb>`. Pure read/diagnostic — no cluster mutation.
+# ─────────────────────────────────────────────────────────────────────
+
+# cmd_mongosh — open mongosh against the LOCAL mongod. Uses root creds
+# (/etc/elchi/mongo/root.env, M1 only) when available; falls back to the
+# app user on RS members M2/M3 (no root.env there). All remaining args
+# are passed through, so `elchi-stack mongosh --eval 'rs.status()'` works.
+cmd_mongosh() {
+  command -v mongosh >/dev/null 2>&1 \
+    || die "mongosh not installed — run on a mongo node (first 3 by topology)"
+  if ! systemctl is-active --quiet mongod 2>/dev/null; then
+    die "mongod not active on this node"
+  fi
+  local user pwd authdb=admin
+  if [ -r /etc/elchi/mongo/root.env ]; then
+    user=$(grep -E '^MONGO_ROOT_USERNAME=' /etc/elchi/mongo/root.env | cut -d= -f2-)
+    pwd=$( grep -E '^MONGO_ROOT_PASSWORD=' /etc/elchi/mongo/root.env | cut -d= -f2-)
+  else
+    user=$(secrets::value ELCHI_MONGO_USERNAME)
+    pwd=$( secrets::value ELCHI_MONGO_PASSWORD)
+  fi
+  [ -n "$user" ] && [ -n "$pwd" ] || die "mongo credentials not found"
+  exec mongosh --quiet --host 127.0.0.1 --port 27017 \
+    -u "$user" -p "$pwd" --authenticationDatabase "$authdb" "$@"
+}
+
+# cmd_ch_client — open clickhouse-client against the LOCAL clickhouse
+# as the `elchi` user. Only meaningful on a CH node (first 3 by topology);
+# elsewhere clickhouse-client isn't installed.
+cmd_ch_client() {
+  command -v clickhouse-client >/dev/null 2>&1 \
+    || die "clickhouse-client not installed — run on a CH node (first 3 by topology)"
+  if ! systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+    die "clickhouse-server not active on this node"
+  fi
+  local user pwd
+  user=$(secrets::value ELCHI_CLICKHOUSE_USERNAME); user=${user:-elchi}
+  pwd=$( secrets::value ELCHI_CLICKHOUSE_PASSWORD)
+  [ -n "$pwd" ] || die "ELCHI_CLICKHOUSE_PASSWORD missing from /etc/elchi/secrets.env"
+  exec clickhouse-client --host 127.0.0.1 --port 9000 \
+    --user "$user" --password "$pwd" --database elchi "$@"
+}
+
+# cmd_ssh — open SSH to a cluster node using the persisted cluster key,
+# no flag typing. Accepts `m1`/`m2`/`m3` (positional aliases), a system
+# hostname, or an IPv4 address. With no extra args opens an interactive
+# admin-user shell; with extra args runs them as root via sudo.
+cmd_ssh() {
+  local target=${1:-}
+  [ -n "$target" ] && shift \
+    || die "usage: elchi-stack ssh <m1|m2|m3|hostname|ip> [cmd...]"
+
+  local topo=/etc/elchi/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing — install not complete"
+
+  local ip=""
+  case "$target" in
+    m[0-9]*)
+      local idx=${target#m}
+      ip=$(awk -v want="$idx" '
+        /^  - index:/ { in_node = (($3+0) == want) }
+        in_node && /^    host:/ { print $2; exit }
+      ' "$topo")
+      ;;
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+      ip=$target
+      ;;
+    *)
+      ip=$(awk -v hn="$target" '
+        /^  - index:/    { idx=$3 }
+        /^    host:/     { cur=$2 }
+        /^    hostname:/ { if ($2 == hn) { print cur; exit } }
+      ' "$topo")
+      ;;
+  esac
+  [ -n "$ip" ] || die "could not resolve '$target' — try m1/m2/m3, the system hostname, or an IP"
+
+  ssh::load_persisted_creds
+  local user=${ELCHI_SSH_USER:-root}
+  local port=${ELCHI_SSH_PORT:-22}
+  local key=${ELCHI_SSH_KEY:-}
+
+  if [ "$#" -gt 0 ]; then
+    # One-off command — run as root via the same path the orchestrator
+    # uses (printf %q quoting + sudo on the remote).
+    ssh::configure "$user" "$port" "$key" ""
+    ssh::run_sudo "$ip" "$@"
+    return $?
+  fi
+
+  # Interactive shell — bypass ssh::run (BatchMode + no-tty) and exec
+  # ssh directly so the caller gets a real PTY with the admin user.
+  local opts=(-o StrictHostKeyChecking=accept-new
+              -o UserKnownHostsFile=/root/.ssh/known_hosts.elchi
+              -o ConnectTimeout=10
+              -p "$port")
+  [ -n "$key" ] && opts+=(-i "$key")
+  exec ssh "${opts[@]}" "${user}@${ip}"
+}
+
+# cmd_stack_version — single screen of "what is actually installed here".
+# Two blocks: (1) the cluster-wide pins from topology.full.yaml's
+# `versions:` block; (2) the binary versions on THIS node (so an
+# operator running it on M2 sees what M2 is actually running).
+cmd_stack_version() {
+  local topo=/etc/elchi/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing — install not complete"
+
+  printf '%bComponent versions — host %s%b\n' "$C_BOLD" "$(hostname -s)" "$C_RESET"
+
+  printf '\n  %bcluster-wide (topology.full.yaml versions block)%b\n' "$C_DIM" "$C_RESET"
+  awk '/^versions:/{f=1; next}
+       f && /^[a-zA-Z]/{exit}
+       f' "$topo" | sed 's/^/    /'
+
+  printf '\n  %bbackend variants%b\n' "$C_DIM" "$C_RESET"
+  awk '/^  backend_variants:/{f=1; next}
+       f && /^    -/{print "    " $0; next}
+       f && /^[a-zA-Z]/{exit}' "$topo" | sed 's/^    /    /'
+
+  printf '\n  %binstalled binaries on this node%b\n' "$C_DIM" "$C_RESET"
+  local v
+  if command -v mongod >/dev/null 2>&1; then
+    v=$(mongod --version 2>/dev/null | head -1 | sed 's/^db version //')
+    printf '    mongod          : %s\n' "${v:-?}"
+  fi
+  if command -v clickhouse-server >/dev/null 2>&1; then
+    v=$(clickhouse-server --version 2>/dev/null | head -1 | awk '{print $NF}')
+    printf '    clickhouse      : %s\n' "${v:-?}"
+  fi
+  if [ -x /opt/elchi/bin/victoria-metrics-prod ]; then
+    v=$(/opt/elchi/bin/victoria-metrics-prod -version 2>&1 | head -1 | awk '{print $2}')
+    printf '    victoriametrics : %s\n' "${v:-?}"
+  fi
+  if [ -x /opt/elchi/bin/otelcol-contrib ]; then
+    v=$(/opt/elchi/bin/otelcol-contrib --version 2>&1 | head -1 | awk '{print $NF}')
+    printf '    otel-collector  : %s\n' "${v:-?}"
+  fi
+  if [ -x /opt/elchi/bin/envoy ]; then
+    v=$(/opt/elchi/bin/envoy --version 2>&1 | head -1 | awk '{print $2}')
+    printf '    envoy           : %s\n' "${v:-?}"
+  fi
+  if [ -x /opt/elchi/bin/elchi-collector ]; then
+    v=$(/opt/elchi/bin/elchi-collector --version 2>&1 | head -1)
+    printf '    elchi-collector : %s\n' "${v:-?}"
+  fi
+  if command -v grafana-server >/dev/null 2>&1; then
+    v=$(grafana-server -v 2>&1 | head -1 | awk '{print $2}')
+    printf '    grafana         : %s\n' "${v:-?}"
+  fi
+  if command -v nginx >/dev/null 2>&1; then
+    v=$(nginx -v 2>&1 | sed 's@.*/@@')
+    printf '    nginx           : %s\n' "${v:-?}"
+  fi
+  printf '\n'
+}
+
+# cmd_tls_info — subject, SANs, validity window, days-to-expiry and the
+# sha256 fingerprint of the cluster TLS cert. Highlights the expiry in
+# red when <30 days, yellow under 90.
+cmd_tls_info() {
+  local crt=/etc/elchi/tls/server.crt
+  [ -r "$crt" ] || die "$crt not readable (need root)"
+  command -v openssl >/dev/null 2>&1 || die "openssl not installed"
+
+  printf '%bTLS certificate%b  %s\n\n' "$C_BOLD" "$C_RESET" "$crt"
+
+  local subject issuer
+  subject=$(openssl x509 -in "$crt" -noout -subject 2>/dev/null | sed 's/^subject=//')
+  issuer=$( openssl x509 -in "$crt" -noout -issuer  2>/dev/null | sed 's/^issuer=//')
+  printf '  subject : %s\n' "$subject"
+  printf '  issuer  : %s\n' "$issuer"
+
+  local not_before not_after exp_ts now_ts days color tag
+  not_before=$(openssl x509 -in "$crt" -noout -startdate 2>/dev/null | cut -d= -f2)
+  not_after=$( openssl x509 -in "$crt" -noout -enddate    2>/dev/null | cut -d= -f2)
+  printf '  valid   : %s\n            → %s\n' "$not_before" "$not_after"
+
+  exp_ts=$(date -d "$not_after" +%s 2>/dev/null || echo 0)
+  now_ts=$(date +%s)
+  if [ "$exp_ts" -gt 0 ]; then
+    days=$(( (exp_ts - now_ts) / 86400 ))
+    if   [ "$days" -lt 0 ]   ; then color=$C_RED;    tag="EXPIRED"
+    elif [ "$days" -lt 30 ]  ; then color=$C_RED;    tag="EXPIRING SOON"
+    elif [ "$days" -lt 90 ]  ; then color=$C_YELLOW; tag="renew soon"
+    else                            color=$C_GREEN;  tag="ok"
+    fi
+    printf '  expires : %s%s days (%s)%s\n' "$color" "$days" "$tag" "$C_RESET"
+  fi
+
+  printf '\n  %bSubject Alternative Names%b\n' "$C_BOLD" "$C_RESET"
+  openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null \
+    | tail -n +2 | sed 's/^[[:space:]]*/    /'
+
+  printf '\n  %bFingerprint (sha256)%b\n' "$C_BOLD" "$C_RESET"
+  openssl x509 -in "$crt" -noout -fingerprint -sha256 2>/dev/null \
+    | sed 's/^/    /'
+  printf '\n'
+}
+
+# cmd_endpoint_test — synthetic HTTPS probes through THIS node's envoy
+# (public listener resolved to 127.0.0.1 via curl --resolve, so DNS /
+# the cluster's main_address don't have to be pointed here yet).
+# Confirms the major route classes still respond after an upgrade.
+cmd_endpoint_test() {
+  local topo=/etc/elchi/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing"
+  local main port
+  main=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' "$topo")
+  port=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+port:/{print $2; exit}' "$topo")
+  [ -n "$main" ] && [ -n "$port" ] || die "could not read main_address/port from topology"
+  command -v curl >/dev/null 2>&1 || die "curl not installed"
+
+  printf '%bEndpoint probes via this node'\''s envoy listener%b\n' "$C_BOLD" "$C_RESET"
+  printf '  main_address: %s  port: %s  (resolved to 127.0.0.1 for this probe)\n\n' "$main" "$port"
+
+  _probe() {
+    local label=$1 url_path=$2 expect=$3 scheme=${4:-https} host=${5:-${main}:${port}}
+    local code resolve_opt=()
+    if [ "$scheme" = "https" ]; then
+      resolve_opt=(--resolve "${main}:${port}:127.0.0.1")
+    fi
+    code=$(curl -sk "${resolve_opt[@]}" -o /dev/null \
+             --connect-timeout 3 --max-time 10 \
+             -w '%{http_code}' "${scheme}://${host}${url_path}" 2>/dev/null) || code=000
+    if [ "$code" = "$expect" ]; then
+      printf '  %s[ OK ]%s %-28s %-30s → HTTP %s\n' "$C_GREEN" "$C_RESET" "$label" "$url_path" "$code"
+    else
+      printf '  %s[FAIL]%s %-28s %-30s → HTTP %s (expected %s)\n' "$C_RED" "$C_RESET" "$label" "$url_path" "$code" "$expect"
+    fi
+  }
+
+  _probe "UI (nginx via envoy)"      "/"                          200
+  _probe "VictoriaMetrics /api/v1"   "/api/v1/query?query=up"     200
+  _probe "Grafana health"            "/grafana/api/health"        200
+  _probe "internal :8080 root"       "/"                          200 http "127.0.0.1:8080"
+  printf '\n'
+}
+
+# cmd_collector_stats — fetch /metrics from elchi-collector on every
+# cluster node, pull the operationally interesting counters into one
+# screen. Best-effort: metric names are the ones the collector
+# (internal/metrics/metrics.go) currently exports; missing metrics
+# render as 0 rather than failing the whole report.
+cmd_collector_stats() {
+  [ -f /etc/elchi/nodes.list ] || die "/etc/elchi/nodes.list missing"
+  ssh::load_persisted_creds 2>/dev/null || true
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" "" 2>/dev/null || true
+
+  printf '%belchi-collector metrics — per node (from :18091/metrics)%b\n\n' "$C_BOLD" "$C_RESET"
+
+  # Pull one metric value out of Prometheus exposition format. Sums all
+  # label permutations for *_total counters; for gauges this collapses
+  # to the single value. `$1 ~` regex is anchored at line start.
+  _ck_extract() {
+    local body=$1 name=$2
+    printf '%s\n' "$body" | awk -v m="$name" '
+      $0 ~ ("^"m"({|$| )") { s+=$NF }
+      END { printf "%g", s+0 }'
+  }
+
+  local n metrics
+  while IFS= read -r n; do
+    [ -z "$n" ] && continue
+    printf '  %s%s%s\n' "$C_CYAN" "$n" "$C_RESET"
+    if ssh::is_local "$n"; then
+      metrics=$(curl -fsSL --max-time 5 http://127.0.0.1:18091/metrics 2>/dev/null || true)
+    else
+      metrics=$(ssh::run_sudo "$n" curl -fsSL --max-time 5 http://127.0.0.1:18091/metrics 2>/dev/null || true)
+    fi
+    if [ -z "$metrics" ]; then
+      printf '    %s[unreachable]%s collector /metrics not responding\n\n' "$C_RED" "$C_RESET"
+      continue
+    fi
+    printf '    events received      : %s\n' "$(_ck_extract "$metrics" events_received_total)"
+    printf '    events dropped       : %s\n' "$(_ck_extract "$metrics" events_dropped_total)"
+    printf '    active ALS streams   : %s\n' "$(_ck_extract "$metrics" active_streams)"
+    printf '    batcher queue depth  : %s\n' "$(_ck_extract "$metrics" batcher_queue_depth)"
+    printf '    rows → ClickHouse    : %s\n' "$(_ck_extract "$metrics" clickhouse_rows_inserted_total)"
+    printf '    ClickHouse errors    : %s\n' "$(_ck_extract "$metrics" clickhouse_errors_total)"
+    printf '    Mongo errors         : %s\n' "$(_ck_extract "$metrics" mongo_errors_total)"
+    printf '    flush count          : %s\n' "$(_ck_extract "$metrics" flush_count_total)"
+    printf '    detector suppressed  : %s\n' "$(_ck_extract "$metrics" detector_suppressed_total)"
+    printf '    pipeline panics      : %s\n' "$(_ck_extract "$metrics" pipeline_panics_total)"
+    printf '\n'
+  done < /etc/elchi/nodes.list
+}
+
 cmd_export_bundle() {
   local out='' reuse_key=0
   while [ "$#" -gt 0 ]; do
@@ -693,10 +1008,10 @@ cmd_verify() {
     printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
 
     local probe='set -e
-      hn=$(hostname -s)
       fails=0
 
-      # 1. systemd state
+      # 1. systemd state for every elchi-* service (watchdog is the
+      # only intentional exception — Type=oneshot driven by .timer).
       while read -r unit; do
         [ -z "$unit" ] && continue
         case "$unit" in elchi-watchdog*) continue ;; esac
@@ -704,40 +1019,57 @@ cmd_verify() {
           echo "  [FAIL] $unit not active"
           fails=$((fails+1))
         fi
-      done < <(systemctl list-units --no-legend --type=service "elchi-*" | awk "{print \$1}")
+      done < <(systemctl list-units --no-legend --type=service "elchi-*" 2>/dev/null | awk "{print \$1}")
 
-      # 2. Backend registration
-      if systemctl is-active --quiet elchi-controller.service 2>/dev/null; then
-        if journalctl -u elchi-controller.service -n 200 --no-pager 2>/dev/null \
-             | grep -qE "Controller registered.*${hn}-controller"; then
-          echo "  [ OK ] controller registered as ${hn}-controller"
-        else
-          echo "  [WARN] controller registration log not found for ${hn}-controller"
-          fails=$((fails+1))
-        fi
-      fi
-      for u in $(systemctl list-units --no-legend --type=service "elchi-control-plane-*@*" | awk "{print \$1}"); do
-        if journalctl -u "$u" -n 200 --no-pager 2>/dev/null \
-             | grep -qE "Successfully registered control-plane:.*${hn}-controlplane-"; then
-          echo "  [ OK ] $u registered (verified)"
-        else
-          echo "  [WARN] $u registration log missing"
-          fails=$((fails+1))
+      # 2. External package services we drive. Only checked where the
+      # unit file is present — mongod / clickhouse-server are first-3
+      # nodes only, nginx/grafana sit on different node subsets.
+      for ext in mongod clickhouse-server grafana-server nginx; do
+        if systemctl list-unit-files --no-legend "${ext}.service" 2>/dev/null | grep -q .; then
+          if systemctl is-active --quiet "$ext"; then
+            echo "  [ OK ] ${ext}.service active"
+          else
+            echo "  [FAIL] ${ext}.service not active"
+            fails=$((fails+1))
+          fi
         fi
       done
 
-      # 3. Envoy admin /clusters → registry-cluster healthy member count
+      # 3. Envoy admin /clusters + /listeners. NOTE: deliberately no
+      # journalctl grep for "Controller registered" / "Successfully
+      # registered control-plane" — those messages drift across backend
+      # releases and a 200-line journal window does not always reach
+      # back to a startup-only line, producing pure false-positives.
+      # lib/verify.sh::deep_health dropped the same grep for the same
+      # reason; mirroring its design here keeps verify honest.
       if command -v curl >/dev/null 2>&1; then
         cluster_dump=$(curl -sf --max-time 5 http://127.0.0.1:9901/clusters?format=json 2>/dev/null || true)
-        if [ -n "$cluster_dump" ]; then
-          # extract registry-cluster healthy host count via jq if available
-          if command -v jq >/dev/null 2>&1; then
-            healthy=$(echo "$cluster_dump" | jq "[.cluster_statuses[] | select(.name==\"registry-cluster\") | .host_statuses[] | select(.health_status.eds_health_status==\"HEALTHY\")] | length" 2>/dev/null || echo 0)
-            total=$(echo "$cluster_dump" | jq "[.cluster_statuses[] | select(.name==\"registry-cluster\") | .host_statuses[]] | length" 2>/dev/null || echo 0)
-            echo "  [INFO] registry-cluster: ${healthy}/${total} healthy (expect 1 leader serving)"
-          fi
-        else
+        if [ -z "$cluster_dump" ]; then
           echo "  [WARN] envoy admin :9901 unreachable"
+          fails=$((fails+1))
+        elif command -v jq >/dev/null 2>&1; then
+          # Inline jq probe: silently skip clusters absent from the
+          # bootstrap (e.g. elchi-collector-cluster on --no-collector
+          # installs) instead of flagging them as missing.
+          for cl in registry-cluster controller-rest-cluster elchi-collector-cluster; do
+            total=$(echo "$cluster_dump" \
+              | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[]] | length" 2>/dev/null || echo 0)
+            [ "$total" -gt 0 ] 2>/dev/null || continue
+            healthy=$(echo "$cluster_dump" \
+              | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[] | select(.health_status.eds_health_status==\"HEALTHY\")] | length" 2>/dev/null || echo 0)
+            if [ "$healthy" = "0" ]; then
+              echo "  [FAIL] envoy: ${cl} has 0/${total} healthy endpoints"
+              fails=$((fails+1))
+            else
+              echo "  [INFO] envoy: ${cl} ${healthy}/${total} healthy"
+            fi
+          done
+        fi
+
+        # Public listener bound check.
+        lst=$(curl -sf --max-time 3 http://127.0.0.1:9901/listeners 2>/dev/null || true)
+        if [ -n "$lst" ] && ! echo "$lst" | grep -q "0.0.0.0:"; then
+          echo "  [FAIL] envoy public listener not bound"
           fails=$((fails+1))
         fi
       fi
@@ -906,6 +1238,13 @@ case "${1:-}" in
   init-replica-set)  shift; cmd_init_rs "$@" ;;
   mongo-status)      shift; cmd_mongo_status "$@" ;;
   clickhouse-status) shift; cmd_clickhouse_status "$@" ;;
+  mongosh)           shift; cmd_mongosh "$@" ;;
+  ch-client)         shift; cmd_ch_client "$@" ;;
+  ssh)               shift; cmd_ssh "$@" ;;
+  stack-version)     shift; cmd_stack_version "$@" ;;
+  tls-info)          shift; cmd_tls_info "$@" ;;
+  endpoint-test)     shift; cmd_endpoint_test "$@" ;;
+  collector-stats)   shift; cmd_collector_stats "$@" ;;
   export-bundle)     shift; cmd_export_bundle "$@" ;;
   show-secret)       shift; cmd_show_secret "$@" ;;
   rotate-secret)     shift; cmd_rotate_secret "$@" ;;
