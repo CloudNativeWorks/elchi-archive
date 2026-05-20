@@ -284,7 +284,7 @@
                 --main-address=elchi.example.com \
                 --gslb-zone=gslb.example.com \
                 --ui-version=v1.1.5 \
-                --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2 \
+                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.36.2 \
                 --envoy-version=v1.36.2</div>
 
             <h5>3-VM cluster, multi-version backend, key-based SSH</h5>
@@ -296,7 +296,7 @@
                 --main-address=elchi.example.com \
                 --gslb-zone=gslb.example.com \
                 --ui-version=v1.1.5 \
-                --backend-version=elchi-v1.2.0-v0.14.0-envoy1.35.3,elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.38.0
+                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.35.3,elchi-v1.4.2-v0.14.0-envoy1.36.2,elchi-v1.4.2-v0.14.0-envoy1.38.0
                 \
                 --envoy-version=v1.36.2</div>
             <p class="info" style="margin-top: 8px;">
@@ -322,7 +322,7 @@
                 --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
                 --ssh-bootstrap \
                 --main-address=elchi.example.com \
-                --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2</div>
+                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.36.2</div>
             <p class="info">
                 <strong>--ssh-bootstrap</strong> mints a fresh ed25519 key on M1, then prompts the
                 operator <em>once per remote node</em> for that node's password. Each password is
@@ -378,7 +378,8 @@
                         After this, the cluster does NOT depend on the initial login user (root): the
                         operator can rotate root's password, disable root SSH login, or even delete root
                         entirely without breaking <code>upgrade</code> or <code>uninstall</code>.
-                        Idempotent on rerun.</div>
+                        Idempotent on rerun.
+                    </div>
                     <code>--no-admin-user</code>
                     <div class="desc">Opt OUT of the default admin-user flow. Orchestration stays on the
                         original login user (root). Use only when your environment forbids provisioning
@@ -391,7 +392,7 @@
                 <div class="flag-table">
                     <code>--backend-version=&lt;csv&gt;</code>
                     <div class="desc">One or more variant tags (release-asset basenames). Each variant runs
-                        side-by-side. <span class="default">Default: <code>elchi-v1.2.0-v0.14.0-envoy1.36.2</code>.
+                        side-by-side. <span class="default">Default: <code>elchi-v1.4.2-v0.14.0-envoy1.36.2</code>.
                             Alias: <code>--backend-variants=</code>.</span></div>
                     <code>--backend-release=&lt;tag&gt;</code>
                     <div class="desc"><strong>Deprecated</strong> — release tag is now derived per variant from the
@@ -548,7 +549,8 @@
                     <div class="desc">Authoritative zone (e.g. <code>gslb.example.com</code>).
                         <span class="default">Default: <code>elchi.local</code></span> — a non-routable
                         <code>.local</code>-style domain that's safe out of the box for internal cluster DNS / testing.
-                        Override with your own delegated domain in production.</div>
+                        Override with your own delegated domain in production.
+                    </div>
                     <code>--gslb-admin-email=&lt;email&gt;</code>
                     <div class="desc"><span class="default">Optional. Default: <code>hostmaster@&lt;zone&gt;</code> (RFC
                             2142 convention).</span> Becomes the SOA RNAME (with <code>@</code> → <code>.</code>).
@@ -664,7 +666,7 @@
             <div class="stdl-cmd">curl -fsSL
                 https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                 | sudo bash -s -- --upgrade \
-                --add-backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0</div>
+                --add-backend-version=elchi-v1.4.2-v0.14.0-envoy1.37.0</div>
             <p style="font-size: 13px; margin: 4px 0 12px;">
                 <code>--add-backend-version</code> appends to the current variant set
                 without making you re-list everything that's already deployed. The new
@@ -693,13 +695,13 @@
             <div class="stdl-cmd">curl -fsSL
                 https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                 | sudo bash -s -- --upgrade \
-                --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.37.0</div>
+                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.36.2,elchi-v1.4.2-v0.14.0-envoy1.37.0</div>
 
             <h5>Replace a variant + drop the old one (declarative)</h5>
             <div class="stdl-cmd">curl -fsSL
                 https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                 | sudo bash -s -- --upgrade \
-                --backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0 \
+                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.37.0 \
                 --prune-missing</div>
 
             <h5>Bump the UI + Envoy proxy together</h5>
@@ -733,7 +735,8 @@
                         to start serving an additional Envoy version without re-listing what's
                         already there. Mutually exclusive with <code>--prune-version</code> /
                         <code>--prune-missing</code>. Triggers control-plane unit creation +
-                        UI <code>config.js</code> regeneration cluster-wide.</div>
+                        UI <code>config.js</code> regeneration cluster-wide.
+                    </div>
                     <code>--ui-version=&lt;vX.Y.Z&gt;</code>
                     <div class="desc">Bump UI bundle.</div>
                     <code>--envoy-version=&lt;vX.Y.Z&gt;</code>
@@ -772,7 +775,7 @@
 
                 <h5>Add a new variant alongside existing ones</h5>
                 <div class="stdl-cmd">sudo upgrade.sh \
-                    --backend-version=elchi-v1.2.0-v0.14.0-envoy1.36.2,elchi-v1.2.0-v0.14.0-envoy1.37.0</div>
+                    --backend-version=elchi-v1.4.2-v0.14.0-envoy1.36.2,elchi-v1.4.2-v0.14.0-envoy1.37.0</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     KEPT=[v1.2.0/envoy1.36.2], ADDED=[v1.2.0/envoy1.37.0]. The kept variant's
                     fingerprint is unchanged → noop. The added variant gets a fresh template unit
@@ -782,8 +785,8 @@
 
                 <h5>Update an existing variant (replace one tag with another)</h5>
                 <div class="stdl-cmd">sudo upgrade.sh \
-                    --backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0 \
-                    --prune-version=elchi-v1.2.0-v0.14.0-envoy1.36.2</div>
+                    --backend-version=elchi-v1.4.2-v0.14.0-envoy1.37.0 \
+                    --prune-version=elchi-v1.4.2-v0.14.0-envoy1.36.2</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     install.sh re-runs with [new]; controller's ExecStart now points at new binary →
                     fingerprint diff → restart. Then prune step removes the old variant's unit,
@@ -794,7 +797,7 @@
 
                 <h5>Both at once (declarative)</h5>
                 <div class="stdl-cmd">sudo upgrade.sh \
-                    --backend-version=elchi-v1.2.0-v0.14.0-envoy1.37.0,elchi-v1.2.0-v0.14.0-envoy1.38.0 \
+                    --backend-version=elchi-v1.4.2-v0.14.0-envoy1.37.0,elchi-v1.4.2-v0.14.0-envoy1.38.0 \
                     --prune-missing</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     KEPT=∅, ADDED=[v1.2.0/envoy1.37.0, v1.2.0/envoy1.38.0], REMOVED=[everything in CUR not in new list].
@@ -1024,7 +1027,8 @@
                     <code>mongo-root</code>, or <code>all</code> (full table). Same values are
                     also printed once at the end of the install. Persisted in
                     <code>/etc/elchi/secrets.env</code> (mode 0640 root:elchi); preserved across
-                    re-runs and upgrades.</div>
+                    re-runs and upgrades.
+                </div>
                 <code>elchi-stack rotate-secret &lt;jwt|gslb&gt;</code>
                 <div class="desc">Mint a new JWT or GSLB secret, restart affected services.</div>
                 <code>elchi-stack verify</code>

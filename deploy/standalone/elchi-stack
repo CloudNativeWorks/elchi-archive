@@ -797,39 +797,60 @@ cmd_stack_version() {
        f && /^[a-zA-Z]/{exit}' "$topo" | sed 's/^    /    /'
 
   printf '\n  %binstalled binaries on this node%b\n' "$C_DIM" "$C_RESET"
-  local v
-  if command -v mongod >/dev/null 2>&1; then
-    v=$(mongod --version 2>/dev/null | head -1 | sed 's/^db version //')
-    printf '    mongod          : %s\n' "${v:-?}"
-  fi
-  if command -v clickhouse-server >/dev/null 2>&1; then
-    v=$(clickhouse-server --version 2>/dev/null | head -1 | awk '{print $NF}')
-    printf '    clickhouse      : %s\n' "${v:-?}"
-  fi
-  if [ -x /opt/elchi/bin/victoria-metrics-prod ]; then
-    v=$(/opt/elchi/bin/victoria-metrics-prod -version 2>&1 | head -1 | awk '{print $2}')
-    printf '    victoriametrics : %s\n' "${v:-?}"
-  fi
-  if [ -x /opt/elchi/bin/otelcol-contrib ]; then
-    v=$(/opt/elchi/bin/otelcol-contrib --version 2>&1 | head -1 | awk '{print $NF}')
-    printf '    otel-collector  : %s\n' "${v:-?}"
-  fi
-  if [ -x /opt/elchi/bin/envoy ]; then
-    v=$(/opt/elchi/bin/envoy --version 2>&1 | head -1 | awk '{print $2}')
-    printf '    envoy           : %s\n' "${v:-?}"
-  fi
+  # _probe_version <label> <command...> — runs the command, captures the
+  # first 1-2 lines, extracts a vX.Y.Z-style token (or falls back to the
+  # whole first line), and prints "<label> : <version>". EVERY probe is
+  # wrapped in `|| true` so a binary that doesn't honour --version (rc=1,
+  # `unknown flag`, missing subcommand, exec-format mismatch on a stripped
+  # build) doesn't kill cmd_stack_version under the inherited
+  # `set -Eeuo pipefail` + ERR trap. Bash's set -e doesn't fault on
+  # `v=$(failing)` assignments by itself, but common.sh's ERR trap does —
+  # so we neutralise it here per call.
+  _probe_version() {
+    local label=$1 ; shift
+    local out v
+    out=$("$@" 2>&1 || true)
+    # Try, in order:
+    #   1. first vX.Y.Z[.W] token anywhere in the first 4 lines
+    #   2. first standalone "X.Y.Z[.W]" number
+    #   3. raw first line, trimmed
+    v=$(printf '%s\n' "$out" | head -n 4 \
+          | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?' \
+          | head -n 1 \
+          || true)
+    if [ -z "$v" ]; then
+      v=$(printf '%s\n' "$out" | head -n 1 \
+            | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+    fi
+    printf '    %-15s : %s\n' "$label" "${v:-?}"
+  }
+
+  command -v mongod                          >/dev/null 2>&1 \
+    && _probe_version mongod          mongod --version
+  command -v clickhouse-server               >/dev/null 2>&1 \
+    && _probe_version clickhouse      clickhouse-server --version
+  [ -x /opt/elchi/bin/victoria-metrics-prod ] \
+    && _probe_version victoriametrics /opt/elchi/bin/victoria-metrics-prod -version
+  [ -x /opt/elchi/bin/otelcol-contrib ] \
+    && _probe_version otel-collector  /opt/elchi/bin/otelcol-contrib --version
+  [ -x /opt/elchi/bin/envoy ] \
+    && _probe_version envoy           /opt/elchi/bin/envoy --version
+  # elchi-collector binary does not expose --version (the upstream
+  # cmd line doesn't define the flag; passing it returns rc=1 and
+  # "Unknown flag"). Read the canonical version from the topology
+  # `versions:` block instead — same source the orchestrator used to
+  # decide which binary to download in the first place.
   if [ -x /opt/elchi/bin/elchi-collector ]; then
-    v=$(/opt/elchi/bin/elchi-collector --version 2>&1 | head -1)
-    printf '    elchi-collector : %s\n' "${v:-?}"
+    local _coll_v
+    _coll_v=$(awk '/^versions:/{f=1; next} f && /^[a-zA-Z]/{exit} f && /^[[:space:]]+collector:/{print $2; exit}' \
+                "$topo" 2>/dev/null || true)
+    printf '    %-15s : %s\n' elchi-collector "${_coll_v:-? (binary present, version unreadable)}"
   fi
-  if command -v grafana-server >/dev/null 2>&1; then
-    v=$(grafana-server -v 2>&1 | head -1 | awk '{print $2}')
-    printf '    grafana         : %s\n' "${v:-?}"
-  fi
-  if command -v nginx >/dev/null 2>&1; then
-    v=$(nginx -v 2>&1 | sed 's@.*/@@')
-    printf '    nginx           : %s\n' "${v:-?}"
-  fi
+  command -v grafana-server                  >/dev/null 2>&1 \
+    && _probe_version grafana         grafana-server -v
+  command -v nginx                           >/dev/null 2>&1 \
+    && _probe_version nginx           nginx -v
+  unset -f _probe_version
   printf '\n'
 }
 
@@ -1056,12 +1077,22 @@ cmd_verify() {
           # Inline jq probe: silently skip clusters absent from the
           # bootstrap (e.g. elchi-collector-cluster on --no-collector
           # installs) instead of flagging them as missing.
+          #
+          # Healthy = active health check did NOT fail. We deliberately
+          # avoid .health_status.eds_health_status because STRICT_DNS
+          # clusters always report HEALTHY there (EDS field is only
+          # meaningful when an EDS server actually overrides it),
+          # which masked a 4-vs-3 endpoint count bug for months. The
+          # failed_active_health_check field is the authoritative
+          # source for whether the configured health_checks block
+          # accepted this host; when false or absent on a node Envoy
+          # has not yet probed, the host is considered healthy.
           for cl in registry-cluster controller-rest-cluster elchi-collector-cluster; do
             total=$(echo "$cluster_dump" \
               | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[]] | length" 2>/dev/null || echo 0)
             [ "$total" -gt 0 ] 2>/dev/null || continue
             healthy=$(echo "$cluster_dump" \
-              | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[] | select(.health_status.eds_health_status==\"HEALTHY\")] | length" 2>/dev/null || echo 0)
+              | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[] | select((.health_status.failed_active_health_check // false) == false)] | length" 2>/dev/null || echo 0)
             if [ "$healthy" = "0" ]; then
               echo "  [FAIL] envoy: ${cl} has 0/${total} healthy endpoints"
               fails=$((fails+1))

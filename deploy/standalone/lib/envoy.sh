@@ -607,11 +607,18 @@ envoy::_emit_clusters() {
 EOF
   local h
   for h in "${hostnames[@]}"; do
+    # `<hn>-registry` alias instead of the bare hostname — the bare
+    # alias collides with cloud-init's pre-existing
+    # `127.0.0.1 <hostname>` line in /etc/hosts under STRICT_DNS,
+    # which causes registry-cluster to count the local node twice
+    # (once at 127.0.0.1, once at the cluster IP). lib/hosts.sh writes
+    # `<ip> <hn>-registry` exclusively in the elchi-stack block, so
+    # this name has exactly ONE resolution.
     cat <<EOF
         - endpoint:
             address:
               socket_address:
-                address: ${h}
+                address: ${h}-registry
                 port_value: ${ELCHI_PORT_REGISTRY_GRPC}
 EOF
   done

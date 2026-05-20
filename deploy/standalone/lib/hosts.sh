@@ -61,11 +61,19 @@ hosts::render_managed_block() {
     for i in "${!host_ips[@]}"; do
       ip=${host_ips[$i]}
       hn=${host_names[$i]}
-      # Bare hostname → host IP. Used by registry-cluster (per-node) +
-      # elchi-cluster (per-node UI/nginx).
+      # Bare hostname → host IP. Used by elchi-cluster (per-node UI /
+      # nginx). The bare alias is NOT used by registry-cluster anymore:
+      # Ubuntu/Debian cloud-init pre-writes `127.0.0.1 <hostname>` to
+      # /etc/hosts, so the OS-managed loopback line collides with this
+      # external alias under STRICT_DNS. Envoy resolves the same name
+      # to BOTH addresses → registry-cluster ends up with the local
+      # node listed twice (once at 127.0.0.1, once at the cluster IP).
+      # The role-suffixed aliases below sidestep that — they only ever
+      # appear in the elchi-stack managed block.
       printf '%s\t%s\n' "$ip" "$hn"
-      # Controller is version-agnostic — single instance per node, no
-      # envoy-version suffix in the registry name.
+      # Per-role aliases. Each is unique to its role so the OS-managed
+      # loopback line for the bare hostname can't collide.
+      printf '%s\t%s-registry\n'   "$ip" "$hn"
       printf '%s\t%s-controller\n' "$ip" "$hn"
       # Control-plane is multi-version; one entry per variant per node.
       for v in "${variants[@]}"; do
