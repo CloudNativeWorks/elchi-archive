@@ -65,8 +65,13 @@ control_plane::create_instances() {
       cp_p=$(control_plane::_default_port "$v")
     fi
     systemd::install_and_apply "elchi-control-plane-${sanitized}@0.service"
-    if ! wait_for_tcp 127.0.0.1 "$cp_p" 30; then
-      die "elchi-control-plane-${sanitized}@0 failed to come up on :${cp_p} — aborting rollout"
+    # 90s — same first-boot mongo / xDS bootstrap window as registry +
+    # controller. Cold cluster electing PRIMARY can stretch first bind.
+    if ! wait_for_tcp 127.0.0.1 "$cp_p" 90; then
+      log::err "elchi-control-plane-${sanitized}@0 did not bind :${cp_p} within 90s — last 40 journal lines:"
+      journalctl -u "elchi-control-plane-${sanitized}@0.service" --no-pager -n 40 2>&1 \
+        | sed 's/^/    /' >&2 || true
+      die "elchi-control-plane-${sanitized}@0 startup failed (see journal output above)"
     fi
   done
   log::ok "elchi-control-plane instances running (${#variants[@]} variant(s), 1 instance per node per variant)"

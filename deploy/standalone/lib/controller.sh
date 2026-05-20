@@ -111,8 +111,16 @@ EOF
   local rest_p
   rest_p=$(jq -r --arg h "$host" '.controller[$h].rest' "${ELCHI_ETC}/ports.full.json" 2>/dev/null)
   [ -n "$rest_p" ] && [ "$rest_p" != "null" ] || rest_p=$(topology::alloc_controller_port rest)
-  if ! wait_for_tcp 127.0.0.1 "$rest_p" 30; then
-    die "elchi-controller failed to come up on :${rest_p}"
+  # 90s window: controller mints its identity in mongo on first boot,
+  # which races with the just-converged RS PRIMARY. Backoff retries
+  # inside the binary regularly push first bind past the legacy 30s.
+  if ! wait_for_tcp 127.0.0.1 "$rest_p" 90; then
+    log::err "elchi-controller did not bind :${rest_p} within 90s — last 40 journal lines:"
+    systemctl status elchi-controller.service --no-pager -l 2>&1 \
+      | sed 's/^/    /' | tail -20 >&2 || true
+    journalctl -u elchi-controller.service --no-pager -n 40 2>&1 \
+      | sed 's/^/    /' >&2 || true
+    die "elchi-controller startup failed (see journal output above)"
   fi
   log::ok "elchi-controller running (REST :${rest_p})"
 }

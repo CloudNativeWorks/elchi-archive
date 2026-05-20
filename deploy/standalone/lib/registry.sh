@@ -107,8 +107,24 @@ EOF
   rm -f "${unit}.tmp"
   systemd::reload
   systemd::install_and_apply elchi-registry.service
-  wait_for_tcp 127.0.0.1 "$ELCHI_PORT_REGISTRY_GRPC" 30 \
-    || die "registry did not come up on :${ELCHI_PORT_REGISTRY_GRPC}"
+  # First-boot timeout bumped to 90s: registry runs through a mongo
+  # connect + leader-election bootstrap before binding. The orchestrator
+  # only just finished rs.initiate() seconds before this call, so the
+  # PRIMARY may still be settling its election term — retries with
+  # backoff inside the binary can easily push first bind past 30s on a
+  # cold cluster. The Go listener uses [::]:port (dual-stack) so the
+  # IPv6 fallback in wait_for_tcp covers systems with bindv6only=1.
+  if ! wait_for_tcp 127.0.0.1 "$ELCHI_PORT_REGISTRY_GRPC" 90; then
+    # Surface the actual failure mode instead of an opaque timeout.
+    # Walks journal + systemctl state so the operator gets enough to
+    # diagnose without a second SSH hop.
+    log::err "registry did not bind :${ELCHI_PORT_REGISTRY_GRPC} within 90s — last 40 journal lines:"
+    systemctl status elchi-registry.service --no-pager -l 2>&1 \
+      | sed 's/^/    /' | tail -20 >&2 || true
+    journalctl -u elchi-registry.service --no-pager -n 40 2>&1 \
+      | sed 's/^/    /' >&2 || true
+    die "registry startup failed (see journal output above)"
+  fi
   log::ok "elchi-registry running"
 }
 

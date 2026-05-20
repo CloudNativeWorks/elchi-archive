@@ -161,6 +161,20 @@ wait_for_tcp() {
       exec 3<&- 3>&-
       return 0
     fi
+    # IPv6-only fallback: on systems where net.ipv6.bindv6only=1 (or
+    # a Go service like our backend bound [::]:port without a
+    # parallel v4 socket) a probe of 127.0.0.1 fails even though the
+    # service IS up. When the caller passed v4 loopback / "localhost",
+    # also try ::1 — either half of dual-stack reachable is enough to
+    # declare the service ready.
+    case "$host" in
+      127.0.0.1|localhost)
+        if (exec 3<>/dev/tcp/::1/"$port") 2>/dev/null; then
+          exec 3<&- 3>&-
+          return 0
+        fi
+        ;;
+    esac
     sleep 1
   done
   return 1

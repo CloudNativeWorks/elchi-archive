@@ -746,6 +746,20 @@ install_helpers() {
       "${ELCHI_ETC:-/etc/elchi}/validate.sh"
   fi
 
+  # elchi-stack.target — umbrella unit that every elchi-* service
+  # declares as PartOf=. Has to land BEFORE any service unit gets
+  # installed; otherwise systemd's PartOf propagation logs a noisy
+  # "Failed to restart elchi-stack.target: Unit not found" on every
+  # service restart. The target itself only groups — no ExecStart,
+  # no Active state machinery — so just shipping it is enough.
+  if [ -f "${SCRIPT_DIR}/templates/elchi-stack.target" ]; then
+    install -m 0644 -o root -g root \
+      "${SCRIPT_DIR}/templates/elchi-stack.target" \
+      /etc/systemd/system/elchi-stack.target
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable elchi-stack.target >/dev/null 2>&1 || true
+  fi
+
   log::ok "operator helper installed at /usr/local/bin/elchi-stack"
 }
 
