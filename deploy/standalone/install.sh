@@ -562,7 +562,11 @@ parse_args() {
     _auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     [ -n "$_auto_ip" ] || _auto_ip=127.0.0.1
     ELCHI_NODES=$_auto_ip
-    log::info "no --nodes supplied — defaulting to single-VM install on ${_auto_ip}"
+    # parse_args runs BEFORE source_libs, so log::* is not defined yet
+    # (calling it here aborts the install with `command not found` under
+    # `set -e`). Emit a plain stderr line; downstream source_libs +
+    # logging will pick up from there.
+    printf '[INFO] no --nodes supplied — defaulting to single-VM install on %s\n' "$_auto_ip" >&2
   fi
 
   # main-address is the public DNS / IP the UI's API_URL resolves to,
