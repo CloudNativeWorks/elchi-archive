@@ -12,9 +12,13 @@
 #   ${ELCHI_MONGO}/keyfile         1024-byte random; mongo replica-set internal auth
 #   ${ELCHI_MONGO}/root.env        mongo root username/password (M1 only, mode 0600)
 #
-# All files are root-owned, mode 0640 group-readable by the elchi group
-# (so backend services can EnvironmentFile them) — except mongo files
-# which are read by mongod as user mongodb.
+# All files are root-owned, mode 0600. No service unit ever points
+# EnvironmentFile= at secrets.env — instead `secrets::value` is read
+# at install/rotate time (always as root) to render per-variant
+# common.env files, and THOSE are what systemd loads. Tightening
+# from the legacy 0640 root:elchi to 0600 root:root removes a
+# read path that nothing actually used. Mongo files are owned by
+# mongodb:mongodb because mongod itself opens them at runtime.
 
 # secrets::generate — idempotent. If files already exist (rerun), keep
 # them. Rotation is a separate, explicit operation (operator runs
@@ -29,6 +33,18 @@ secrets::generate() {
 
   if [ -f "$out" ]; then
     log::info "${out} already exists — preserving (no rotation)"
+    # Migrate the legacy 0640 root:elchi → 0600 root:root in place on
+    # rerun. The group read was always unused (no service reads this
+    # file directly) and tightening it closes the path on existing
+    # installs without forcing a fresh rebuild.
+    local _cur_mode _cur_owner
+    _cur_mode=$(stat -c '%a' "$out" 2>/dev/null || stat -f '%Lp' "$out" 2>/dev/null)
+    _cur_owner=$(stat -c '%U:%G' "$out" 2>/dev/null || stat -f '%Su:%Sg' "$out" 2>/dev/null)
+    if [ "$_cur_mode" != "600" ] || [ "$_cur_owner" != "root:root" ]; then
+      chmod 0600 "$out" 2>/dev/null || true
+      chown root:root "$out" 2>/dev/null || true
+      log::info "tightened ${out} permissions: ${_cur_mode}/${_cur_owner} → 600/root:root"
+    fi
     # Common operator footgun: passing --grafana-password=NEW on a
     # rerun expecting it to update the live admin password. We can't
     # silently rotate (would surprise operators using secrets.env as
@@ -92,8 +108,8 @@ ELCHI_CLICKHOUSE_USERNAME=elchi
 ELCHI_CLICKHOUSE_PASSWORD=${clickhouse_pwd}
 ELCHI_COLLECTOR_HASH_SALT=${collector_hash_salt}
 EOF
-    chmod 0640 "${out}.tmp"
-    chown root:"$ELCHI_GROUP" "${out}.tmp"
+    chmod 0600 "${out}.tmp"
+    chown root:root "${out}.tmp"
     mv -f "${out}.tmp" "$out"
   fi
 
@@ -127,8 +143,8 @@ secrets::ensure_collector_secrets() {
   _ensure_one ELCHI_COLLECTOR_HASH_SALT "$(rand_hex 32)"
   unset -f _ensure_one
   if [ "$appended" = "1" ]; then
-    chmod 0640 "$out"
-    chown root:"$ELCHI_GROUP" "$out"
+    chmod 0600 "$out"
+    chown root:root "$out"
     log::info "appended ClickHouse / collector secrets to existing secrets.env"
   fi
 }
@@ -189,7 +205,7 @@ secrets::import_from_bundle() {
   install -d -m 0750 -o root -g "$ELCHI_GROUP" "$ELCHI_MONGO"
 
   if [ -f "${bundle_dir}/secrets.env" ]; then
-    install -m 0640 -o root -g "$ELCHI_GROUP" "${bundle_dir}/secrets.env" "${ELCHI_ETC}/secrets.env"
+    install -m 0600 -o root -g root "${bundle_dir}/secrets.env" "${ELCHI_ETC}/secrets.env"
   else
     die "bundle missing secrets.env"
   fi

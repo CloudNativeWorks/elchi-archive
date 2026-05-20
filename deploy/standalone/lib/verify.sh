@@ -246,12 +246,155 @@ verify::deep_health() {
     fi
   fi
 
+  # Pass 4 — cluster-state leader probes. These are the "is the cluster
+  # actually functional" checks that the per-unit `is-active` pass
+  # cannot answer. A mongod that's `active` but in PRIMARY-less
+  # SECONDARY state accepts no writes; a Keeper ensemble where every
+  # node thinks it's a follower has lost quorum. Both surface only via
+  # in-protocol probes.
+  verify::_mongo_rs_leader || fails=$(( fails + 1 ))
+  verify::_keeper_leader   || fails=$(( fails + 1 ))
+
   if [ "$fails" -gt 0 ]; then
     log::err "deep health check: ${fails} failure(s)"
     return 1
   fi
   log::ok "deep health check: all green"
   return 0
+}
+
+# verify::_mongo_rs_leader — RS-aware health gate. M1-only by design
+# (root.env lives nowhere else); silently no-ops elsewhere. Standalone
+# mongo (cluster size 1-2) has no RS so we skip the rs.status() call
+# and only assert mongod is up.
+verify::_mongo_rs_leader() {
+  # External mongo: not our concern, we don't run mongod here.
+  [ "${ELCHI_MONGO_MODE:-local}" = "external" ] && return 0
+  # Not M1 → no root creds → skip silently.
+  [ -f /etc/elchi/mongo/root.env ] || return 0
+  systemctl is-active --quiet mongod 2>/dev/null || {
+    log::err "mongod: NOT active (cannot probe RS state)"
+    return 1
+  }
+
+  local size=1
+  [ -f "${ELCHI_ETC:-/etc/elchi}/topology.full.yaml" ] && \
+    size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+             "${ELCHI_ETC:-/etc/elchi}/topology.full.yaml")
+  # < 3 nodes uses standalone mongo (no RS). Reaching mongod was enough.
+  if [ "${size:-1}" -lt 3 ] 2>/dev/null; then
+    log::ok "mongo: standalone mode (cluster size=${size}, no RS to probe)"
+    return 0
+  fi
+
+  if ! command -v mongosh >/dev/null 2>&1 && ! command -v mongo >/dev/null 2>&1; then
+    log::warn "mongo: mongosh not installed — skipping RS PRIMARY probe"
+    return 0
+  fi
+
+  local user pwd out
+  user=$(grep '^MONGO_ROOT_USERNAME=' /etc/elchi/mongo/root.env | cut -d= -f2-)
+  pwd=$( grep '^MONGO_ROOT_PASSWORD=' /etc/elchi/mongo/root.env | cut -d= -f2-)
+  # One-shot rs.status() projection. Pipe-delimited so we can parse with
+  # plain `cut` — hostnames may contain ':' (host:port).
+  out=$(mongodb::_mongosh --quiet --host 127.0.0.1 --port 27017 \
+          -u "$user" -p "$pwd" --authenticationDatabase admin --eval '
+          try {
+            var s = rs.status();
+            var primary = s.members.filter(function(m){return m.stateStr==="PRIMARY";});
+            var healthy = s.members.filter(function(m){return m.health===1;}).length;
+            var self    = s.members.find(function(m){return m.self===true;}) || {};
+            print("RS_OK|" + (primary[0] ? primary[0].name : "NONE") +
+                  "|" + healthy + "|" + s.members.length +
+                  "|" + (self.stateStr || "UNKNOWN"));
+          } catch(e) {
+            print("RS_ERR|" + (e.codeName || "unknown") + "|" + (e.message || ""));
+          }' 2>/dev/null) || {
+    log::err "mongo: rs.status() RPC failed (auth wall? mongod restarting?)"
+    return 1
+  }
+
+  local line
+  line=$(printf '%s\n' "$out" | grep -E '^RS_(OK|ERR)\|' | head -n1)
+  case "$line" in
+    RS_OK\|NONE\|*)
+      log::err "mongo: RS has NO PRIMARY — cluster cannot accept writes"
+      return 1 ;;
+    RS_OK\|*)
+      local primary healthy total self_state
+      primary=$(printf '%s'  "$line" | cut -d'|' -f2)
+      healthy=$(printf '%s'  "$line" | cut -d'|' -f3)
+      total=$(  printf '%s'  "$line" | cut -d'|' -f4)
+      self_state=$(printf '%s' "$line" | cut -d'|' -f5)
+      log::ok "mongo: PRIMARY=${primary}, ${healthy}/${total} members healthy, this node=${self_state}"
+      if [ "$healthy" != "$total" ]; then
+        log::warn "mongo: ${total} member(s) configured but only ${healthy} healthy"
+      fi
+      case "$self_state" in
+        PRIMARY|SECONDARY|ARBITER) ;;
+        *) log::warn "mongo: this node is in ${self_state} state (not yet voting)" ;;
+      esac
+      return 0 ;;
+    RS_ERR\|*)
+      log::err "mongo: rs.status() error — ${line#RS_ERR|}"
+      return 1 ;;
+    *)
+      log::warn "mongo: rs.status() returned unexpected output (skipping)"
+      return 0 ;;
+  esac
+}
+
+# verify::_keeper_leader — embedded ClickHouse Keeper liveness gate.
+# Only relevant on 3+ node clusters (lib/clickhouse.sh enables Keeper
+# only when cluster_size >= 3). The 4lw `mntr` command returns one
+# `zk_server_state\t<role>` line where role ∈ {leader, follower,
+# observer}. Any other state — or no response — means Raft has not
+# converged and the collector → ClickHouse pipeline will queue.
+verify::_keeper_leader() {
+  systemctl is-active --quiet clickhouse-server 2>/dev/null || return 0
+
+  local size=1
+  [ -f "${ELCHI_ETC:-/etc/elchi}/topology.full.yaml" ] && \
+    size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+             "${ELCHI_ETC:-/etc/elchi}/topology.full.yaml")
+  if [ "${size:-1}" -lt 3 ] 2>/dev/null; then
+    log::ok "clickhouse: standalone mode (cluster size=${size}, no Keeper to probe)"
+    return 0
+  fi
+
+  local port=${ELCHI_PORT_CLICKHOUSE_KEEPER:-9181}
+  local state=''
+  # Try nc first (most portable), fall back to bash's /dev/tcp builtin.
+  # Both are best-effort — a missing client is not a hard failure here.
+  if command -v nc >/dev/null 2>&1; then
+    state=$(printf 'mntr\n' | nc -w 3 127.0.0.1 "$port" 2>/dev/null \
+              | awk -F'\t' '/^zk_server_state/{print $2; exit}')
+  elif [ -e /dev/tcp ] || (echo >/dev/tcp/127.0.0.1/0) 2>/dev/null; then
+    # /dev/tcp probe — bash builtin, no external binary needed.
+    state=$( { exec 3<>"/dev/tcp/127.0.0.1/${port}" 2>/dev/null || exit 1
+              printf 'mntr\n' >&3
+              timeout 3 cat <&3 2>/dev/null
+              exec 3<&- ; exec 3>&-
+            } | awk -F'\t' '/^zk_server_state/{print $2; exit}')
+  else
+    log::warn "clickhouse-keeper: no nc + no /dev/tcp support — skipping leader probe"
+    return 0
+  fi
+
+  case "$state" in
+    leader|follower)
+      log::ok "clickhouse-keeper: this node is ${state}"
+      return 0 ;;
+    observer)
+      log::warn "clickhouse-keeper: this node is observer (non-voting — Raft has quorum but won't elect)"
+      return 0 ;;
+    '')
+      log::err "clickhouse-keeper: 4lw mntr returned no zk_server_state on :${port} (Keeper unreachable or 4lw disabled)"
+      return 1 ;;
+    *)
+      log::err "clickhouse-keeper: unexpected state '${state}' on :${port}"
+      return 1 ;;
+  esac
 }
 
 verify::print_summary() {
@@ -285,7 +428,7 @@ verify::print_summary() {
   printf '\n'
 
   # Show the credentials operators actually need to log in / federate.
-  # secrets.env is mode 0640 root:elchi so these values are persisted
+  # secrets.env is mode 0600 root:root so these values are persisted
   # securely; here we only print them once after install completes (so
   # the operator captures them before the SSH session closes). Subsequent
   # access via `elchi-stack show-secret <name>`.

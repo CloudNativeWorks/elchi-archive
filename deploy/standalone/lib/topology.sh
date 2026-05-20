@@ -301,8 +301,34 @@ topology::compute() {
     # original NS records / region directives — silently breaking
     # public DNS for any operator who passed --gslb-nameservers at
     # install time.
-    printf '  gslb_nameservers: %s\n' "${ELCHI_GSLB_NAMESERVERS:-}"
-    printf '  gslb_regions: %s\n'     "${ELCHI_GSLB_REGIONS:-}"
+    printf '  gslb_nameservers: %s\n'   "${ELCHI_GSLB_NAMESERVERS:-}"
+    printf '  gslb_regions: %s\n'       "${ELCHI_GSLB_REGIONS:-}"
+    printf '  gslb_forwarders: %s\n'    "${ELCHI_GSLB_FORWARDERS:-}"
+    printf '  gslb_static_records: %s\n' "${ELCHI_GSLB_STATIC_RECORDS:-}"
+    printf '  gslb_ttl: %s\n'           "${ELCHI_GSLB_TTL:-300}"
+    printf '  gslb_sync_interval: %s\n' "${ELCHI_GSLB_SYNC_INTERVAL:-1m}"
+    printf '  gslb_timeout: %s\n'       "${ELCHI_GSLB_TIMEOUT:-4s}"
+    printf '  gslb_tls_skip_verify: %s\n' "${ELCHI_GSLB_TLS_SKIP_VERIFY:-0}"
+    # Operator-tunable backend behaviour — every node must render the
+    # SAME config-prod.yaml, otherwise CORS/JWT/log behaviour diverges
+    # silently per node. Persisting here keeps upgrade.sh / add-node
+    # reruns honest.
+    printf '  internal_communication: %s\n' "${ELCHI_INTERNAL_COMMUNICATION:-false}"
+    printf '  cors_origins: %s\n'       "${ELCHI_CORS_ALLOWED_ORIGINS:-*}"
+    printf '  jwt_access_duration: %s\n'  "${ELCHI_JWT_ACCESS_TOKEN_DURATION:-1h}"
+    printf '  jwt_refresh_duration: %s\n' "${ELCHI_JWT_REFRESH_TOKEN_DURATION:-5h}"
+    printf '  log_level: %s\n'          "${ELCHI_LOG_LEVEL:-info}"
+    printf '  log_format: %s\n'         "${ELCHI_LOG_FORMAT:-text}"
+    printf '  enable_demo: %s\n'        "${ELCHI_ENABLE_DEMO:-false}"
+    # Mongo / VictoriaMetrics deployment mode — install.sh's `local`
+    # default is wrong for external installs; upgrade.sh has to know.
+    printf '  mongo_mode: %s\n'         "${ELCHI_MONGO_MODE:-local}"
+    printf '  vm_mode: %s\n'            "${ELCHI_VM_MODE:-local}"
+    printf '  vm_endpoint: %s\n'        "${ELCHI_VM_ENDPOINT:-}"
+    # Extra TLS SANs the operator supplied at install time. Re-applied
+    # on every rerun so a node added later still gets the same cert
+    # coverage (re-issuance would otherwise drop SANs).
+    printf '  hostnames: %s\n'          "${ELCHI_HOSTNAMES:-}"
     # elchi-collector / ClickHouse feature state — persisted so
     # upgrade.sh / add-node reruns reconstruct the same install shape
     # (whether the collector is on, and whether ClickHouse is local or

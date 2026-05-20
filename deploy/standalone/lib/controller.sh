@@ -36,8 +36,14 @@ controller::create_instances() {
 [Unit]
 Description=Elchi Controller (REST + gRPC API; versions[0] = ${first_variant})
 Documentation=https://github.com/CloudNativeWorks/elchi-backend
-After=network-online.target mongod.service
-Wants=network-online.target
+# Order: network → mongod (when present) → registry → controller.
+# After= alone enforces ordering; Wants= keeps the dependency loose so
+# the controller still starts if registry is briefly down (its own
+# Restart=on-failure / reconnect handles the catch-up). Without these,
+# a clean reboot would race controller against registry start-up and
+# produce a noisy retry log even though the eventual state converges.
+After=network-online.target mongod.service elchi-registry.service
+Wants=network-online.target elchi-registry.service
 PartOf=elchi-stack.target
 
 [Service]

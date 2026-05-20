@@ -39,6 +39,11 @@ Description=elchi-registry (xDS routing decisions; ext_proc target)
 Documentation=https://github.com/CloudNativeWorks/elchi-backend
 After=network-online.target mongod.service
 Wants=network-online.target
+# PartOf ties the registry to the umbrella elchi-stack.target so a
+# `systemctl restart elchi-stack.target` cycles the registry too.
+# Without this the helper / operator commands that bounce the target
+# would leave registry running with a stale view of the cluster.
+PartOf=elchi-stack.target
 
 [Service]
 Type=simple

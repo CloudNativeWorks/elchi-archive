@@ -53,8 +53,12 @@ bundle::build() {
     install -m 0644 "${ELCHI_ETC}/nodes.list"       "${stage}/bundle/nodes.list"
   fi
 
-  # Secrets
-  install -m 0640 "${ELCHI_ETC}/secrets.env"        "${stage}/bundle/secrets.env"
+  # Secrets — staged at 0600 root-only to match the on-disk mode
+  # (lib/secrets.sh writes 0600 root:root). The bundle staging dir
+  # itself is 0700, but the file mode is preserved inside the tar
+  # archive too, so a leaked tarball gives no extra read path beyond
+  # what its encryption already permits.
+  install -m 0600 "${ELCHI_ETC}/secrets.env"        "${stage}/bundle/secrets.env"
 
   # Mongo keyfile (only if RS topology — but we always include it; M2/M3
   # may need it later if the cluster grows past 3 nodes).

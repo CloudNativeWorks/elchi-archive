@@ -33,6 +33,11 @@ if [ -d "${ELCHI_INSTALLER_ROOT}/lib" ]; then
   . "${ELCHI_INSTALLER_ROOT}/lib/grafana.sh"
   # shellcheck source=lib/systemd.sh
   . "${ELCHI_INSTALLER_ROOT}/lib/systemd.sh"
+  # shellcheck source=lib/verify.sh
+  # Sourced so cmd_verify can call verify::_mongo_rs_leader for M1-only
+  # cluster-state probes (rs.status() needs root creds that only live
+  # on M1). The per-node remote probe inside cmd_verify covers Keeper.
+  . "${ELCHI_INSTALLER_ROOT}/lib/verify.sh"
 else
   printf 'elchi-stack: installer libs missing (looked under %s)\n' "$ELCHI_INSTALLER_ROOT" >&2
   exit 1
@@ -1074,6 +1079,31 @@ cmd_verify() {
         fi
       fi
 
+      # 4. ClickHouse Keeper leader probe — only meaningful on 3+ node
+      # CH clusters (standalone single-node has no Keeper). Use the 4lw
+      # `mntr` command; a healthy ensemble reports this node as leader
+      # or follower. Anything else means Raft has not converged.
+      if systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+        ch_size=$(awk "/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print \$2; exit}" \
+                    /etc/elchi/topology.full.yaml 2>/dev/null)
+        if [ "${ch_size:-1}" -ge 3 ] 2>/dev/null; then
+          if command -v nc >/dev/null 2>&1; then
+            kstate=$(printf "mntr\n" | nc -w 3 127.0.0.1 9181 2>/dev/null \
+                       | awk -F"\t" "/^zk_server_state/{print \$2; exit}")
+          else
+            kstate=""
+          fi
+          case "$kstate" in
+            leader|follower) echo "  [ OK ] clickhouse-keeper: ${kstate}" ;;
+            observer)        echo "  [WARN] clickhouse-keeper: observer (non-voting)" ;;
+            "")              echo "  [FAIL] clickhouse-keeper: no zk_server_state on :9181"
+                             fails=$((fails+1)) ;;
+            *)               echo "  [FAIL] clickhouse-keeper: unexpected state ${kstate}"
+                             fails=$((fails+1)) ;;
+          esac
+        fi
+      fi
+
       exit $fails
     '
     if ssh::is_local "$host"; then
@@ -1082,6 +1112,15 @@ cmd_verify() {
       ssh::run "$host" bash -c "$probe" || total_fails=$(( total_fails + $? ))
     fi
   done < /etc/elchi/nodes.list
+
+  # M1-only deep cluster-state probe: rs.status() needs root creds that
+  # only exist at /etc/elchi/mongo/root.env on M1 (never shipped to
+  # M2/M3 in the bundle). The per-node probe above can't reach this;
+  # we run it once here against the local mongod.
+  if [ -f /etc/elchi/mongo/root.env ]; then
+    printf '\n%s── cluster state (M1) ──%s\n' "$C_BOLD" "$C_RESET"
+    verify::_mongo_rs_leader || total_fails=$(( total_fails + 1 ))
+  fi
 
   printf '\n'
   if [ "$total_fails" = "0" ]; then
@@ -1127,8 +1166,20 @@ cmd_show_secret() {
       # correlation of every event already in ClickHouse.
       printf 'hash-salt: %s\n' "$(_read ELCHI_COLLECTOR_HASH_SALT)"
       ;;
+    bundle-key)
+      # M1-only — /etc/elchi/.bundle-key is the persisted (sealed via
+      # systemd-creds where available, else 0600 plaintext) bundle
+      # decryption key. Recovered here so operators who used
+      # --quiet-key during install can still see the full value when
+      # they need it for --skip-orchestration / debug.
+      local key
+      key=$(bundle::read_persisted_key) \
+        || die "no persisted bundle key at /etc/elchi/.bundle-key — run on M1 of an installed cluster"
+      [ -n "$key" ] || die "persisted bundle key is empty — sealed credential may be unreadable"
+      printf '%s\n' "$key"
+      ;;
     all)
-      printf '%sCredentials at %s (mode 0640 root:elchi)%s\n\n' \
+      printf '%sCredentials at %s (mode 0600 root:root)%s\n\n' \
         "$C_BOLD" "$sec_file" "$C_RESET"
       printf '  %sGrafana admin:%s   %s / %s\n' "$C_CYAN" "$C_RESET" \
         "$(_read ELCHI_GRAFANA_USER)" "$(_read ELCHI_GRAFANA_PASSWORD)"
@@ -1146,10 +1197,10 @@ cmd_show_secret() {
         "$(_read ELCHI_COLLECTOR_HASH_SALT)"
       ;;
     "")
-      die "secret name required (one of: grafana, jwt, gslb, mongo-app, mongo-root, all)"
+      die "secret name required (one of: grafana, jwt, gslb, mongo-app, mongo-root, clickhouse, collector, bundle-key, all)"
       ;;
     *)
-      die "unknown secret: $name (use grafana | jwt | gslb | mongo-app | mongo-root | all)"
+      die "unknown secret: $name (use grafana | jwt | gslb | mongo-app | mongo-root | clickhouse | collector | bundle-key | all)"
       ;;
   esac
 }
@@ -1217,8 +1268,12 @@ cmd_rotate_secret() {
       for v in "${variants[@]}"; do
         ssh::scp "/etc/elchi/${v}/common.env" "$host" "/etc/elchi/${v}/common.env"
       done
-      # Fix up ownership (install lands files root:root) and restart.
-      local remote_cmd="chown root:elchi /etc/elchi/secrets.env && chmod 0640 /etc/elchi/secrets.env"
+      # Fix up ownership and restart. secrets.env is root:root 0600 —
+      # no service reads it directly (per-variant common.env files are
+      # what systemd EnvironmentFiles), so tightening to root-only is
+      # safe. common.env stays root:elchi 0640 because backend service
+      # units run as the elchi user and DO read it via EnvironmentFile.
+      local remote_cmd="chown root:root /etc/elchi/secrets.env && chmod 0600 /etc/elchi/secrets.env"
       for v in "${variants[@]}"; do
         remote_cmd+=" && chown root:elchi /etc/elchi/${v}/common.env && chmod 0640 /etc/elchi/${v}/common.env"
       done

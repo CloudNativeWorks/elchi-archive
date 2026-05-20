@@ -1,8 +1,13 @@
 [Unit]
 Description=${ELCHI_COMPONENT_DESC}
 Documentation=https://github.com/CloudNativeWorks/elchi-backend
-After=network-online.target mongod.service
-Wants=network-online.target
+# Order: network → mongod (when present — N>=4 nodes have no local
+# mongod, then this After is a harmless no-op) → registry → control-plane.
+# Wants=elchi-registry.service keeps the dependency loose so the
+# control-plane still starts if registry is briefly down; its xDS
+# stream auto-reconnects via Restart=on-failure + backend retry logic.
+After=network-online.target mongod.service elchi-registry.service
+Wants=network-online.target elchi-registry.service
 PartOf=elchi-stack.target
 
 [Service]

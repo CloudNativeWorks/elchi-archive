@@ -531,32 +531,75 @@ preflight::_port_in_use() {
   return 1
 }
 
+# preflight::_holder_is_elchi <pid> — true iff PID is owned by a
+# systemd unit we manage. Earlier revisions did substring matching on
+# the COMM column of `ss -ltnp` (`*nginx*`, `*mongod*`, …) which let a
+# foreign nginx — installed by the operator for an unrelated reason —
+# silently consume :443 and pass the preflight; install.sh then failed
+# 5 minutes later when our envoy tried to bind it. cgroup-based
+# identity tells us the CONTAINING UNIT, which is the authoritative
+# answer: nginx running under `nginx.service` (which we install)
+# tolerates rerun; nginx running under `someones-custom.service` does
+# not.
+#
+# Reads the last path segment of /proc/<pid>/cgroup — works for both
+# cgroup v2 (`0::/system.slice/foo.service`) and v1
+# (`1:name=systemd:/system.slice/foo.service`). The unit name is the
+# only thing we need.
+preflight::_holder_is_elchi() {
+  local pid=$1
+  [ -n "$pid" ] && [ -r "/proc/${pid}/cgroup" ] || return 1
+  local unit
+  unit=$(awk -F'/' '{print $NF}' "/proc/${pid}/cgroup" 2>/dev/null | head -n1)
+  case "$unit" in
+    elchi-*)
+      # All our own units (elchi-registry, elchi-controller, elchi-envoy,
+      # elchi-collector, elchi-control-plane-*@*, elchi-coredns, …).
+      return 0 ;;
+    nginx.service|mongod.service|grafana-server.service|coredns.service|\
+clickhouse-server.service|clickhouse-keeper.service|\
+otelcol.service|otelcol-contrib.service|\
+victoriametrics.service|victoria-metrics-prod.service)
+      # Distro-named units we install ourselves.
+      return 0 ;;
+  esac
+  return 1
+}
+
 preflight::check_port() {
   local port=$1 label=$2
   preflight::_port_in_use "$port" || return 0
 
-  # Port held — find by whom. If it's one of our own units (rerun) we
-  # treat it as an idempotent re-install and let the run continue.
-  local holder=''
+  # Port held — find by whom. Capture the full ss line for context + the
+  # listening PID for cgroup lookup. `ss -ltnp`'s users column is
+  # `users:(("comm",pid=N,fd=M),…)` when the running shell has the
+  # privileges to see it (root-only on Linux; non-root sees just `*`).
+  local holder='' pid=''
   if command -v ss >/dev/null 2>&1; then
     holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" '
       $4 ~ ":"p"$" || $4 ~ "]:"p"$" { print; exit }
     ')
+    # First pid=N in the row; multiple workers (nginx master + workers)
+    # share the same cgroup, so probing the first is sufficient.
+    pid=$(printf '%s' "$holder" | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
   fi
 
-  # Tolerate ports held by binaries we install ourselves — partial
-  # install + rerun is the dominant case here. Process names per `ss
-  # -ltnp` show the actual COMM, not the systemd unit, so we have to
-  # whitelist each binary basename.
-  case "$holder" in
-    *elchi*|*envoy*|*mongod*|*nginx*|*otelcol*|*victoria*|*grafana*|*coredns*|*clickhouse*|*collector*)
-      log::info "port ${port} (${label}) is held by an existing elchi-stack-related process — assuming rerun"
-      return 0
-      ;;
-  esac
+  if [ -n "$pid" ] && preflight::_holder_is_elchi "$pid"; then
+    local unit
+    unit=$(awk -F'/' '{print $NF}' "/proc/${pid}/cgroup" 2>/dev/null | head -n1)
+    log::info "port ${port} (${label}) is held by ${unit:-?} (pid ${pid}) — assuming rerun"
+    return 0
+  fi
 
   if [ -n "$holder" ]; then
-    die "port ${port} (${label}) is in use by: ${holder}"
+    if [ -n "$pid" ]; then
+      local exe unit
+      exe=$(readlink "/proc/${pid}/exe" 2>/dev/null || echo '?')
+      unit=$(awk -F'/' '{print $NF}' "/proc/${pid}/cgroup" 2>/dev/null | head -n1)
+      die "port ${port} (${label}) is in use by foreign process: ${exe} (pid ${pid}, unit=${unit:-none})
+       free it (stop the owning service) or rerun on a clean host"
+    fi
+    die "port ${port} (${label}) is in use: ${holder}"
   fi
   die "port ${port} (${label}) is in use; free it or pick a different port"
 }

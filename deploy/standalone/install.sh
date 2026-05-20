@@ -234,12 +234,24 @@ ELCHI_UPGRADE_OS=${ELCHI_UPGRADE_OS:-0}
 ELCHI_DRY_RUN=${ELCHI_DRY_RUN:-0}
 ELCHI_KEEP_BUNDLE=${ELCHI_KEEP_BUNDLE:-0}
 ELCHI_BUNDLE_KEY_OUT=${ELCHI_BUNDLE_KEY_OUT:-}
+# --quiet-key suppresses the plaintext bundle-key emission at end of
+# install; only a sha256 fingerprint is shown. Full key remains
+# persisted at /etc/elchi/.bundle-key and is recoverable via
+# `elchi-stack show-secret bundle-key`. Default OFF so existing
+# operator runbooks that capture the key from stdout keep working.
+ELCHI_BUNDLE_KEY_QUIET=${ELCHI_BUNDLE_KEY_QUIET:-0}
 
 # Internal — set by orchestrator when invoking remote nodes.
 ELCHI_NODE_INDEX=${ELCHI_NODE_INDEX:-}
 ELCHI_NODE_HOST=${ELCHI_NODE_HOST:-}
 ELCHI_BUNDLE_PATH=${ELCHI_BUNDLE_PATH:-}
 ELCHI_BUNDLE_KEY=${ELCHI_BUNDLE_KEY:-}
+# `--secrets-from=<file>` — orchestrator-side credential transport. The
+# remote install.sh receives this single path argument (NOT the secrets
+# themselves) and sources the file to populate ELCHI_BUNDLE_KEY /
+# ELCHI_MONGO_PASSWORD / ELCHI_MONGO_URI / ELCHI_CLICKHOUSE_URI /
+# ELCHI_GRAFANA_PASSWORD. Keeps creds out of /proc/<pid>/cmdline.
+ELCHI_SECRETS_FROM=${ELCHI_SECRETS_FROM:-}
 ELCHI_SKIP_ORCHESTRATION=${ELCHI_SKIP_ORCHESTRATION:-0}
 ELCHI_INSTALL_PHASE=${ELCHI_INSTALL_PHASE:-all}
 
@@ -354,6 +366,10 @@ Op-mode
   --dry-run                           render config; skip SSH/SCP and side-effects
   --keep-bundle                       preserve the bundle artifact (default: deleted)
   --bundle-key-out=<path>             write the bundle decryption key to a file
+  --quiet-key                         print bundle-key SHA-256 fingerprint only
+                                       (full key is still persisted at
+                                        /etc/elchi/.bundle-key; recover via
+                                        `elchi-stack show-secret bundle-key`)
 
 Internal (set by orchestrator on remote nodes — don't pass directly):
   --skip-orchestration
@@ -521,11 +537,13 @@ parse_args() {
       --dry-run)                              ELCHI_DRY_RUN=1 ;;
       --keep-bundle)                          ELCHI_KEEP_BUNDLE=1 ;;
       --bundle-key-out=*)                     ELCHI_BUNDLE_KEY_OUT=${1#*=} ;;
+      --quiet-key)                            ELCHI_BUNDLE_KEY_QUIET=1 ;;
       --skip-orchestration)                   ELCHI_SKIP_ORCHESTRATION=1 ;;
       --install-phase=*)                      ELCHI_INSTALL_PHASE=${1#*=} ;;
       --node-index=*)                         ELCHI_NODE_INDEX=${1#*=} ;;
       --bundle=*)                             ELCHI_BUNDLE_PATH=${1#*=} ;;
       --bundle-key=*)                         ELCHI_BUNDLE_KEY=${1#*=} ;;
+      --secrets-from=*)                       ELCHI_SECRETS_FROM=${1#*=} ;;
       -h|--help)                              print_usage; exit 0 ;;
       *) printf 'unknown flag: %s\n' "$1" >&2; print_usage; exit 2 ;;
     esac
@@ -971,6 +989,23 @@ local_install_phase2() {
   firewall::open
   watchdog::install
   verify::wait
+
+  # Remote-only secret hygiene: M1 SCPed the AES-256-GCM encrypted
+  # bundle to /opt/elchi-installer/.bundle.tar.gz.enc on this node so
+  # phase 1 could decrypt secrets.env / TLS / topology out of it. M1
+  # already removed its OWN copy at the end of orchestrate(); the
+  # remote-side leftover has no further role and would otherwise persist
+  # forever as a copy-paste-able blob of every cluster secret (mongo
+  # creds, JWT, TLS key, ClickHouse password, GSLB secret). The bundle
+  # decryption key alone is enough to fully decrypt it.
+  # ELCHI_KEEP_BUNDLE=1 is the explicit opt-out (debug / re-run paths).
+  if [ "${ELCHI_SKIP_ORCHESTRATION:-0}" = "1" ] \
+     && [ "${ELCHI_KEEP_BUNDLE:-0}" != "1" ]; then
+    if [ -f /opt/elchi-installer/.bundle.tar.gz.enc ]; then
+      rm -f /opt/elchi-installer/.bundle.tar.gz.enc
+      log::info "removed encrypted bundle leftover at /opt/elchi-installer/.bundle.tar.gz.enc"
+    fi
+  fi
 }
 
 # install_bundle_key — return the cluster's bundle decryption key,
@@ -1421,7 +1456,7 @@ EOF
   # unformed RS.
   ELCHI_INSTALL_PHASE=1 local_install
 
-  local bundle_enc='' bundle_key='' stage_inst=''
+  local bundle_enc='' bundle_key='' stage_inst='' orch_secrets_clear=''
   if [ "${#hosts[@]}" -gt 1 ]; then
     local bundle_clear=/tmp/elchi-bundle-$$.tar.gz
     bundle_enc=/tmp/elchi-bundle-$$.tar.gz.enc
@@ -1442,10 +1477,45 @@ EOF
       umask 077
       printf '%s\n' "$bundle_key" > "$ELCHI_BUNDLE_KEY_OUT"
       log::info "bundle key written to ${ELCHI_BUNDLE_KEY_OUT}"
+    elif [ "$ELCHI_BUNDLE_KEY_QUIET" = "1" ]; then
+      # --quiet-key: stdout only learns the fingerprint, NOT the secret.
+      # Operators capturing install logs (screen recordings, CI artifacts,
+      # tmux scrollback) keep enough state to identify which key the
+      # cluster ended up with without that key landing in artifact
+      # storage. The full key is at /etc/elchi/.bundle-key on M1.
+      local _fp
+      _fp=$(printf '%s' "$bundle_key" | { sha256sum 2>/dev/null || shasum -a 256; } | awk '{print $1}')
+      printf '\n%b[bundle key fingerprint]%b sha256:%s\n' "$C_YELLOW" "$C_RESET" "${_fp:0:16}"
+      log::info "(full key persisted at /etc/elchi/.bundle-key; recover via 'elchi-stack show-secret bundle-key')"
     else
       printf '\n%b[bundle key]%b %s\n\n' "$C_YELLOW" "$C_RESET" "$bundle_key"
-      log::info "(supply this with --bundle-key=... if you ever rerun --skip-orchestration)"
+      log::info "(supply this with --bundle-key=... if you ever rerun --skip-orchestration; suppress with --quiet-key)"
     fi
+
+    # Stage the credential transport file. Every secret that previously
+    # travelled via argv to the remote install.sh (--bundle-key,
+    # --mongo-password, --mongo-uri, --clickhouse-uri, --grafana-password)
+    # now lives in this single 0600 file; the remote install.sh receives
+    # ONLY the file path via --secrets-from, then sources + scrubs it.
+    # printf %q escapes embedded shell metachars so values with `$` /
+    # `"` / spaces round-trip safely through `set -a; . file; set +a`.
+    orch_secrets_clear=/tmp/elchi-orch-secrets-$$.env
+    umask 077
+    {
+      printf 'ELCHI_BUNDLE_KEY=%s\n' "$(printf '%q' "$bundle_key")"
+      [ -n "${ELCHI_MONGO_PASSWORD:-}" ]   && printf 'ELCHI_MONGO_PASSWORD=%s\n'   "$(printf '%q' "$ELCHI_MONGO_PASSWORD")"
+      [ -n "${ELCHI_MONGO_URI:-}" ]        && printf 'ELCHI_MONGO_URI=%s\n'        "$(printf '%q' "$ELCHI_MONGO_URI")"
+      [ -n "${ELCHI_CLICKHOUSE_URI:-}" ]   && printf 'ELCHI_CLICKHOUSE_URI=%s\n'   "$(printf '%q' "$ELCHI_CLICKHOUSE_URI")"
+      [ -n "${ELCHI_GRAFANA_PASSWORD:-}" ] && printf 'ELCHI_GRAFANA_PASSWORD=%s\n' "$(printf '%q' "$ELCHI_GRAFANA_PASSWORD")"
+      true
+    } > "$orch_secrets_clear"
+    chmod 0600 "$orch_secrets_clear"
+
+    # Compose with common.sh's existing EXIT trap (_elchi_exit_trap) so
+    # both run on any termination path. Without this composition, the
+    # bare `trap '... EXIT'` would REPLACE the upstream trap and the
+    # final "installer exited with rc=N" line would go missing.
+    trap "rm -f '$orch_secrets_clear' 2>/dev/null || true; _elchi_exit_trap" EXIT
 
     # Stage the installer tree under /tmp for ssh::scp_dir.
     stage_inst=$(mktemp -d)
@@ -1464,7 +1534,11 @@ EOF
       # of /tmp — the path is persistent (survives reboots and
       # systemd-tmpfiles), root-owned (matches the rest of the install
       # state), and goes away when uninstall purges /opt/elchi-installer.
-      ssh::scp     "$bundle_enc" "$host" /opt/elchi-installer/.bundle.tar.gz.enc
+      ssh::scp     "$bundle_enc"          "$host" /opt/elchi-installer/.bundle.tar.gz.enc
+      # Same dir for the credential transport file. Phase 2's EXIT trap
+      # on the remote wipes both files at install end; phase 1's trap
+      # intentionally KEEPs them so phase 2 can still consume them.
+      ssh::scp     "$orch_secrets_clear"  "$host" /opt/elchi-installer/.orch-secrets.env
 
       log::node "$host" "phase 1: infrastructure (this may take several minutes)"
       _orchestrate_remote_phase "$host" "$idx" "$bundle_key" 1 \
@@ -1518,42 +1592,148 @@ EOF
 # specific phase. Lifted into its own function so the phase 1 and phase 2
 # fanouts share one canonical command-line — keeps the two flag lists
 # from drifting out of sync on future flag additions.
+# Forward EVERY operator-supplied knob the remote install.sh might need
+# to render the same configuration as M1 — silent fallbacks to default
+# values on remote nodes are the dominant source of "M1 works, M2/M3
+# behave subtly differently" bugs. New flags MUST be added here when
+# they affect rendered config on more than just M1.
+#
+# Groups (top-to-bottom):
+#   * core: nodes, bundle, versions, main_address, port, timezone, hostnames
+#   * mongo: full --mongo-* family (external mode REQUIRES every one)
+#   * VictoriaMetrics: full --vm-* family (external endpoint must travel)
+#   * collector + ClickHouse: feature toggle + creds-bearing URI
+#   * backend behaviour: CORS / JWT TTL / log / demo / internal-comms
+#   * grafana: admin login (only used on first install, but consistent)
+#   * GSLB: zone, NS, regions, forwarders, static records, timing
+#   * op-mode: --no-firewall, --upgrade-os, --upgrade-mode
 _orchestrate_remote_phase() {
-  local host=$1 idx=$2 bundle_key=$3 phase=$4
+  # `bundle_key` arg kept for backwards compatibility with any caller
+  # that still passes it, but it is no longer used — the bundle key (and
+  # every other credential) now travels via the --secrets-from file the
+  # orchestrator scped to /opt/elchi-installer/.orch-secrets.env. That
+  # file is 0600 root-only and is wiped by the remote's EXIT trap at
+  # phase 2's end. Result: NO credential ever appears in /proc/cmdline.
+  local host=$1 idx=$2 _legacy_bundle_key=$3 phase=$4
   ssh::run_sudo "$host" bash /opt/elchi-installer/install.sh \
     --skip-orchestration \
     --install-phase="$phase" \
     --node-index="$idx" \
     --nodes="$ELCHI_NODES" \
     --bundle=/opt/elchi-installer/.bundle.tar.gz.enc \
-    --bundle-key="$bundle_key" \
+    --secrets-from=/opt/elchi-installer/.orch-secrets.env \
     --backend-version="$ELCHI_BACKEND_VARIANTS" \
     --ui-version="$ELCHI_UI_VERSION" \
     --envoy-version="$ELCHI_ENVOY_VERSION" \
     --coredns-version="$ELCHI_COREDNS_VERSION" \
-    --mongo-version="$ELCHI_MONGO_VERSION" \
     --main-address="$ELCHI_MAIN_ADDRESS" \
     --port="$ELCHI_PORT" \
     --timezone="$ELCHI_TIMEZONE" \
+    ${ELCHI_HOSTNAMES:+--hostnames="$ELCHI_HOSTNAMES"} \
+    --mongo="$ELCHI_MONGO_MODE" \
+    --mongo-version="$ELCHI_MONGO_VERSION" \
+    --mongo-database="$ELCHI_MONGO_DATABASE" \
+    --mongo-scheme="$ELCHI_MONGO_SCHEME" \
+    --mongo-port="$ELCHI_MONGO_PORT" \
+    --mongo-tls="$ELCHI_MONGO_TLS_ENABLED" \
+    --mongo-auth-source="$ELCHI_MONGO_AUTH_SOURCE" \
+    --mongo-timeout-ms="$ELCHI_MONGO_TIMEOUT_MS" \
+    --mongo-data-dir="$ELCHI_MONGO_DATA_DIR" \
+    ${ELCHI_MONGO_HOSTS:+--mongo-hosts="$ELCHI_MONGO_HOSTS"} \
+    ${ELCHI_MONGO_USERNAME:+--mongo-username="$ELCHI_MONGO_USERNAME"} \
+    ${ELCHI_MONGO_REPLICASET:+--mongo-replicaset="$ELCHI_MONGO_REPLICASET"} \
+    ${ELCHI_MONGO_AUTH_MECHANISM:+--mongo-auth-mechanism="$ELCHI_MONGO_AUTH_MECHANISM"} \
+    --vm="$ELCHI_VM_MODE" \
+    --vm-data-dir="$ELCHI_VM_DATA_DIR" \
+    --vm-retention="$ELCHI_VM_RETENTION" \
+    ${ELCHI_VM_ENDPOINT:+--vm-endpoint="$ELCHI_VM_ENDPOINT"} \
     $( [ "$ELCHI_INSTALL_COLLECTOR" = "0" ] && echo --no-collector ) \
     --clickhouse="$ELCHI_CLICKHOUSE_MODE" \
     --clickhouse-version="$ELCHI_CLICKHOUSE_VERSION" \
     --clickhouse-database="$ELCHI_CLICKHOUSE_DATABASE" \
-    ${ELCHI_CLICKHOUSE_URI:+--clickhouse-uri="$ELCHI_CLICKHOUSE_URI"} \
     --collector-version="$ELCHI_COLLECTOR_VERSION" \
     --collector-retention-days="$ELCHI_COLLECTOR_RETENTION_DAYS" \
+    --internal-communication="$ELCHI_INTERNAL_COMMUNICATION" \
+    --cors-origins="$ELCHI_CORS_ALLOWED_ORIGINS" \
+    --jwt-access-duration="$ELCHI_JWT_ACCESS_TOKEN_DURATION" \
+    --jwt-refresh-duration="$ELCHI_JWT_REFRESH_TOKEN_DURATION" \
+    --log-level="$ELCHI_LOG_LEVEL" \
+    --log-format="$ELCHI_LOG_FORMAT" \
+    $( [ "$ELCHI_ENABLE_DEMO" = "true" ] && echo --enable-demo ) \
+    ${ELCHI_GRAFANA_USER:+--grafana-user="$ELCHI_GRAFANA_USER"} \
     $( [ "$ELCHI_INSTALL_GSLB" = "1" ] && echo --gslb ) \
     ${ELCHI_GSLB_ZONE:+--gslb-zone="$ELCHI_GSLB_ZONE"} \
     ${ELCHI_GSLB_ADMIN_EMAIL:+--gslb-admin-email="$ELCHI_GSLB_ADMIN_EMAIL"} \
+    ${ELCHI_GSLB_NAMESERVERS:+--gslb-nameservers="$ELCHI_GSLB_NAMESERVERS"} \
+    ${ELCHI_GSLB_REGIONS:+--gslb-regions="$ELCHI_GSLB_REGIONS"} \
+    ${ELCHI_GSLB_FORWARDERS:+--gslb-forwarders="$ELCHI_GSLB_FORWARDERS"} \
+    ${ELCHI_GSLB_STATIC_RECORDS:+--gslb-static-records="$ELCHI_GSLB_STATIC_RECORDS"} \
+    --gslb-ttl="$ELCHI_GSLB_TTL" \
+    --gslb-sync-interval="$ELCHI_GSLB_SYNC_INTERVAL" \
+    --gslb-timeout="$ELCHI_GSLB_TIMEOUT" \
+    $( [ "$ELCHI_GSLB_TLS_SKIP_VERIFY" = "1" ] && echo --gslb-tls-skip-verify ) \
     $( [ "$ELCHI_NO_FIREWALL" = "1" ] && echo --no-firewall ) \
     $( [ "$ELCHI_UPGRADE_OS" = "1" ] && echo --upgrade-os ) \
     $( [ "$ELCHI_UPGRADE_MODE" = "1" ] && echo --upgrade-mode ) \
     --non-interactive
 }
 
+# _load_secrets_from_file — source the orchestrator-staged secrets file
+# into the current shell, exporting every KEY=value as an env var. Runs
+# BEFORE source_libs / require_root, so any subsequent function reading
+# ELCHI_BUNDLE_KEY / ELCHI_MONGO_PASSWORD / ELCHI_MONGO_URI /
+# ELCHI_CLICKHOUSE_URI / ELCHI_GRAFANA_PASSWORD sees the values.
+#
+# The file is the credential transport that replaces argv-passed
+# secrets on the orchestrator → remote SSH hop: a plain --bundle-key=...
+# / --mongo-password=... etc. lands in /proc/<pid>/cmdline on the
+# remote during the install window. A 0600 root-only file does not.
+_load_secrets_from_file() {
+  [ -n "${ELCHI_SECRETS_FROM:-}" ] || return 0
+  if [ ! -r "$ELCHI_SECRETS_FROM" ]; then
+    printf 'fatal: --secrets-from file not readable: %s\n' "$ELCHI_SECRETS_FROM" >&2
+    exit 1
+  fi
+  # set -a auto-exports every assignment in the sourced file. The file
+  # is built by orchestrate() with printf %q-escaped values, so embedded
+  # shell metachars (passwords with `$`, `'`, etc.) round-trip safely.
+  set -a
+  # shellcheck disable=SC1090
+  . "$ELCHI_SECRETS_FROM"
+  set +a
+}
+
+# _remote_install_cleanup — wipe the credential-bearing files the
+# orchestrator left on this remote node. Registered as part of the EXIT
+# trap (composed with common.sh's _elchi_exit_trap) so it runs on every
+# termination path: clean exit, die, signal, set -e abort. Without
+# this, the encrypted bundle + secrets file would persist forever as a
+# pair of at-rest copy-paste blobs of every cluster secret.
+#
+# Phase awareness: a remote install runs as TWO SSH sessions
+# (--install-phase=1 then =2). Phase 1 must KEEP the files so phase 2
+# can still consume them; only phase 2 (or a single-phase / `all` run)
+# performs the wipe.
+_remote_install_cleanup() {
+  case "${ELCHI_INSTALL_PHASE:-all}" in
+    1) return 0 ;;
+  esac
+  # --keep-bundle is the explicit debug opt-out — when set, BOTH the
+  # bundle AND the secrets file are preserved so the operator can
+  # inspect / re-decrypt mid-incident. Otherwise both are scrubbed.
+  if [ "${ELCHI_KEEP_BUNDLE:-0}" = "1" ]; then
+    return 0
+  fi
+  rm -f /opt/elchi-installer/.bundle.tar.gz.enc 2>/dev/null || true
+  if [ -n "${ELCHI_SECRETS_FROM:-}" ] && [ -f "$ELCHI_SECRETS_FROM" ]; then
+    rm -f "$ELCHI_SECRETS_FROM" 2>/dev/null || true
+  fi
+}
+
 # ----- entry point -------------------------------------------------------
 main() {
   parse_args "$@"
+  _load_secrets_from_file
   source_libs
   require_root
 
@@ -1572,6 +1752,13 @@ main() {
   fi
 
   if [ "$ELCHI_SKIP_ORCHESTRATION" = "1" ]; then
+    # Compose the EXIT trap to also wipe the orchestrator-staged
+    # credential files (encrypted bundle + secrets-from file). Runs on
+    # every termination path so a die / kill / set -e abort cleans up
+    # too — common.sh's _elchi_exit_trap stays last in the chain to
+    # preserve the "installer exited with rc=N" final-line behaviour.
+    trap '_remote_install_cleanup; _elchi_exit_trap' EXIT
+
     # Remote node mode — bundle is the source of truth for shared
     # secrets/TLS/topology; we only run local_install.
     local_install

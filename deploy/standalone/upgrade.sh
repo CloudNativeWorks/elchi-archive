@@ -212,9 +212,34 @@ CUR_UI=$(awk '/^  ui:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 CUR_ENVOY=$(awk '/^  envoy:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 CUR_COREDNS=$(awk '/^  coredns:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 CUR_COLLECTOR=$(awk '/^  collector:/{print $2; exit}' /etc/elchi/topology.full.yaml)
-# elchi-collector / ClickHouse feature state persisted in the cluster block.
-CUR_INSTALL_COLLECTOR=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+install_collector:/{print $2; exit}' /etc/elchi/topology.full.yaml)
-CUR_CLICKHOUSE_MODE=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+clickhouse_mode:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+# Cluster-block fields persisted by topology::compute. These cover every
+# operator-tunable knob that affects rendered configs — without
+# re-supplying them on upgrade, install.sh's defaults would silently
+# overwrite the operator's intent (external mode → local, custom CORS →
+# *, custom JWT TTL → defaults, etc).
+_cluster_get() {
+  awk -v k="$1" '/^cluster:/{f=1; next} f && $1 == k":"{print $2; exit}' \
+    /etc/elchi/topology.full.yaml
+}
+CUR_INSTALL_COLLECTOR=$(_cluster_get install_collector)
+CUR_CLICKHOUSE_MODE=$(  _cluster_get clickhouse_mode)
+CUR_MONGO_MODE=$(       _cluster_get mongo_mode)
+CUR_VM_MODE=$(          _cluster_get vm_mode)
+CUR_VM_ENDPOINT=$(      _cluster_get vm_endpoint)
+CUR_INTERNAL_COMM=$(    _cluster_get internal_communication)
+CUR_CORS_ORIGINS=$(     _cluster_get cors_origins)
+CUR_JWT_ACCESS=$(       _cluster_get jwt_access_duration)
+CUR_JWT_REFRESH=$(      _cluster_get jwt_refresh_duration)
+CUR_LOG_LEVEL=$(        _cluster_get log_level)
+CUR_LOG_FORMAT=$(       _cluster_get log_format)
+CUR_ENABLE_DEMO=$(      _cluster_get enable_demo)
+CUR_HOSTNAMES=$(        _cluster_get hostnames)
+CUR_GSLB_FORWARDERS=$(  _cluster_get gslb_forwarders)
+CUR_GSLB_STATIC=$(      _cluster_get gslb_static_records)
+CUR_GSLB_TTL=$(         _cluster_get gslb_ttl)
+CUR_GSLB_SYNC=$(        _cluster_get gslb_sync_interval)
+CUR_GSLB_TIMEOUT=$(     _cluster_get gslb_timeout)
+CUR_GSLB_TLS_SKIP=$(    _cluster_get gslb_tls_skip_verify)
 mapfile -t CUR_VARIANTS < <(awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
                                  f && /^[a-zA-Z]/{exit}' /etc/elchi/topology.full.yaml)
 
@@ -412,6 +437,50 @@ if [ "$CUR_CLICKHOUSE_MODE" = "external" ] && [ -f /etc/elchi/collector.env ]; t
   CUR_CLICKHOUSE_URI=$(grep -E '^CLICKHOUSE_URI=' /etc/elchi/collector.env 2>/dev/null | head -n1 | cut -d= -f2-)
   [ -n "$CUR_CLICKHOUSE_URI" ] && cmd+=(--clickhouse-uri="$CUR_CLICKHOUSE_URI")
 fi
+
+# Mongo mode + external URI / password. mongo_mode lives in topology;
+# the secret-bearing URI / password do NOT (topology is world-readable)
+# and are recovered from the running config-prod.yaml instead.
+[ -n "$CUR_MONGO_MODE" ]         && cmd+=(--mongo="$CUR_MONGO_MODE")
+if [ "$CUR_MONGO_MODE" = "external" ]; then
+  # Pull the operator's external mongo URI from a config-prod.yaml on
+  # disk. Any backend variant's copy works — they all render the same
+  # MONGODB_HOSTS line. We use HOSTS as the canonical signal and let
+  # install.sh's parse_mongo_uri / _resolve_mongo_hosts derive the rest.
+  _cur_mongo_hosts=$(awk -F'"' '/^MONGODB_HOSTS:/{print $2; exit}' \
+    /etc/elchi/*/config-prod.yaml 2>/dev/null | head -n1)
+  _cur_mongo_user=$( awk -F'"' '/^MONGODB_USERNAME:/{print $2; exit}' \
+    /etc/elchi/*/config-prod.yaml 2>/dev/null | head -n1)
+  _cur_mongo_pwd=$(  awk -F'"' '/^MONGODB_PASSWORD:/{print $2; exit}' \
+    /etc/elchi/*/config-prod.yaml 2>/dev/null | head -n1)
+  [ -n "$_cur_mongo_hosts" ] && cmd+=(--mongo-hosts="$_cur_mongo_hosts")
+  [ -n "$_cur_mongo_user" ]  && cmd+=(--mongo-username="$_cur_mongo_user")
+  [ -n "$_cur_mongo_pwd" ]   && cmd+=(--mongo-password="$_cur_mongo_pwd")
+fi
+
+# VictoriaMetrics mode + endpoint. Endpoint is plain (no creds) — safe
+# to persist in topology, so we forward it verbatim here.
+[ -n "$CUR_VM_MODE" ]            && cmd+=(--vm="$CUR_VM_MODE")
+[ -n "$CUR_VM_ENDPOINT" ]        && cmd+=(--vm-endpoint="$CUR_VM_ENDPOINT")
+
+# Backend behaviour — every node renders identical config-prod.yaml.
+[ -n "$CUR_INTERNAL_COMM" ]      && cmd+=(--internal-communication="$CUR_INTERNAL_COMM")
+[ -n "$CUR_CORS_ORIGINS" ]       && cmd+=(--cors-origins="$CUR_CORS_ORIGINS")
+[ -n "$CUR_JWT_ACCESS" ]         && cmd+=(--jwt-access-duration="$CUR_JWT_ACCESS")
+[ -n "$CUR_JWT_REFRESH" ]        && cmd+=(--jwt-refresh-duration="$CUR_JWT_REFRESH")
+[ -n "$CUR_LOG_LEVEL" ]          && cmd+=(--log-level="$CUR_LOG_LEVEL")
+[ -n "$CUR_LOG_FORMAT" ]         && cmd+=(--log-format="$CUR_LOG_FORMAT")
+[ "$CUR_ENABLE_DEMO" = "true" ]  && cmd+=(--enable-demo)
+[ -n "$CUR_HOSTNAMES" ]          && cmd+=(--hostnames="$CUR_HOSTNAMES")
+
+# GSLB extras beyond zone/admin-email (those were already forwarded below).
+[ -n "$CUR_GSLB_FORWARDERS" ]    && cmd+=(--gslb-forwarders="$CUR_GSLB_FORWARDERS")
+[ -n "$CUR_GSLB_STATIC" ]        && cmd+=(--gslb-static-records="$CUR_GSLB_STATIC")
+[ -n "$CUR_GSLB_TTL" ]           && cmd+=(--gslb-ttl="$CUR_GSLB_TTL")
+[ -n "$CUR_GSLB_SYNC" ]          && cmd+=(--gslb-sync-interval="$CUR_GSLB_SYNC")
+[ -n "$CUR_GSLB_TIMEOUT" ]       && cmd+=(--gslb-timeout="$CUR_GSLB_TIMEOUT")
+[ "$CUR_GSLB_TLS_SKIP" = "1" ]   && cmd+=(--gslb-tls-skip-verify)
+
 [ -n "$NEW_MONGO_VERSION" ]      && cmd+=(--mongo-version="$NEW_MONGO_VERSION")
 [ -n "$NEW_GRAFANA_USER" ]       && cmd+=(--grafana-user="$NEW_GRAFANA_USER")
 [ -n "$NEW_GRAFANA_PASSWORD" ]   && cmd+=(--grafana-password="$NEW_GRAFANA_PASSWORD")
