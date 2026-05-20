@@ -61,6 +61,11 @@ Usage:
   elchi-stack mongo-status            replica-set health snapshot (M1 only)
                                        — primary, per-member state / health /
                                        uptime / replication lag / heartbeat msg
+  elchi-stack clickhouse-status       ClickHouse cluster health snapshot
+                                       (run on any CH node — first 3 by topology)
+                                       — version, Keeper quorum, elchi_cluster
+                                       member errors, Replicated DB engine,
+                                       per-table total/active replicas + delay
   elchi-stack export-bundle <out> [--reuse-bundle-key]
                                       repackage the encrypted cluster bundle.
                                        --reuse-bundle-key uses the install-time
@@ -69,7 +74,8 @@ Usage:
                                        to the existing cluster without
                                        redistributing a fresh decryption key.
   elchi-stack show-secret <name>      print a stored credential
-                                       (grafana | jwt | gslb | mongo-app | mongo-root | all)
+                                       (grafana | jwt | gslb | mongo-app | mongo-root |
+                                        clickhouse | collector | all)
   elchi-stack rotate-secret <name>    rotate JWT/GSLB/Grafana secret (cluster-wide restart for jwt/gslb)
   elchi-stack verify                  end-to-end cluster health check
                                        (registration logs, Envoy admin, listener ports)
@@ -543,6 +549,101 @@ cmd_mongo_status() {
   printf '\n'
 }
 
+# cmd_clickhouse_status — ClickHouse cluster health snapshot. Analogous
+# to cmd_mongo_status: runs on a ClickHouse node (first 3 by topology),
+# queries the LOCAL clickhouse-server, and prints Keeper quorum +
+# elchi_cluster member errors + Replicated database engine + per-table
+# replica state.
+cmd_clickhouse_status() {
+  if ! systemctl list-unit-files --no-legend clickhouse-server.service 2>/dev/null | grep -q .; then
+    printf 'clickhouse-status: this node does not run ClickHouse — run it on a CH node (first 3 in the topology)\n' >&2
+    exit 1
+  fi
+  if ! systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+    log::err "clickhouse-server NOT active on this node"
+    exit 1
+  fi
+
+  local sec=/etc/elchi/secrets.env
+  [ -r "$sec" ] || die "$sec not readable (need root)"
+  local user pwd db
+  user=$(grep -E '^ELCHI_CLICKHOUSE_USERNAME=' "$sec" | tail -n1 | cut -d= -f2-)
+  pwd=$(grep -E '^ELCHI_CLICKHOUSE_PASSWORD=' "$sec" | tail -n1 | cut -d= -f2-)
+  user=${user:-elchi}
+  [ -n "$pwd" ] || die "ELCHI_CLICKHOUSE_PASSWORD missing from $sec"
+  db=elchi
+
+  local size=1
+  if [ -f /etc/elchi/topology.full.yaml ]; then
+    size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+             /etc/elchi/topology.full.yaml)
+  fi
+
+  _ch_q() {
+    clickhouse-client --host 127.0.0.1 --port 9000 \
+      --user "$user" --password "$pwd" --query "$1" 2>&1
+  }
+
+  printf '%bClickHouse on this node%b\n' "$C_BOLD" "$C_RESET"
+  printf '  version : %s\n' "$(_ch_q 'SELECT version()')"
+  printf '  uptime  : %ss\n' "$(_ch_q 'SELECT uptime()')"
+
+  # Standalone shortcut. is_clickhouse_node caps CH at the first 3 nodes
+  # and uses standalone for size 1-2. No Keeper / no Replicated DB here.
+  if [ "${size:-1}" -lt 3 ] 2>/dev/null; then
+    printf '\n%bStandalone%b (cluster size=%s, no Keeper / cluster)\n' \
+      "$C_BOLD" "$C_RESET" "$size"
+    local db_engine
+    db_engine=$(_ch_q "SELECT engine FROM system.databases WHERE name='${db}'")
+    printf '  %s database engine : %s\n' "$db" "${db_engine:-<missing>}"
+    printf '\n'
+    return 0
+  fi
+
+  # ---- Cluster path ----
+  printf '\n%bKeeper%b\n' "$C_BOLD" "$C_RESET"
+  local keeper_children
+  keeper_children=$(_ch_q "SELECT count() FROM system.zookeeper WHERE path='/'")
+  if [[ "$keeper_children" =~ ^[0-9]+$ ]]; then
+    printf '  %s[ OK ]%s reachable (root children=%s) — quorum formed\n' \
+      "$C_GREEN" "$C_RESET" "$keeper_children"
+  else
+    printf '  %s[ERR ]%s unreachable: %s\n' "$C_RED" "$C_RESET" "$keeper_children"
+  fi
+
+  printf '\n%belchi_cluster members%b  (system.clusters)\n' "$C_BOLD" "$C_RESET"
+  _ch_q "SELECT host_address, port, errors_count, estimated_recovery_time
+           FROM system.clusters WHERE cluster='elchi_cluster' FORMAT TabSeparated" \
+    | awk -v g="$C_GREEN" -v y="$C_YELLOW" -v r="$C_RESET" '
+        BEGIN { printf "  %-18s %-6s %-8s %s\n","host","port","errors","recovery_s" }
+        NF    { tag = ($3+0 == 0 ? g"OK  "r : y"ERR "r);
+                printf "  %-18s %-6s %-8s %s  %s\n", $1, $2, $3, $4, tag }'
+
+  printf '\n%bDatabase %s%b\n' "$C_BOLD" "$db" "$C_RESET"
+  local db_engine
+  db_engine=$(_ch_q "SELECT engine FROM system.databases WHERE name='${db}'")
+  if [ "$db_engine" = "Replicated" ]; then
+    printf '  %s[ OK ]%s engine: Replicated\n' "$C_GREEN" "$C_RESET"
+  else
+    printf '  %s[WARN]%s engine: %s (expected Replicated)\n' \
+      "$C_YELLOW" "$C_RESET" "${db_engine:-<missing>}"
+  fi
+
+  printf '\n%bReplicated tables%b  (system.replicas)\n' "$C_BOLD" "$C_RESET"
+  local rep_out
+  rep_out=$(_ch_q "SELECT database, table, total_replicas, active_replicas,
+                          queue_size, absolute_delay
+                     FROM system.replicas FORMAT TabSeparated")
+  if [ -z "$rep_out" ] || ! printf '%s' "$rep_out" | head -1 | grep -q .; then
+    printf '  (no replicated tables yet — the collector creates them on its first ALS write)\n'
+  else
+    printf '%s\n' "$rep_out" \
+      | awk 'BEGIN { printf "  %-10s %-24s %-7s %-7s %-6s %s\n","db","table","total","active","queue","delay_s" }
+             NF    { printf "  %-10s %-24s %-7s %-7s %-6s %s\n", $1, $2, $3, $4, $5, $6 }'
+  fi
+  printf '\n'
+}
+
 cmd_export_bundle() {
   local out='' reuse_key=0
   while [ "$#" -gt 0 ]; do
@@ -684,6 +785,16 @@ cmd_show_secret() {
       printf 'username: %s\npassword: %s\n' \
         "$(_read ELCHI_MONGO_ROOT_USERNAME)" "$(_read ELCHI_MONGO_ROOT_PASSWORD)"
       ;;
+    clickhouse)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_CLICKHOUSE_USERNAME)" "$(_read ELCHI_CLICKHOUSE_PASSWORD)"
+      ;;
+    collector)
+      # HASH_SALT seeds the SHA-256 of source IP / user-agent / consumer
+      # values. It is intentionally NOT rotatable — rotating breaks the
+      # correlation of every event already in ClickHouse.
+      printf 'hash-salt: %s\n' "$(_read ELCHI_COLLECTOR_HASH_SALT)"
+      ;;
     all)
       printf '%sCredentials at %s (mode 0640 root:elchi)%s\n\n' \
         "$C_BOLD" "$sec_file" "$C_RESET"
@@ -697,6 +808,10 @@ cmd_show_secret() {
         "$(_read ELCHI_MONGO_USERNAME)" "$(_read ELCHI_MONGO_PASSWORD)"
       printf '  %sMongo root:%s      %s / %s\n' "$C_CYAN" "$C_RESET" \
         "$(_read ELCHI_MONGO_ROOT_USERNAME)" "$(_read ELCHI_MONGO_ROOT_PASSWORD)"
+      printf '  %sClickHouse user:%s %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_CLICKHOUSE_USERNAME)" "$(_read ELCHI_CLICKHOUSE_PASSWORD)"
+      printf '  %sCollector salt:%s  %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_COLLECTOR_HASH_SALT)"
       ;;
     "")
       die "secret name required (one of: grafana, jwt, gslb, mongo-app, mongo-root, all)"
@@ -790,6 +905,7 @@ case "${1:-}" in
   add-node)          shift; cmd_add_node "$@" ;;
   init-replica-set)  shift; cmd_init_rs "$@" ;;
   mongo-status)      shift; cmd_mongo_status "$@" ;;
+  clickhouse-status) shift; cmd_clickhouse_status "$@" ;;
   export-bundle)     shift; cmd_export_bundle "$@" ;;
   show-secret)       shift; cmd_show_secret "$@" ;;
   rotate-secret)     shift; cmd_rotate_secret "$@" ;;
