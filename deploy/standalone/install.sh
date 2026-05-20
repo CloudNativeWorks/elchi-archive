@@ -1328,11 +1328,25 @@ orchestrate() {
   # point — without it the cluster would silently keep depending on
   # the original login user (root). Operator opts out with
   # --no-admin-user (sets ELCHI_CREATE_ADMIN_USER=0).
-  if [ "${ELCHI_CREATE_ADMIN_USER:-1}" = "1" ] && [ -n "${ELCHI_ADMIN_USER:-}" ]; then
+  #
+  # Single-VM short-circuit: when every host in --nodes is local, there
+  # is no remote to SSH into and the cluster key is not needed. Skip
+  # the provisioning step (it would die on the ELCHI_SSH_KEY assertion
+  # in --no-bootstrap / curl-one-liner installs). Operator can still
+  # add the admin user manually after install, and any later add-node
+  # will trigger provisioning on its own remote-aware path.
+  local _remote_count=0 _h
+  for _h in "${hosts[@]}"; do
+    ssh::is_local "$_h" || _remote_count=$(( _remote_count + 1 ))
+  done
+  if [ "${ELCHI_CREATE_ADMIN_USER:-1}" = "1" ] && [ -n "${ELCHI_ADMIN_USER:-}" ] \
+     && [ "$_remote_count" -gt 0 ]; then
     if [ "$ELCHI_SSH_USER" != "$ELCHI_ADMIN_USER" ]; then
       ssh::ensure_admin_user_everywhere \
         "$ELCHI_SSH_USER" "$ELCHI_ADMIN_USER" "$ELCHI_SSH_PORT" "${hosts[@]}"
     fi
+  elif [ "$_remote_count" -eq 0 ]; then
+    log::info "single-VM install detected — skipping admin user / cluster key provisioning"
   fi
 
   log::info "verifying SSH access to ${#hosts[@]} node(s)"
