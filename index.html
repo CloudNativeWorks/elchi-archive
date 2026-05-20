@@ -1614,6 +1614,30 @@
                 for (var j = 1; j < lines.length; j++) {
                     out.push(lines[j].length >= minIndent ? lines[j].slice(minIndent) : lines[j]);
                 }
+                // Auto-fix shell line continuations: every non-last
+                // non-empty line MUST end with " \" so the operator can
+                // paste the block verbatim. Without this, a missing
+                // backslash on the source line ("curl -fsSL\n  https://…")
+                // becomes "curl -fsSL ↵ https://…" → bash runs `curl
+                // -fsSL` with no URL and then tries to execute the URL
+                // as a command. Append " \" to any line that doesn't
+                // already end with one and has a following non-empty
+                // line. Lines that already end with " \" are left
+                // alone; the final non-empty line stays bare.
+                for (var k = 0; k < out.length - 1; k++) {
+                    if (!out[k].trim()) continue;
+                    // Find the next non-empty line; if none, this is
+                    // effectively the last command-bearing line.
+                    var hasNext = false;
+                    for (var n = k + 1; n < out.length; n++) {
+                        if (out[n].trim()) { hasNext = true; break; }
+                    }
+                    if (!hasNext) break;
+                    var trimmed = out[k].replace(/\s+$/, '');
+                    if (!/\\$/.test(trimmed)) {
+                        out[k] = trimmed + ' \\';
+                    }
+                }
                 el.textContent = out.join('\n');
             });
         }

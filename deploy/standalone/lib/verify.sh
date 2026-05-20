@@ -287,8 +287,18 @@ verify::_mongo_rs_leader() {
     return 0
   fi
 
-  if ! command -v mongosh >/dev/null 2>&1 && ! command -v mongo >/dev/null 2>&1; then
-    log::warn "mongo: mongosh not installed — skipping RS PRIMARY probe"
+  # Pick the mongo client binary directly — earlier revisions called
+  # `mongodb::_mongosh` here, which works in install.sh's flow but blows
+  # up in upgrade.sh's health gate (which sources lib/verify.sh but
+  # NOT lib/mongodb.sh, so the helper is undefined → rc=127 → probe
+  # fails for the wrong reason). Resolving the binary locally keeps
+  # this function self-contained and side-steps the cross-lib
+  # dependency.
+  local mongo_cli=''
+  if   command -v mongosh >/dev/null 2>&1; then mongo_cli=mongosh
+  elif command -v mongo   >/dev/null 2>&1; then mongo_cli=mongo
+  else
+    log::warn "mongo: mongosh / mongo client not installed — skipping RS PRIMARY probe"
     return 0
   fi
 
@@ -306,7 +316,7 @@ verify::_mongo_rs_leader() {
   err_file=$(mktemp)
   local attempt
   for attempt in 1 2 3; do
-    out=$(mongodb::_mongosh --quiet --host 127.0.0.1 --port 27017 \
+    out=$("$mongo_cli" --quiet --host 127.0.0.1 --port 27017 \
             -u "$user" -p "$pwd" --authenticationDatabase admin --eval '
             try {
               var s = rs.status();
