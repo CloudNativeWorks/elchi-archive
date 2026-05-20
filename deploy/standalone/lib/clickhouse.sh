@@ -79,6 +79,7 @@ clickhouse::install_package() {
 
 clickhouse::_install_debian() {
   log::info "installing clickhouse-server from packages.clickhouse.com"
+  preflight::wait_apt_lock 600 || true
   apt-get install -y -qq apt-transport-https ca-certificates curl gnupg
 
   install -d -m 0755 /usr/share/keyrings
@@ -93,11 +94,13 @@ clickhouse::_install_debian() {
 deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] https://packages.clickhouse.com/deb stable main
 EOF
 
+  preflight::wait_apt_lock 600 || true
   apt-get update -qq || die "apt-get update failed after adding the ClickHouse repo"
   local v=$ELCHI_CLICKHOUSE_VERSION_RESOLVED
   # Exact pin only when the operator supplied a fully-qualified version
   # (>=3 dots, e.g. 24.8.14.39). The repo carries one `stable` channel,
   # so a "24.8" prefix can't be pinned — install current stable instead.
+  preflight::wait_apt_lock 600 || true
   if [ "$v" != "stable" ] && [ "$(printf '%s' "$v" | tr -cd '.' | wc -c)" -ge 3 ]; then
     log::info "pinning clickhouse packages to ${v}"
     apt-get install -y -qq \

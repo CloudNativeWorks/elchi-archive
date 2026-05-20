@@ -150,13 +150,16 @@ EOF
 }
 
 grafana::_install_debian() {
+  preflight::wait_apt_lock 600 || true
   apt-get install -y -qq apt-transport-https software-properties-common gnupg curl
   install -d -m 0755 /etc/apt/keyrings
   curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
   chmod 0644 /etc/apt/keyrings/grafana.gpg
   echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
     > /etc/apt/sources.list.d/grafana.list
+  preflight::wait_apt_lock 600 || true
   apt-get update -qq
+  preflight::wait_apt_lock 600 || true
   apt-get install -y -qq grafana
 }
 

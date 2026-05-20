@@ -50,6 +50,11 @@ nginx::setup() {
 nginx::_install() {
   case "$ELCHI_OS_FAMILY" in
     debian)
+      # Wait for cloud-init / unattended-upgrades to release the dpkg
+      # lock before installing — on fresh cloud VMs these can still be
+      # running 5+ minutes after first boot, and racing them turns into
+      # "Could not get lock /var/lib/dpkg/lock-frontend" mid-install.
+      preflight::wait_apt_lock 600 || true
       apt-get install -y -qq nginx-light || apt-get install -y -qq nginx \
         || die "failed to install nginx via apt"
       ;;
