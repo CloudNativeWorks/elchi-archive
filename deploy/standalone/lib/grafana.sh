@@ -131,12 +131,29 @@ EOF
     "$GRAFANA_INI" \
     "$GRAFANA_DS" \
     "$GRAFANA_DASH_CFG"
-  # 120s timeout — Grafana 13 first-start runs dashboard provisioning,
+  # 240s timeout — Grafana 13 first-start runs dashboard provisioning,
   # alerting cache warm-up, and bleve index building before binding the
-  # HTTP listener. 60s was tight on slow disks / first-time package
-  # cache cold paths.
-  wait_for_tcp 127.0.0.1 "$ELCHI_PORT_GRAFANA" 120 \
-    || die "grafana did not come up on :${ELCHI_PORT_GRAFANA} within 120s — check 'journalctl -u grafana-server'"
+  # HTTP listener. On 1 GB RAM VMs where mongo + clickhouse + envoy + VM
+  # + otel + collector + nginx are all competing for memory at the same
+  # time, swap thrashing pushes that easily past 120s. 240s gives the
+  # slowest realistic single-VM topology a fair window; faster hosts
+  # still bind in ~10-30s and don't notice the bump.
+  if ! wait_for_tcp 127.0.0.1 "$ELCHI_PORT_GRAFANA" 240; then
+    log::err "grafana did not come up on :${ELCHI_PORT_GRAFANA} within 240s — last 60 journal lines:"
+    systemctl status grafana-server.service --no-pager -l 2>&1 \
+      | sed 's/^/    /' | tail -30 >&2 || true
+    journalctl -u grafana-server.service --no-pager -n 60 2>&1 \
+      | sed 's/^/    /' >&2 || true
+    # Hint at the common 1GB-RAM swap thrash mode the timeout almost
+    # always points to. Operator can verify via free/dmesg.
+    local _mem_gb
+    _mem_gb=$(awk '/^MemTotal:/ {print int($2/1024/1024)}' /proc/meminfo 2>/dev/null)
+    if [ -n "$_mem_gb" ] && [ "$_mem_gb" -lt 4 ] 2>/dev/null; then
+      log::err "  system RAM is ${_mem_gb}GB — single-VM all-in-one needs 4GB+ for clean cold-start"
+      log::err "  if grafana is still booting, wait for systemctl is-active grafana-server, then retry the install (it will be idempotent)"
+    fi
+    die "grafana startup failed (see journal above)"
+  fi
 
   # Helm uses an emptyDir for /var/lib/grafana — admin password is set
   # fresh on every restart from the env var. We persist /var/lib/grafana,
