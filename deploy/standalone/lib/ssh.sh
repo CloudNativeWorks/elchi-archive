@@ -167,7 +167,15 @@ ssh::run() {
   fi
   local quoted
   quoted=$(printf '%q ' "$@")
-  ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- "$quoted"
+  # -n redirects ssh's stdin from /dev/null. WITHOUT this, when ssh::run
+  # is called inside a `while read … done < file` loop, ssh inherits the
+  # loop's stdin (the input file), reads-and-discards the remaining
+  # lines, and the loop silently terminates early — the classic
+  # "ssh ate my for-loop" bug. cmd_status / cmd_verify / cmd_logs all
+  # iterate /etc/elchi/nodes.list this way; -n keeps them honest.
+  # ssh::run_sudo's password-via-stdin path uses ssh::_wrap directly
+  # (NOT ssh::run), so it is unaffected.
+  ssh::_wrap ssh -n "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- "$quoted"
 }
 
 # ssh::run_sudo <host> <cmd...> — run as root via sudo on the remote.
