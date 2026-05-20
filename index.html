@@ -1573,6 +1573,56 @@
             document.getElementById('install-download').innerHTML = downloadHtml;
         }
 
+        // Dedent every <div class="stdl-cmd"> block. HTML source keeps
+        // human-readable indentation (continuation lines start with
+        // 16+ spaces to visually align with the surrounding markup)
+        // but CSS `white-space: pre` would otherwise render those
+        // leading spaces verbatim, pushing every continuation line of
+        // the curl example far to the right.
+        //
+        // The common pattern is `<div>first-token
+        //              continuation
+        //              continuation</div>` — the first line is on the
+        // same line as the opening tag (0 leading spaces) while every
+        // subsequent line carries the HTML indent level. Naive
+        // min-indent dedent strips 0 (because the first line has 0)
+        // and does nothing useful. Compute the min-indent across
+        // continuation lines only, then strip that from those lines
+        // while leaving the first line alone.
+        function dedentCmdBlocks() {
+            document.querySelectorAll('.stdl-cmd').forEach(function (el) {
+                var raw = el.textContent;
+                var lines = raw.split('\n');
+                while (lines.length && lines[0].trim() === '') lines.shift();
+                while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+                if (lines.length < 2) {
+                    el.textContent = lines.join('\n');
+                    return;
+                }
+                // Continuation indent = min leading-space across non-empty lines after the first.
+                var minIndent = Infinity;
+                for (var i = 1; i < lines.length; i++) {
+                    if (lines[i].trim() === '') continue;
+                    var m = lines[i].match(/^ */);
+                    if (m && m[0].length < minIndent) minIndent = m[0].length;
+                }
+                if (!isFinite(minIndent) || minIndent === 0) {
+                    el.textContent = lines.join('\n');
+                    return;
+                }
+                var out = [lines[0]];
+                for (var j = 1; j < lines.length; j++) {
+                    out.push(lines[j].length >= minIndent ? lines[j].slice(minIndent) : lines[j]);
+                }
+                el.textContent = out.join('\n');
+            });
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', dedentCmdBlocks);
+        } else {
+            dedentCmdBlocks();
+        }
+
         // Load data
         fetch('index.json')
             .then(response => response.json())
