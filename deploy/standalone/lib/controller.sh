@@ -103,7 +103,12 @@ EOF
   log::info "installed controller unit (versions[0]=${first_variant})"
 
   systemd::reload
-  systemd::install_and_apply elchi-controller.service
+  # config-prod.yaml is the controller's --config path-arg; fold it
+  # into install_and_apply's fingerprint so a re-render bounces the
+  # controller on rerun. Without this, edits to operator config
+  # (cors_origins, jwt_*, log_*, etc.) write to disk but the
+  # controller never sees them until manual restart.
+  systemd::install_and_apply elchi-controller.service "${conf}/config-prod.yaml"
 
   # Healthcheck — controller binds REST on 1980 and gRPC on 1960 by
   # default. Probe REST since it always answers TCP regardless of

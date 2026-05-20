@@ -26,7 +26,7 @@
 # elchi-backend — one or more full variant asset tags, comma-separated.
 # Each tag is the release-asset basename; the GitHub release tag is
 # derived per-variant (e.g. elchi-v1.2.5-... → release v1.2.5).
-ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.3.9-v0.14.0-envoy1.36.2"
+ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.4.0-v0.14.0-envoy1.36.2"
 
 # elchi UI bundle (static web assets served by nginx).
 ELCHI_DEFAULT_UI_VERSION="v1.3.6"

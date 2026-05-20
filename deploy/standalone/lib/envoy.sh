@@ -542,12 +542,64 @@ envoy::_emit_clusters() {
             connection_keepalive:
               interval: 30s
               timeout: 10s
+    # healthy_panic_threshold=0 is critical for a leader-pinned health
+    # check: when the active leader dies and election is in flight, ALL
+    # endpoints briefly report NOT_SERVING. Envoy's default panic mode
+    # (kicks in at <50% healthy) would then route to ALL endpoints
+    # including followers — the ext_proc routing decision arrives at
+    # a non-leader and silently produces the wrong x-target-cluster
+    # header. With panic_threshold=0 the client gets an explicit 503
+    # for the ~election window instead; UI auto-retries, by then the
+    # new leader is SERVING. Explicit failure beats silent misrouting.
+    common_lb_config:
+      healthy_panic_threshold:
+        value: 0
     health_checks:
     - timeout: 1s
-      interval: 5s
-      unhealthy_threshold: 2
+      interval: 3s              # 5s → 3s: faster leader-failover detect
+      unhealthy_threshold: 1    # 2 → 1: first failed check ejects (gRPC
+                                # health-check is a passive ping; one
+                                # NOT_SERVING reply is authoritative)
       healthy_threshold: 1
       grpc_health_check: {}
+    # outlier_detection — request-level eject for endpoints returning
+    # gRPC Unavailable / connect failures. Tightens the brief overlap
+    # window where the OLD leader still appears HC-healthy but is
+    # actively rejecting requests (it has already stepped down
+    # internally). consecutive_gateway_failure: 1 reacts on the first
+    # connection-level failure; consecutive_5xx: 3 avoids one-off
+    # backend hiccups from cascade-ejecting the cluster.
+    outlier_detection:
+      consecutive_gateway_failure: 1
+      consecutive_5xx: 3
+      base_ejection_time: 10s
+      max_ejection_percent: 100
+      enforcing_consecutive_gateway_failure: 100
+      enforcing_consecutive_5xx: 100
+    circuit_breakers:
+      thresholds:
+      - priority: DEFAULT
+        max_connections: 100
+        max_pending_requests: 100
+        max_requests: 1000
+        max_retries: 3
+    # max_requests_per_connection is NOT set — earlier revisions had it
+    # at 50 to "break HTTP/2 stickiness so RR actually round-robins";
+    # that mental model is wrong here:
+    #   * panic_threshold=0 + leader-pinned grpc_health_check means
+    #     exactly ONE endpoint is healthy at a time. RR is irrelevant —
+    #     there is no second healthy endpoint to round-robin to.
+    #   * gRPC multiplexes RPCs as HTTP/2 streams on ONE long-lived
+    #     TCP connection. Forcing conn rotation every 50 RPCs adds a
+    #     TCP+TLS+HTTP/2 handshake (~100-300ms p99 spike) at every
+    #     boundary, on a path where the binary is doing 100+ RPC/sec.
+    #   * Bidirectional streaming RPCs (controller→registry watch
+    #     streams) would be killed mid-stream by the conn rotation.
+    # Leader transition is already handled by health_checks +
+    # outlier_detection +
+    # close_connections_on_host_health_failure below, all of which
+    # ONLY act on failure — steady-state connections stay open.
+    close_connections_on_host_health_failure: true
     load_assignment:
       cluster_name: registry-cluster
       endpoints:

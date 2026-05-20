@@ -64,7 +64,13 @@ control_plane::create_instances() {
     if [ -z "$cp_p" ] || [ "$cp_p" = "null" ]; then
       cp_p=$(control_plane::_default_port "$v")
     fi
-    systemd::install_and_apply "elchi-control-plane-${sanitized}@0.service"
+    # config-prod.yaml is the control-plane's --config path-arg.
+    # Folding it into the fingerprint ensures an operator config
+    # re-render (cors_origins, jwt_*, log_*, etc.) actually bounces
+    # this instance on rerun — without it the file changes but the
+    # process keeps the old values until a manual restart.
+    systemd::install_and_apply "elchi-control-plane-${sanitized}@0.service" \
+      "${ELCHI_ETC}/${v}/config-prod.yaml"
     # 90s — same first-boot mongo / xDS bootstrap window as registry +
     # controller. Cold cluster electing PRIMARY can stretch first bind.
     if ! wait_for_tcp 127.0.0.1 "$cp_p" 90; then

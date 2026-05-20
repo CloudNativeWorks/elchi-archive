@@ -106,7 +106,14 @@ EOF
   install -m 0644 -o root -g root "${unit}.tmp" "$unit"
   rm -f "${unit}.tmp"
   systemd::reload
-  systemd::install_and_apply elchi-registry.service
+  # config-prod.yaml is a path-arg in ExecStart (--config ...), not an
+  # EnvironmentFile, so install_and_apply cannot infer it from the
+  # unit file alone. Folding it into the fingerprint here means an
+  # operator config change (e.g. --cors-origins, --jwt-*, --log-*)
+  # that re-renders config-prod.yaml actually bounces registry on
+  # rerun; without this the file changes but registry keeps running
+  # with the old values until the next reboot.
+  systemd::install_and_apply elchi-registry.service "${conf}/config-prod.yaml"
   # First-boot timeout bumped to 90s: registry runs through a mongo
   # connect + leader-election bootstrap before binding. The orchestrator
   # only just finished rs.initiate() seconds before this call, so the
