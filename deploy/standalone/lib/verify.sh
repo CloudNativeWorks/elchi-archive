@@ -292,27 +292,57 @@ verify::_mongo_rs_leader() {
     return 0
   fi
 
-  local user pwd out
+  local user pwd out rc=0 err=''
   user=$(grep '^MONGO_ROOT_USERNAME=' /etc/elchi/mongo/root.env | cut -d= -f2-)
   pwd=$( grep '^MONGO_ROOT_PASSWORD=' /etc/elchi/mongo/root.env | cut -d= -f2-)
-  # One-shot rs.status() projection. Pipe-delimited so we can parse with
-  # plain `cut` — hostnames may contain ':' (host:port).
-  out=$(mongodb::_mongosh --quiet --host 127.0.0.1 --port 27017 \
-          -u "$user" -p "$pwd" --authenticationDatabase admin --eval '
-          try {
-            var s = rs.status();
-            var primary = s.members.filter(function(m){return m.stateStr==="PRIMARY";});
-            var healthy = s.members.filter(function(m){return m.health===1;}).length;
-            var self    = s.members.find(function(m){return m.self===true;}) || {};
-            print("RS_OK|" + (primary[0] ? primary[0].name : "NONE") +
-                  "|" + healthy + "|" + s.members.length +
-                  "|" + (self.stateStr || "UNKNOWN"));
-          } catch(e) {
-            print("RS_ERR|" + (e.codeName || "unknown") + "|" + (e.message || ""));
-          }' 2>/dev/null) || {
-    log::err "mongo: rs.status() RPC failed (auth wall? mongod restarting?)"
-    return 1
-  }
+
+  # Up to 3 attempts spaced 2s apart. mongod restarts during the upgrade
+  # window briefly close the auth wall as it boots; a single shot during
+  # that pocket would false-positive a still-healthy cluster. We also
+  # capture stderr so the operator sees the real mongosh error when the
+  # probe genuinely fails (auth wrong, connection refused, …) instead
+  # of the opaque "RPC failed" wrapper.
+  local err_file
+  err_file=$(mktemp)
+  local attempt
+  for attempt in 1 2 3; do
+    out=$(mongodb::_mongosh --quiet --host 127.0.0.1 --port 27017 \
+            -u "$user" -p "$pwd" --authenticationDatabase admin --eval '
+            try {
+              var s = rs.status();
+              var primary = s.members.filter(function(m){return m.stateStr==="PRIMARY";});
+              var healthy = s.members.filter(function(m){return m.health===1;}).length;
+              var self    = s.members.find(function(m){return m.self===true;}) || {};
+              print("RS_OK|" + (primary[0] ? primary[0].name : "NONE") +
+                    "|" + healthy + "|" + s.members.length +
+                    "|" + (self.stateStr || "UNKNOWN"));
+            } catch(e) {
+              print("RS_ERR|" + (e.codeName || "unknown") + "|" + (e.message || ""));
+            }' 2>"$err_file")
+    rc=$?
+    [ "$rc" = "0" ] && break
+    [ "$attempt" -lt 3 ] && sleep 2
+  done
+  err=$(head -c 400 "$err_file" 2>/dev/null | tr -d '\r' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+  rm -f "$err_file"
+
+  if [ "$rc" != "0" ]; then
+    # mongod is active (we checked above) and mongosh still wouldn't talk
+    # to it after 3 tries. Most often: a transient auth-wall flap during
+    # the upgrade restart cascade (mongosh hit it mid-handshake), or
+    # network namespace weirdness on the systemd-managed binary. The
+    # right response is to surface the real client error and DEGRADE TO
+    # WARN, not to abort upgrade and trigger binary rollback. If mongo
+    # were truly broken the per-unit checks above would already have
+    # flagged it; failing here on a flaky probe used to roll back
+    # healthy v1.4.x → v1.4.(x-1) binaries on the M1 node and leave the
+    # operator confused (cluster is fine, install said "FAILED").
+    log::warn "mongo: rs.status() probe failed after 3 attempts (rc=${rc}) — degrading to WARN"
+    [ -n "$err" ] && log::warn "  mongosh stderr: ${err}"
+    log::warn "  cluster services are independently verified above; this probe is advisory only"
+    log::warn "  manual check: sudo elchi-stack mongo-status"
+    return 0
+  fi
 
   local line
   line=$(printf '%s\n' "$out" | grep -E '^RS_(OK|ERR)\|' | head -n1)
