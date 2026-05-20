@@ -359,6 +359,31 @@
                 <code>--gslb-zone=&lt;your-delegated-domain&gt;</code> for a real authoritative deployment, or
                 <code>--no-gslb</code> to skip the plugin entirely.
             </p>
+            <p class="note" style="margin-top: 8px;">
+                <strong>Post-install UI activation (required for GSLB to actually serve records).</strong>
+                The installer ships and boots the CoreDNS daemon (TCP/UDP <code>:53</code>, webhook
+                <code>:8053</code>), but the backend-side configuration that the plugin polls for the
+                authoritative snapshot is OFF until you turn it on in the UI:
+            </p>
+            <ol style="font-size: 13px; color: #24292f; margin: 4px 0 8px;">
+                <li>Open the UI → <strong>Settings → GSLB</strong>.</li>
+                <li>Toggle <strong>Enable GSLB</strong>.</li>
+                <li>Set <strong>DNS Zone</strong> (the same value you passed as <code>--gslb-zone</code>; warning:
+                    zone cannot be changed later without a re-install).</li>
+                <li>Paste the <strong>DNS Secret</strong>. Grab it on M1 with
+                    <code>sudo elchi-stack show-secret gslb</code> — this is the
+                    <code>X-Elchi-Secret</code> the plugin uses to authenticate its
+                    <code>/dns/snapshot</code> poll to the backend, and the values MUST match.</li>
+                <li>Click <strong>Update Configuration</strong>. Within one
+                    <code>--gslb-sync-interval</code> (default 1 min) every node's CoreDNS plugin
+                    pulls the fresh snapshot and starts answering queries.</li>
+            </ol>
+            <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
+                Verify after activation: <code>dig @&lt;node-ip&gt; &lt;zone&gt; SOA +short</code> on any
+                node should return the SOA record. If it doesn't,
+                <code>journalctl -u elchi-coredns -n 50</code> and the plugin <code>/health</code>
+                endpoint on <code>127.0.0.1:8053</code> will say why (auth failure / snapshot poll error).
+            </p>
             <p class="info" style="margin-top: 8px;">
                 <strong>Variants &amp; replicas:</strong> each <code>--backend-version</code> entry is
                 ONE variant. The number of variants determines how many backend processes per node:
