@@ -280,11 +280,13 @@
         <h1>Elchi Archive</h1>
         <p>Pre-compiled binaries for Envoy, Coraza WASM, and Elchi Client</p>
 
-        <!-- Install method picker: Helm (Kubernetes/kind) vs Bare-Metal Standalone.
+        <!-- Install method picker: Helm (Kubernetes/kind) vs Bare-Metal Standalone
+             vs Elchi Client (data-plane agent on a remote VM/host).
              Default-selected is Helm to match the upstream-recommended path. -->
         <div class="install-tabs">
             <button class="install-tab active" onclick="switchInstall('helm', event)">🚀 Helm (Kubernetes / kind)</button>
             <button class="install-tab" onclick="switchInstall('standalone', event)">⚙️ Bare-Metal Standalone</button>
+            <button class="install-tab" onclick="switchInstall('client', event)">🛰️ Elchi Client</button>
         </div>
 
         <!-- Quick Install Section (Kubernetes / kind / Helm) -->
@@ -1460,6 +1462,132 @@
             </p>
         </div>
         </div><!-- /install-standalone pane -->
+
+        <!-- Elchi Client Install Section (data-plane agent for remote Envoy hosts) -->
+        <div id="install-client" class="install-pane">
+        <div id="client-install-section"
+            style="background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
+            <h3 style="margin-top: 0; color: #8250df;">🛰️ Elchi Client (data-plane agent)</h3>
+            <p style="margin-bottom: 12px;">
+                Install the <code>elchi-client</code> agent on a remote VM / bare-metal host so the
+                node registers itself with an existing elchi-stack control plane and starts
+                receiving Envoy / xDS configuration. Run on the TARGET host (the one that will
+                serve traffic) — NOT on the control-plane M1.
+            </p>
+            <p class="info" style="margin-bottom: 12px;">
+                <strong>Prerequisites:</strong> a running elchi-stack (Helm or Bare-Metal); the
+                control plane's <code>--main-address</code> reachable over HTTPS; a valid
+                auth token (min 8 chars) minted from the UI (Settings → Tokens).
+            </p>
+
+            <h4>1. Quick start</h4>
+
+            <h5>Production setup (default <code>--cloud=other</code>)</h5>
+            <div class="stdl-cmd">wget https://github.com/CloudNativeWorks/elchi-client/releases/download/v1.1.0/elchi-install.sh
+                sudo bash elchi-install.sh \
+                --name=web-server-01 \
+                --host=backend.elchi.io \
+                --port=443 \
+                --tls=true \
+                --token=your-auth-token</div>
+
+            <h5>OpenStack deployment (cloud name from UI)</h5>
+            <div class="stdl-cmd">sudo bash elchi-install.sh \
+                --name=openstack-vm \
+                --host=controller.elchi.io \
+                --port=443 \
+                --tls=true \
+                --token=prod-token \
+                --cloud=my-openstack</div>
+            <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
+                If you are deploying on OpenStack, pass <code>--cloud=&lt;your-cloud-name&gt;</code>
+                exactly as it appears in the UI's <strong>Settings → Clouds</strong> list — the
+                client uses this to look up the right metadata service / region.
+            </p>
+
+            <h5>With BGP routing (FRR install)</h5>
+            <div class="stdl-cmd">sudo bash elchi-install.sh \
+                --enable-bgp \
+                --name=edge-router \
+                --host=controller.elchi.io \
+                --port=443 \
+                --tls=true \
+                --token=prod-token \
+                --cloud=production</div>
+            <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
+                <code>--enable-bgp</code> additionally installs and configures FRR so the node
+                can announce VIPs / advertise prefixes for the routes elchi-control-plane
+                pushes via BGP. Without it the client only manages Envoy data-plane config.
+            </p>
+
+            <h4>2. Configuration options</h4>
+
+            <details open>
+                <summary>Required parameters</summary>
+                <div class="flag-table">
+                    <code>--name=&lt;NAME&gt;</code>
+                    <div class="desc">Client identifier. Shows up in the UI's <strong>Clients</strong> list — pick something
+                        operator-friendly per host (<code>web-server-01</code>, <code>edge-router-01</code>,
+                        <code>db-replica-2</code>).</div>
+                    <code>--host=&lt;HOST&gt;</code>
+                    <div class="desc">Control-plane address (DNS or IP). Same value the UI is published at;
+                        <code>--main-address</code> in the standalone install or the public LB in Helm.</div>
+                    <code>--port=&lt;PORT&gt;</code>
+                    <div class="desc">Control-plane HTTPS port. <span class="default">Usually <code>443</code>.</span>
+                        Valid range 1-65535.</div>
+                    <code>--tls=true|false</code>
+                    <div class="desc">TLS to control plane. <span class="default">Default: <code>true</code>.</span>
+                        Only set to <code>false</code> on a dev / inside-VPC plaintext install.</div>
+                    <code>--token=&lt;TOKEN&gt;</code>
+                    <div class="desc">Authentication token (minimum 8 characters) minted from the UI under
+                        <strong>Settings → Tokens</strong>. Bind it to the same project as the
+                        client's <code>--name</code>.</div>
+                </div>
+            </details>
+
+            <details>
+                <summary>Optional parameters</summary>
+                <div class="flag-table">
+                    <code>--cloud=&lt;CLOUD&gt;</code>
+                    <div class="desc">Cloud / infrastructure provider name. <span class="default">Default:
+                        <code>other</code>.</span> Use the exact name from
+                        <strong>Settings → Clouds</strong> in the UI when running on OpenStack /
+                        AWS / GCP / etc. — the client uses this to pull region + metadata from
+                        the right provider plugin.</div>
+                    <code>--enable-bgp</code>
+                    <div class="desc">Install and configure FRR alongside the client so the node can
+                        participate in BGP route advertisements (VIPs, prefixes pushed from the
+                        elchi control plane). Adds the <code>frr</code> package and writes
+                        <code>/etc/frr/frr.conf</code> with a baseline session config.</div>
+                </div>
+            </details>
+
+            <h4>3. Manual installation</h4>
+            <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
+                When you'd rather skip the installer wrapper and just drop the binary in place
+                (e.g., from a config-management system or a custom systemd unit):
+            </p>
+            <div class="stdl-cmd">wget https://github.com/CloudNativeWorks/elchi-client/releases/download/v1.1.0/elchi-client-linux-amd64
+                sudo mv elchi-client-linux-amd64 /usr/local/bin/elchi-client
+                sudo chmod +x /usr/local/bin/elchi-client</div>
+            <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
+                Verify checksum:
+                <code>wget https://github.com/CloudNativeWorks/elchi-client/releases/download/v1.1.0/elchi-client-linux-amd64.sha256
+                    &amp;&amp; sha256sum -c elchi-client-linux-amd64.sha256</code>
+            </p>
+
+            <p style="margin-top: 16px;">
+                <a href="https://github.com/CloudNativeWorks/elchi-client/releases"
+                    style="display: inline-block; background: #8250df; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none;">
+                    📦 All elchi-client releases
+                </a>
+                <a href="https://github.com/CloudNativeWorks/elchi-client"
+                    style="display: inline-block; background: #0969da; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; margin-left: 4px;">
+                    💻 Source
+                </a>
+            </p>
+        </div>
+        </div><!-- /install-client pane -->
 
         <div class="tabs">
             <button class="tab active" onclick="switchTab('envoy', event)">Envoy</button>
