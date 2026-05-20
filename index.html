@@ -51,6 +51,49 @@
             display: block;
         }
 
+        /* Install-method tabs (Helm vs Bare-Metal). Sits above the
+           install boxes so the operator picks deployment mode before
+           reading anything else. Default-active is Helm. */
+        .install-tabs {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #d0d7de;
+        }
+
+        .install-tab {
+            padding: 10px 20px;
+            background: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-bottom: none;
+            border-radius: 6px 6px 0 0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #656d76;
+            transition: all 0.15s;
+        }
+
+        .install-tab:hover {
+            color: #0969da;
+            background: #ffffff;
+        }
+
+        .install-tab.active {
+            background: #ffffff;
+            color: #0969da;
+            border-bottom: 1px solid #ffffff;
+            margin-bottom: -1px;
+        }
+
+        .install-pane {
+            display: none;
+        }
+
+        .install-pane.active {
+            display: block;
+        }
+
         .release {
             border: 1px solid #e1e4e8;
             border-radius: 6px;
@@ -237,7 +280,15 @@
         <h1>Elchi Archive</h1>
         <p>Pre-compiled binaries for Envoy, Coraza WASM, and Elchi Client</p>
 
+        <!-- Install method picker: Helm (Kubernetes/kind) vs Bare-Metal Standalone.
+             Default-selected is Helm to match the upstream-recommended path. -->
+        <div class="install-tabs">
+            <button class="install-tab active" onclick="switchInstall('helm', event)">🚀 Helm (Kubernetes / kind)</button>
+            <button class="install-tab" onclick="switchInstall('standalone', event)">⚙️ Bare-Metal Standalone</button>
+        </div>
+
         <!-- Quick Install Section (Kubernetes / kind / Helm) -->
+        <div id="install-helm" class="install-pane active">
         <div id="install-section"
             style="background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
             <h3 style="margin-top: 0; color: #0969da;">🚀 Quick Install Elchi Stack (Kubernetes via kind + Helm)</h3>
@@ -255,8 +306,10 @@
                 <span style="color: #656d76;">Loading download link...</span>
             </div>
         </div>
+        </div><!-- /install-helm pane -->
 
         <!-- Bare-Metal Standalone Install Section -->
+        <div id="install-standalone" class="install-pane">
         <div id="standalone-install-section" class="stdl-section"
             style="background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
             <h3 style="margin-top: 0; color: #1a7f37;">⚙️ Bare-Metal Standalone Install (no Docker, no Kubernetes)</h3>
@@ -281,11 +334,14 @@
             <div class="stdl-cmd">curl -fsSL
                 https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                 | sudo bash -s -- \
-                --main-address=elchi.example.com \
-                --gslb-zone=gslb.example.com \
-                --ui-version=v1.1.5 \
-                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.36.2 \
-                --envoy-version=v1.36.2</div>
+                --main-address=elchi.example.com</div>
+            <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
+                Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.3.6</code>,
+                backend <code>elchi-v1.4.2-v0.14.0-envoy1.36.2</code>, envoy <code>v1.37.0</code>,
+                coredns <code>v0.1.3</code>, collector <code>v0.1.4</code>. Override any with the matching
+                <code>--ui-version=</code> / <code>--backend-version=</code> / <code>--envoy-version=</code> /
+                <code>--coredns-version=</code> / <code>--collector-version=</code> flag.
+            </p>
 
             <h5>3-VM cluster, multi-version backend, key-based SSH</h5>
             <div class="stdl-cmd">curl -fsSL
@@ -295,10 +351,7 @@
                 --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
                 --main-address=elchi.example.com \
                 --gslb-zone=gslb.example.com \
-                --ui-version=v1.1.5 \
-                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.35.3,elchi-v1.4.2-v0.14.0-envoy1.36.2,elchi-v1.4.2-v0.14.0-envoy1.38.0
-                \
-                --envoy-version=v1.36.2</div>
+                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.35.3,elchi-v1.4.2-v0.14.0-envoy1.36.2,elchi-v1.4.2-v0.14.0-envoy1.38.0</div>
             <p class="info" style="margin-top: 8px;">
                 <strong>GSLB zone:</strong> CoreDNS GSLB plugin is enabled by default. If you skip
                 <code>--gslb-zone=...</code>, the installer falls back to <code>elchi.local</code> — a non-routable
@@ -321,8 +374,14 @@
                 | sudo bash -s -- \
                 --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
                 --ssh-bootstrap \
-                --main-address=elchi.example.com \
-                --backend-version=elchi-v1.4.2-v0.14.0-envoy1.36.2</div>
+                --main-address=elchi.example.com</div>
+            <p class="info" style="margin-top: 8px;">
+                When no <code>--ssh-key</code> / <code>--ssh-password</code> is passed and
+                <code>--nodes</code> includes remote hosts, the installer auto-enables
+                <code>--ssh-bootstrap</code> and prompts for each remote node's password
+                once. Single-VM installs (only the local IP in <code>--nodes</code>) skip
+                SSH provisioning entirely.
+            </p>
             <p class="info">
                 <strong>--ssh-bootstrap</strong> mints a fresh ed25519 key on M1, then prompts the
                 operator <em>once per remote node</em> for that node's password. Each password is
@@ -392,15 +451,15 @@
                 <div class="flag-table">
                     <code>--backend-version=&lt;csv&gt;</code>
                     <div class="desc">One or more variant tags (release-asset basenames). Each variant runs
-                        side-by-side. <span class="default">Default: <code>elchi-v1.4.2-v0.14.0-envoy1.36.2</code>.
-                            Alias: <code>--backend-variants=</code>.</span></div>
+                        side-by-side. <span class="default">Default: <code>elchi-v1.4.2-v0.14.0-envoy1.36.2</code>
+                            (from <code>lib/versions.sh</code>). Alias: <code>--backend-variants=</code>.</span></div>
                     <code>--backend-release=&lt;tag&gt;</code>
                     <div class="desc"><strong>Deprecated</strong> — release tag is now derived per variant from the
                         asset name. Accepted but ignored.</div>
                     <code>--ui-version=&lt;vX.Y.Z&gt;</code>
                     <div class="desc">UI bundle version (downloaded from <code>elchi/releases</code> as
                         <code>elchi-dist-vX.Y.Z.tar.gz</code>). <span class="default">Default:
-                            <code>v1.1.3</code>.</span>
+                            <code>v1.3.6</code>.</span>
                     </div>
                     <code>--envoy-version=&lt;vX.Y.Z&gt;</code>
                     <div class="desc">Front-door Envoy proxy binary version. <span class="default">Default:
@@ -410,6 +469,13 @@
                         <span class="default">Default: <code>v0.1.3</code>.</span> v0.1.1 shipped without the elchi
                         plugin compiled in — pinning to that version causes <code>Unknown directive 'elchi'</code>.
                     </div>
+                    <code>--collector-version=&lt;vX.Y.Z&gt;</code>
+                    <div class="desc">elchi-collector binary version (ALS gRPC sink → ClickHouse / Mongo).
+                        <span class="default">Default: <code>v0.1.4</code>.</span> Mirrored to the public
+                        elchi-archive releases by the build-elchi-collector workflow.</div>
+                    <code>--no-collector</code>
+                    <div class="desc">Skip the elchi-collector install entirely (cluster runs without ALS
+                        ingestion; envoy data-plane logs are not captured).</div>
                 </div>
             </details>
 
@@ -619,9 +685,18 @@
                     </div>
                     <code>--keep-bundle</code>
                     <div class="desc">Preserve the encrypted handoff bundle artifact at <code>/tmp/</code> after
-                        orchestration.</div>
+                        orchestration. Also preserves the orchestrator-staged secrets-from file so the
+                        operator can re-decrypt mid-incident.</div>
                     <code>--bundle-key-out=&lt;path&gt;</code>
                     <div class="desc">Write the bundle decryption key to a file (mode 0600).</div>
+                    <code>--quiet-key</code>
+                    <div class="desc">Suppress the plaintext bundle-key emission at end of install; only a
+                        sha256 fingerprint is shown. Full key is persisted at
+                        <code>/etc/elchi/.bundle-key</code> (sealed via <code>systemd-creds</code>
+                        when available) and is recoverable via
+                        <code>elchi-stack show-secret bundle-key</code>. Use this when capturing
+                        install logs to artifact storage so the key doesn't leak into screen
+                        recordings / tmux scrollback / CI logs.</div>
                     <code>-h | --help</code>
                     <div class="desc">Print full usage and exit.</div>
                 </div>
@@ -1016,6 +1091,45 @@
                 <code>elchi-stack init-replica-set</code>
                 <div class="desc">Run <code>rs.initiate()</code> on M1 (idempotent — checks <code>rs.status()</code>
                     first).</div>
+                <code>elchi-stack mongo-status</code>
+                <div class="desc">M1-only: <code>rs.status()</code> snapshot — PRIMARY identification, per-member
+                    state / health / uptime / replication lag / lastHeartbeatMessage. Recovery hint
+                    surfaces when <code>NotYetInitialized</code> (gate dropped between phase 1 and
+                    <code>rs.initiate()</code>).</div>
+                <code>elchi-stack clickhouse-status</code>
+                <div class="desc">Local ClickHouse + Keeper diagnostics: version, uptime, Keeper quorum reachability,
+                    <code>system.clusters</code> member health, <code>elchi</code> database engine
+                    (<code>Replicated</code> in cluster mode), replicated tables.</div>
+                <code>elchi-stack mongosh [args...]</code>
+                <div class="desc">Open mongosh against the local mongod, authenticated as root via
+                    <code>/etc/elchi/mongo/root.env</code>. Pass any further mongosh args
+                    (<code>--eval 'rs.status()'</code>, scripts, etc.).</div>
+                <code>elchi-stack ch-client [args...]</code>
+                <div class="desc">Open clickhouse-client against the local server, authenticated as the
+                    <code>elchi</code> user from <code>secrets.env</code>.</div>
+                <code>elchi-stack ssh &lt;node&gt;</code>
+                <div class="desc">Open an SSH session to a cluster node using the persisted cluster credentials
+                    from <code>/etc/elchi/orchestrator.env</code> — no flags needed.</div>
+                <code>elchi-stack stack-version</code>
+                <div class="desc">One-screen "what's actually installed on this node" report: cluster-wide
+                    pins from <code>topology.full.yaml</code> + binary versions on this host
+                    (mongo, clickhouse, envoy, otel, grafana, nginx, elchi-collector, backend variants).</div>
+                <code>elchi-stack tls-info</code>
+                <div class="desc">Cluster TLS cert summary: subject, SAN list, validity window, days-to-expiry
+                    (colored red &lt; 30, yellow &lt; 90), sha256 fingerprint.</div>
+                <code>elchi-stack endpoint-test</code>
+                <div class="desc">Round-trip probe through the public Envoy: UI <code>/</code>, VictoriaMetrics
+                    <code>/api/v1/query</code>, Grafana <code>/grafana/api/health</code>, internal
+                    plaintext listener <code>:8080/</code>. Prints HTTP status for each.</div>
+                <code>elchi-stack collector-stats</code>
+                <div class="desc">Per-node elchi-collector metrics summary (from <code>:18091/metrics</code>):
+                    events received / dropped, active ALS streams, batcher queue depth, ClickHouse rows
+                    inserted, ClickHouse / Mongo errors, flush count, pipeline panics. Best-effort —
+                    missing metrics render as 0.</div>
+                <code>elchi-stack verify</code>
+                <div class="desc">End-to-end cluster health: per-node systemd + Envoy admin
+                    <code>/clusters</code> health flags + Envoy <code>/listeners</code> public listener bind +
+                    ClickHouse Keeper leader probe + (M1-side) mongo RS PRIMARY probe.</div>
                 <code>elchi-stack export-bundle &lt;out&gt; [--reuse-bundle-key]</code>
                 <div class="desc">Repackage cluster artifacts into an encrypted bundle. <code>--reuse-bundle-key</code>
                     reuses the install-time key persisted via systemd-creds at <code>/etc/elchi/.bundle-key</code> so
@@ -1023,17 +1137,17 @@
                 <code>elchi-stack show-secret &lt;name&gt;</code>
                 <div class="desc">Print a stored credential without rotating it. <code>name</code> is one of
                     <code>grafana</code> (UI admin login), <code>jwt</code> (backend API auth),
-                    <code>gslb</code> (CoreDNS plugin → backend auth), <code>mongo-app</code>,
-                    <code>mongo-root</code>, or <code>all</code> (full table). Same values are
-                    also printed once at the end of the install. Persisted in
-                    <code>/etc/elchi/secrets.env</code> (mode 0640 root:elchi); preserved across
-                    re-runs and upgrades.
+                    <code>gslb</code> (CoreDNS plugin ↔ backend auth), <code>mongo-app</code>,
+                    <code>mongo-root</code>, <code>clickhouse</code> (CH user/pwd),
+                    <code>collector</code> (HASH_SALT — never rotatable; rotating breaks event correlation),
+                    <code>bundle-key</code> (re-decrypts <code>/etc/elchi/.bundle-key</code> when sealed),
+                    or <code>all</code> (full table). Persisted in <code>/etc/elchi/secrets.env</code>
+                    (mode <strong>0600 root:root</strong>); preserved across re-runs and upgrades.
                 </div>
-                <code>elchi-stack rotate-secret &lt;jwt|gslb&gt;</code>
-                <div class="desc">Mint a new JWT or GSLB secret, restart affected services.</div>
-                <code>elchi-stack verify</code>
-                <div class="desc">End-to-end cluster health: registration log evidence + Envoy admin listener probe +
-                    service active state on every node.</div>
+                <code>elchi-stack rotate-secret &lt;jwt|gslb|grafana&gt;</code>
+                <div class="desc">Mint a new JWT, GSLB, or Grafana admin password. JWT/GSLB get re-rendered
+                    into every variant's <code>common.env</code> and pushed cluster-wide via SSH; Grafana
+                    password gets re-applied via <code>grafana-cli</code> on M1 only (singleton).</div>
             </div>
 
             <h4>7. Port atlas</h4>
@@ -1076,6 +1190,20 @@
                     class="port-note">Every node (only with <code>--gslb</code>)</span>
                 <span class="port-label">CoreDNS webhook</span><span class="port-value">0.0.0.0:8053</span><span
                     class="port-note">M1 → M2/M3 push notifications (X-Elchi-Secret auth)</span>
+                <span class="port-label">ClickHouse native</span><span class="port-value">0.0.0.0:9000</span><span
+                    class="port-note">CH server TCP wire protocol; cluster member on every node</span>
+                <span class="port-label">ClickHouse HTTP</span><span class="port-value">0.0.0.0:8123</span><span
+                    class="port-note">CH HTTP interface; used by collector + backend for queries</span>
+                <span class="port-label">ClickHouse interserver</span><span class="port-value">0.0.0.0:9009</span><span
+                    class="port-note">Inter-replica replication (only on 3+ node clusters)</span>
+                <span class="port-label">ClickHouse Keeper</span><span class="port-value">0.0.0.0:9181</span><span
+                    class="port-note">Embedded Raft coordination client port (3+ node clusters only)</span>
+                <span class="port-label">ClickHouse Keeper Raft</span><span class="port-value">0.0.0.0:9234</span><span
+                    class="port-note">Keeper inter-peer Raft consensus traffic (3+ node)</span>
+                <span class="port-label">elchi-collector gRPC</span><span class="port-value">0.0.0.0:18090</span><span
+                    class="port-note">ALS sink — Envoy data-plane proxies push Access Log Service streams here</span>
+                <span class="port-label">elchi-collector HTTP</span><span class="port-value">0.0.0.0:18091</span><span
+                    class="port-note">Prometheus <code>/metrics</code> + health endpoint</span>
             </div>
 
             <h4>8. Topology</h4>
@@ -1102,6 +1230,25 @@
                 <strong>Storage tier stays on M1:</strong> VictoriaMetrics TSDB and Grafana UI
                 are still singletons. With <code>--vm=external</code> the TSDB moves out
                 entirely; Grafana stays on M1.
+            </p>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <strong>ClickHouse cluster on every node.</strong> 1-2 node installs run
+                <code>clickhouse-server</code> standalone. 3+ node installs run a clustered CH
+                with embedded Keeper on each member: the <code>elchi</code> database is created
+                as <code>ENGINE = Replicated('/clickhouse/databases/elchi', '{shard}', '{replica}')</code>,
+                so the cluster-unaware collector's plain <code>CREATE TABLE</code> DDL is
+                auto-promoted to <code>ReplicatedMergeTree</code> and tables replicate across
+                all members via Keeper. Each node's collector writes to <strong>127.0.0.1</strong>
+                — the Replicated engine handles fan-out — which keeps a 2 → 3 node growth from
+                creating a peer-DDL race.
+            </p>
+            <p style="font-size: 13px; color: #24292f; margin: 4px 0 12px;">
+                <strong>elchi-collector on every node.</strong> The collector ingests the Envoy
+                ALS (Access Log Service) gRPC stream from data-plane proxies on its local
+                <code>:18090</code> and writes events to <strong>local ClickHouse</strong>
+                (via loopback) + MongoDB. <code>/metrics</code> on <code>:18091</code> is
+                scraped by the per-node OTEL collector. ClickHouse replication carries the
+                rows cluster-wide; cross-node ALS routing is not needed.
             </p>
 
             <h4>9. Production hardening (kernel + systemd)</h4>
@@ -1164,7 +1311,7 @@
                     <span class="port-label">LimitMEMLOCK</span><span class="port-value">infinity</span><span
                         class="port-note">required to silence the "ulimit -l too low" warnings</span>
                     <span class="port-label">OOMScoreAdjust</span><span class="port-value">-1000</span><span
-                        class="port-note">never let mongod be the OOM victim</span>
+                        class="port-note">never let mongod be the OOM victim (lowest oom_score)</span>
                     <span class="port-label">TasksMax</span><span class="port-value">infinity</span><span
                         class="port-note">cgroup task limit (default ~4915 on RHEL is not enough)</span>
                 </div>
@@ -1287,6 +1434,7 @@
                 </a>
             </p>
         </div>
+        </div><!-- /install-standalone pane -->
 
         <div class="tabs">
             <button class="tab active" onclick="switchTab('envoy', event)">Envoy</button>
@@ -1340,6 +1488,20 @@
             // Update tab content
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(tab + '-content').classList.add('active');
+        }
+
+        // Install-method switcher (Helm vs Bare-Metal). Independent
+        // of the bottom binary tabs (switchTab) so the operator can
+        // flip install mode without disturbing which binary section
+        // they're currently inspecting.
+        function switchInstall(which, event) {
+            document.querySelectorAll('.install-tab').forEach(t => t.classList.remove('active'));
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
+            document.querySelectorAll('.install-pane').forEach(p => p.classList.remove('active'));
+            const pane = document.getElementById('install-' + which);
+            if (pane) pane.classList.add('active');
         }
 
         function renderReleases(releases, containerId, type) {
