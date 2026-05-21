@@ -57,9 +57,14 @@ preflight::_check_supported_version() {
       esac
       ;;
     rhel|centos|rocky|almalinux|ol|oracle)
+      # 9 and 10 are both supported: MongoDB 8.0 publishes yum repos for
+      # redhat/9 and redhat/10, ClickHouse + Grafana ship distro-agnostic
+      # vendor repos, and the systemd hardening floor (247) is cleared by
+      # both (EL9 = 252, EL10 = 257). mongodb::_install_rhel still probes
+      # the per-major repo and fails loudly if a future major lacks one.
       case "$major" in
-        9) ;;
-        *) die "$ELCHI_OS_ID $ELCHI_OS_VERSION is not supported. Use major version 9 (RHEL/Rocky/Alma/Oracle)." ;;
+        9|10) ;;
+        *) die "$ELCHI_OS_ID $ELCHI_OS_VERSION is not supported. Use major version 9 or 10 (RHEL/Rocky/Alma/Oracle)." ;;
       esac
       ;;
   esac
