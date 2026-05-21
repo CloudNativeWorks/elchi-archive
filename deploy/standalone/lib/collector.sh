@@ -36,7 +36,7 @@ readonly COLLECTOR_DATA=${ELCHI_LIB}/collector
 # coredns-elchi / elchi-gslb / elchi-client binaries already live.
 #
 # Per release, in github.com/CloudNativeWorks/elchi-archive:
-#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.4
+#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.5
 #   assets      : elchi-collector-linux-<arch>   e.g. elchi-collector-linux-amd64
 #                 elchi-collector-linux-<arch>.sha256
 # (same tag/asset convention as elchi-gslb-vX.Y.Z / coredns-elchi-linux-amd64).
@@ -166,11 +166,17 @@ HASH_SALT=${hash_salt}
 GEOIP_CACHE_DIR=${COLLECTOR_DATA}/geoip
 
 # --- Batcher tuning ---
-BATCH_MAX_SIZE=1000
-BATCH_FLUSH_INTERVAL=250ms
-BATCH_MAX_BYTES=4194304
+# maxSize / maxBytes are TOTAL per-flush budgets divided across the auto
+# shard count (min(2*GOMAXPROCS, 8)). Sized large so ClickHouse gets few
+# large inserts (~2K rows/insert) instead of many tiny ones — the old
+# 1000/250ms produced ~26 rows/insert, a CH anti-pattern that capped
+# throughput. queueSize is the TOTAL in-flight cap divided across shards
+# (~18 MB buffers).
+BATCH_MAX_SIZE=20000
+BATCH_FLUSH_INTERVAL=1s
+BATCH_MAX_BYTES=8388608
 BATCH_BACKPRESSURE_POLICY=drop_new
-BATCH_QUEUE_SIZE=5000
+BATCH_QUEUE_SIZE=20000
 
 # --- Retention + runtime config ---
 RETENTION_DAYS=${ELCHI_COLLECTOR_RETENTION_DAYS:-7}

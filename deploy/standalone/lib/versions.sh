@@ -35,10 +35,10 @@ ELCHI_DEFAULT_UI_VERSION="v1.3.7"
 ELCHI_DEFAULT_ENVOY_VERSION="v1.37.0"
 
 # CoreDNS build carrying the elchi GSLB plugin.
-ELCHI_DEFAULT_COREDNS_VERSION="v0.1.3"
+ELCHI_DEFAULT_COREDNS_VERSION="v0.1.4"
 
 # elchi-collector — Envoy ALS ingestion service.
-ELCHI_DEFAULT_COLLECTOR_VERSION="v0.1.4"
+ELCHI_DEFAULT_COLLECTOR_VERSION="v0.1.5"
 
 # VictoriaMetrics single-node (the metrics TSDB). Keep the leading "v".
 ELCHI_DEFAULT_VM_VERSION="v1.93.5"
