@@ -657,20 +657,24 @@ mongodb::setup_replica_member() {
 mongodb::_apply_keyfile_perms() {
   local f="${ELCHI_MONGO}/keyfile"
   [ -f "$f" ] || return 0
-  chown mongodb:mongodb "$f"
+  local owner grp
+  owner=$(mongo_runtime_owner)   # mongod:mongod (RHEL) | mongodb:mongodb (Debian)
+  grp=${owner##*:}
+  chown "$owner" "$f"
   chmod 0400 "$f"
-  # Mongod runs as `mongodb` and must be able to traverse to the
-  # keyfile path. dirs::ensure / secrets::import_from_bundle create
-  # /etc/elchi/mongo as 0750 root:elchi — the elchi group is meant
-  # for the elchi-stack runtime user, NOT for mongodb. Without this
-  # chgrp, mongodb has zero access (other bits=0) and mongod fails
-  # at startup with "errno:13 Permission denied" reading the
-  # keyfile — which systemd surfaces only as "exited with status 1"
-  # because the real error goes to /var/log/mongodb/mongod.log, not
-  # the journal. Re-grouping to mongodb keeps the directory closed
-  # to non-mongo users while letting mongod do its job.
+  # Mongod runs as its package user (mongod on RHEL, mongodb on Debian)
+  # and must be able to traverse to the keyfile path. dirs::ensure /
+  # secrets::import_from_bundle create /etc/elchi/mongo as 0750
+  # root:elchi — the elchi group is meant for the elchi-stack runtime
+  # user, NOT for mongod. Without this chgrp, mongod has zero access
+  # (other bits=0) and fails at startup with "errno:13 Permission
+  # denied" reading the keyfile — which systemd surfaces only as
+  # "exited with status 1" because the real error goes to
+  # /var/log/mongodb/mongod.log, not the journal. Re-grouping to the
+  # mongo runtime group keeps the directory closed to non-mongo users
+  # while letting mongod do its job.
   if [ -d "$ELCHI_MONGO" ]; then
-    chgrp mongodb "$ELCHI_MONGO"
+    chgrp "$grp" "$ELCHI_MONGO"
     chmod 0750 "$ELCHI_MONGO"
   fi
 }

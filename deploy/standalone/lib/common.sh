@@ -127,6 +127,22 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 }
 
+# mongo_runtime_owner — echo "user:group" the mongod process runs as.
+# The Debian mongodb-org package creates the `mongodb` user+group; the
+# RHEL / Rocky / Alma / Oracle RPM creates `mongod`. Both packages name
+# the group identically to the user. We probe for whichever account the
+# installed package actually created (mongod first — that's the RHEL
+# family this disambiguates) and fall back to the Debian name when
+# neither exists yet (e.g. keyfile minted before the package install).
+# Hard-coding `mongodb:mongodb` broke every RHEL-family install with
+# "chown: invalid user: 'mongodb:mongodb'".
+mongo_runtime_owner() {
+  if   id -u mongod  >/dev/null 2>&1; then printf 'mongod:mongod'
+  elif id -u mongodb >/dev/null 2>&1; then printf 'mongodb:mongodb'
+  else printf 'mongodb:mongodb'
+  fi
+}
+
 # ----- retry -------------------------------------------------------------
 # Exponential-ish retry. Used for network ops (curl) where transient
 # DNS / TLS handshake failures are normal and noisy. The fixed `delay`

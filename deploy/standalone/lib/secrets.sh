@@ -162,11 +162,12 @@ secrets::generate_mongo_keyfile() {
   openssl rand -base64 756 | tr -d '\n' > "${keyfile}.tmp"
   chmod 0400 "${keyfile}.tmp"
   # Mongo refuses to start if the keyfile isn't owned by the user the
-  # mongod process runs as. We set this lazily — at this stage mongo may
-  # not be installed yet, so the user might not exist. Defer chown to
+  # mongod process runs as (mongod on RHEL, mongodb on Debian). We set
+  # this lazily — at this stage mongo may not be installed yet, so the
+  # account might not exist. Defer chown to
   # mongodb::_apply_keyfile_perms() which runs after package install.
-  if id mongodb >/dev/null 2>&1; then
-    chown mongodb:mongodb "${keyfile}.tmp"
+  if id -u mongod >/dev/null 2>&1 || id -u mongodb >/dev/null 2>&1; then
+    chown "$(mongo_runtime_owner)" "${keyfile}.tmp"
   fi
   mv -f "${keyfile}.tmp" "$keyfile"
 }
@@ -225,11 +226,13 @@ secrets::import_from_bundle() {
       install -m 0400 "${bundle_dir}/mongo/keyfile" "${ELCHI_MONGO}/keyfile"
     fi
     # Ownership is cheap to reapply and idempotent — keep it
-    # outside the cmp guard so a node that gained the mongodb user
+    # outside the cmp guard so a node that gained the mongo user
     # AFTER the first import (fresh mongod install on N=2→3
-    # transition) still ends up with the right uid/gid.
-    if id mongodb >/dev/null 2>&1; then
-      chown mongodb:mongodb "${ELCHI_MONGO}/keyfile"
+    # transition) still ends up with the right uid/gid. The account is
+    # `mongod` on RHEL, `mongodb` on Debian — mongo_runtime_owner
+    # resolves whichever exists.
+    if id -u mongod >/dev/null 2>&1 || id -u mongodb >/dev/null 2>&1; then
+      chown "$(mongo_runtime_owner)" "${ELCHI_MONGO}/keyfile"
     fi
   fi
 
