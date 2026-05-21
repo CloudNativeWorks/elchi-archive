@@ -36,7 +36,7 @@ readonly COLLECTOR_DATA=${ELCHI_LIB}/collector
 # coredns-elchi / elchi-gslb / elchi-client binaries already live.
 #
 # Per release, in github.com/CloudNativeWorks/elchi-archive:
-#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.5
+#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.7
 #   assets      : elchi-collector-linux-<arch>   e.g. elchi-collector-linux-amd64
 #                 elchi-collector-linux-<arch>.sha256
 # (same tag/asset convention as elchi-gslb-vX.Y.Z / coredns-elchi-linux-amd64).
