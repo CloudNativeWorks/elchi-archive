@@ -176,6 +176,22 @@ enabled=1
 gpgkey=https://pgp.mongodb.org/server-${v}.asc
 EOF
 
+  # Import the repo signing key explicitly into the RPM keyring. dnf's
+  # gpgkey= auto-import is unreliable when a STALE mongodb key from a
+  # previous version (or a half-finished earlier attempt) is already
+  # present: dnf decides "a MongoDB key exists" and skips importing the
+  # current one, then gpgcheck fails with
+  #   "The GPG keys ... are already installed but they are not correct
+  #    for this package" / "Public key for mongodb-org-server ... is not
+  #    installed"
+  # even though the packages themselves are perfectly valid. An explicit
+  # rpm --import of the version-correct key lands it regardless of
+  # whatever else is in the keyring (idempotent — re-importing the same
+  # key is a no-op). Mirrors what the Debian path already does via
+  # `gpg --dearmor -o keyring`.
+  rpm --import "https://pgp.mongodb.org/server-${v}.asc" 2>/dev/null \
+    || log::warn "could not import MongoDB ${v} GPG key — gpgcheck may fail below"
+
   # Run the real install and let the package manager's own output stream
   # live. If it fails because the server metapackage isn't in the repo
   # (the EL-major-just-released case: MongoDB publishes client tools
