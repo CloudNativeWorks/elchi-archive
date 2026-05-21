@@ -273,6 +273,15 @@ ssh::scp_dir() {
   # "stat remote: No such file or directory" when the destination dir
   # doesn't exist (an SFTP-mode regression vs the legacy rcp protocol).
   #
+  # The remote extract needs `tar` (+ gzip). Minimal RHEL / Rocky / Alma
+  # cloud images ship neither — and only M1 ran get.sh's bootstrap, so
+  # M2..Mn would die here with "sudo: tar: command not found" the very
+  # first time the orchestrator streams the installer payload. Ensure
+  # both on the remote BEFORE the stream. This also covers the later
+  # bundle::extract on the same node (scp_dir always runs first).
+  ssh::_ensure_remote_extract_tools "$host" \
+    || log::warn "$host: could not ensure tar/gzip — extract may fail"
+
   # Stream the tree over SSH instead and let `sudo tar` extract on the
   # remote — that way the extract runs with root privilege regardless
   # of the SSH user, and there is no scp involved at all (so no SFTP
@@ -283,6 +292,17 @@ ssh::scp_dir() {
   local remote_cmd="set -e; sudo rm -rf ${q_dst}; sudo mkdir -p ${q_dst}; sudo tar -C ${q_dst} -xpf -"
   tar -C "$src" -cf - . \
     | ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- "$remote_cmd"
+}
+
+# ssh::_ensure_remote_extract_tools <host> — install tar + gzip on the
+# remote if missing. get.sh's bootstrap only runs on M1; remote nodes
+# receive the payload via the streamed tar in ssh::scp_dir, so they need
+# tar/gzip present before that stream lands. Package-manager-agnostic;
+# idempotent (no-op when both are already there). Runs as root via
+# ssh::run_sudo.
+ssh::_ensure_remote_extract_tools() {
+  local host=$1
+  ssh::run_sudo "$host" bash -c 'command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1 || { if command -v dnf >/dev/null 2>&1; then dnf install -y tar gzip; elif command -v yum >/dev/null 2>&1; then yum install -y tar gzip; elif command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq tar gzip; elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install tar gzip; fi; }; command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1'
 }
 
 # ssh::test_login <host> — cheap "can I reach this node and run
