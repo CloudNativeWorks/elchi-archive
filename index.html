@@ -343,7 +343,7 @@
                     --main-address=elchi.example.com</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.3.7</code>,
-                    backend <code>elchi-v1.4.3-v0.14.0-envoy1.36.2</code>, envoy <code>v1.37.0</code>,
+                    backend <code>elchi-v1.4.4-v0.14.0-envoy1.36.2</code>, envoy <code>v1.37.0</code>,
                     coredns <code>v0.1.3</code>, collector <code>v0.1.4</code>. Override any with the matching
                     <code>--ui-version=</code> / <code>--backend-version=</code> / <code>--envoy-version=</code> /
                     <code>--coredns-version=</code> / <code>--collector-version=</code> flag.
@@ -357,7 +357,7 @@
                     --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
                     --main-address=elchi.example.com \
                     --gslb-zone=gslb.example.com \
-                    --backend-version=elchi-v1.4.3-v0.14.0-envoy1.35.3,elchi-v1.4.3-v0.14.0-envoy1.36.2,elchi-v1.4.3-v0.14.0-envoy1.38.0
+                    --backend-version=elchi-v1.4.4-v0.14.0-envoy1.35.3,elchi-v1.4.4-v0.14.0-envoy1.36.2,elchi-v1.4.4-v0.14.0-envoy1.38.0
                 </div>
                 <p class="info" style="margin-top: 8px;">
                     <strong>GSLB zone:</strong> CoreDNS GSLB plugin is enabled by default. If you skip
@@ -489,7 +489,7 @@
                     <div class="flag-table">
                         <code>--backend-version=&lt;csv&gt;</code>
                         <div class="desc">One or more variant tags (release-asset basenames). Each variant runs
-                            side-by-side. <span class="default">Default: <code>elchi-v1.4.3-v0.14.0-envoy1.36.2</code>
+                            side-by-side. <span class="default">Default: <code>elchi-v1.4.4-v0.14.0-envoy1.36.2</code>
                                 (from <code>lib/versions.sh</code>). Alias: <code>--backend-variants=</code>.</span>
                         </div>
                         <code>--backend-release=&lt;tag&gt;</code>
@@ -799,7 +799,7 @@
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --add-backend-version=elchi-v1.4.3-v0.14.0-envoy1.37.0</div>
+                    --add-backend-version=elchi-v1.4.4-v0.14.0-envoy1.37.0</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     <code>--add-backend-version</code> appends to the current variant set
                     without making you re-list everything that's already deployed. The new
@@ -828,13 +828,13 @@
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --backend-version=elchi-v1.4.3-v0.14.0-envoy1.36.2,elchi-v1.4.3-v0.14.0-envoy1.37.0</div>
+                    --backend-version=elchi-v1.4.4-v0.14.0-envoy1.36.2,elchi-v1.4.4-v0.14.0-envoy1.37.0</div>
 
                 <h5>Replace a variant + drop the old one (declarative)</h5>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --backend-version=elchi-v1.4.3-v0.14.0-envoy1.37.0 \
+                    --backend-version=elchi-v1.4.4-v0.14.0-envoy1.37.0 \
                     --prune-missing</div>
 
                 <h5>Bump the UI + Envoy proxy together</h5>
@@ -910,7 +910,7 @@
 
                     <h5>Add a new variant alongside existing ones</h5>
                     <div class="stdl-cmd">sudo upgrade.sh \
-                        --backend-version=elchi-v1.4.3-v0.14.0-envoy1.36.2,elchi-v1.4.3-v0.14.0-envoy1.37.0</div>
+                        --backend-version=elchi-v1.4.4-v0.14.0-envoy1.36.2,elchi-v1.4.4-v0.14.0-envoy1.37.0</div>
                     <p style="font-size: 13px; margin: 4px 0 12px;">
                         KEPT=[v1.2.0/envoy1.36.2], ADDED=[v1.2.0/envoy1.37.0]. The kept variant's
                         fingerprint is unchanged → noop. The added variant gets a fresh template unit
@@ -920,8 +920,8 @@
 
                     <h5>Update an existing variant (replace one tag with another)</h5>
                     <div class="stdl-cmd">sudo upgrade.sh \
-                        --backend-version=elchi-v1.4.3-v0.14.0-envoy1.37.0 \
-                        --prune-version=elchi-v1.4.3-v0.14.0-envoy1.36.2</div>
+                        --backend-version=elchi-v1.4.4-v0.14.0-envoy1.37.0 \
+                        --prune-version=elchi-v1.4.4-v0.14.0-envoy1.36.2</div>
                     <p style="font-size: 13px; margin: 4px 0 12px;">
                         install.sh re-runs with [new]; controller's ExecStart now points at new binary →
                         fingerprint diff → restart. Then prune step removes the old variant's unit,
@@ -932,7 +932,7 @@
 
                     <h5>Both at once (declarative)</h5>
                     <div class="stdl-cmd">sudo upgrade.sh \
-                        --backend-version=elchi-v1.4.3-v0.14.0-envoy1.37.0,elchi-v1.4.3-v0.14.0-envoy1.38.0 \
+                        --backend-version=elchi-v1.4.4-v0.14.0-envoy1.37.0,elchi-v1.4.4-v0.14.0-envoy1.38.0 \
                         --prune-missing</div>
                     <p style="font-size: 13px; margin: 4px 0 12px;">
                         KEPT=∅, ADDED=[v1.2.0/envoy1.37.0, v1.2.0/envoy1.38.0], REMOVED=[everything in CUR not in new
