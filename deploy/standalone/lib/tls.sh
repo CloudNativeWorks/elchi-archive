@@ -40,15 +40,28 @@ tls::_self_signed() {
   tls::_compute_san_lists
 
   if [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+    local regen_reason=''
     if tls::_san_drift "$TLS_CERT" dns_dedup ips_dedup; then
-      log::warn "TLS cert SAN list does not match current topology — regenerating"
+      regen_reason="SAN list does not match current topology"
+    elif ! tls::_cert_is_ca "$TLS_CERT"; then
+      # Self-heal certs minted before the CA:TRUE fix. A self-signed
+      # CA:FALSE cert can't be installed as a system trust anchor by
+      # RHEL/Alma/Rocky's p11-kit (update-ca-trust), so the backend's
+      # Go TLS client rejected the front-door Envoy cert with
+      # "x509: certificate signed by unknown authority" and the
+      # controller never registered. Regenerating mints a CA:TRUE cert
+      # that both families trust. Harmless on Debian (also re-trusts).
+      regen_reason="cert predates the CA:TRUE fix (RHEL p11-kit won't trust a CA:FALSE anchor)"
+    fi
+    if [ -n "$regen_reason" ]; then
+      log::warn "TLS cert ${regen_reason} — regenerating"
       log::info "old cert backed up to ${TLS_CERT}.bak (manual restore: cp -p ${TLS_CERT}.bak ${TLS_CERT})"
       cp -p "$TLS_CERT" "${TLS_CERT}.bak"
       cp -p "$TLS_KEY"  "${TLS_KEY}.bak"
       # Fall through to regenerate. Note: keys are NOT preserved — the
       # regen below mints a new ECDSA keypair. That is intentional: a
-      # SAN refresh on a self-signed cert is the right moment to also
-      # rotate key material.
+      # SAN refresh / CA-format fix on a self-signed cert is the right
+      # moment to also rotate key material.
     else
       log::info "reusing existing TLS material at ${ELCHI_TLS}"
       tls::_finalize_perms
@@ -75,8 +88,19 @@ tls::_self_signed() {
     echo
     echo "[v3_ext]"
     echo "subjectAltName       = @san"
-    echo "basicConstraints     = critical,CA:FALSE"
-    echo "keyUsage             = critical,digitalSignature,keyEncipherment"
+    # CA:TRUE — this self-signed cert is ALSO its own trust anchor
+    # (ca.crt is a copy of server.crt). RHEL/Alma/Rocky's update-ca-trust
+    # uses p11-kit, which refuses to install a CA:FALSE cert as a system
+    # trust anchor — so the backend's Go TLS client could not verify the
+    # front-door Envoy cert and the controller failed to register
+    # ("x509: certificate signed by unknown authority"). Debian's
+    # update-ca-certificates is laxer and accepted CA:FALSE, which is why
+    # this only bit RHEL-family hosts. CA:TRUE + keyCertSign makes the
+    # cert a valid anchor on BOTH families while still serving as the
+    # leaf (serverAuth EKU below). A self-signed cert acting as its own
+    # root is the standard snake-oil pattern; Go/Envoy/browsers accept it.
+    echo "basicConstraints     = critical,CA:TRUE"
+    echo "keyUsage             = critical,digitalSignature,keyEncipherment,keyCertSign"
     echo "extendedKeyUsage     = serverAuth"
     echo
     echo "[san]"
@@ -176,6 +200,18 @@ tls::_compute_san_lists() {
 # manually pinned extra SANs, and a regen would silently strip them.
 # The "missing entry" direction is the real failure mode — a new node
 # can't be reached over HTTPS without its hostname/IP in the SAN list.
+# tls::_cert_is_ca <cert> — true iff the cert carries
+# `basicConstraints: CA:TRUE`. Used to detect (and self-heal) certs
+# minted before the CA:TRUE fix, which RHEL's p11-kit refuses to install
+# as a trust anchor. If openssl is unavailable we return success (treat
+# as CA) so we don't needlessly churn a working cert we can't inspect.
+tls::_cert_is_ca() {
+  local cert=$1
+  command -v openssl >/dev/null 2>&1 || return 0
+  openssl x509 -in "$cert" -noout -ext basicConstraints 2>/dev/null \
+    | grep -q 'CA:TRUE'
+}
+
 tls::_san_drift() {
   local cert=$1
   local -n want_dns=$2
