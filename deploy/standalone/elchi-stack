@@ -1118,11 +1118,19 @@ cmd_verify() {
         ch_size=$(awk "/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print \$2; exit}" \
                     /etc/elchi/topology.full.yaml 2>/dev/null)
         if [ "${ch_size:-1}" -ge 3 ] 2>/dev/null; then
+          # Probe the 4lw mntr endpoint. Prefer nc, fall back to the
+          # bash /dev/tcp builtin — minimal RHEL/Alma/Rocky images ship
+          # no netcat, and without the fallback this reported a false
+          # [FAIL] "no zk_server_state" on a perfectly healthy Keeper.
           if command -v nc >/dev/null 2>&1; then
             kstate=$(printf "mntr\n" | nc -w 3 127.0.0.1 9181 2>/dev/null \
                        | awk -F"\t" "/^zk_server_state/{print \$2; exit}")
           else
-            kstate=""
+            kstate=$( { exec 3<>/dev/tcp/127.0.0.1/9181 2>/dev/null || exit 1
+                        printf "mntr\n" >&3
+                        timeout 3 cat <&3 2>/dev/null
+                        exec 3<&- ; exec 3>&-
+                      } | awk -F"\t" "/^zk_server_state/{print \$2; exit}")
           fi
           case "$kstate" in
             leader|follower) echo "  [ OK ] clickhouse-keeper: ${kstate}" ;;
