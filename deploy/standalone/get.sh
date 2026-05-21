@@ -77,15 +77,53 @@ if [[ "$ELCHI_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
   URL="https://codeload.github.com/${ELCHI_REPO}/tar.gz/${ELCHI_REF}"
 fi
 
+# Ensure the two tools this bootstrap needs to unpack the payload are
+# present BEFORE we try to use them. Minimal RHEL / Rocky / Alma / Oracle
+# cloud images ship neither `tar` nor `gzip` (and `tar -xzf` shells out
+# to gzip), so without this the script dies at the extract step with a
+# bare "tar: command not found" — long before install.sh's own
+# preflight::install_tools (which installs the full toolchain) gets a
+# chance to run. We run as root already, so a package install is fine.
+_ensure_extract_tools() {
+  local need=()
+  command -v tar  >/dev/null 2>&1 || need+=(tar)
+  command -v gzip >/dev/null 2>&1 || need+=(gzip)
+  [ "${#need[@]}" -eq 0 ] && return 0
+  printf '[INFO] installing bootstrap tools: %s\n' "${need[*]}"
+  if   command -v dnf     >/dev/null 2>&1; then dnf install -y "${need[@]}"
+  elif command -v yum     >/dev/null 2>&1; then yum install -y "${need[@]}"
+  elif command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}"
+  elif command -v zypper  >/dev/null 2>&1; then zypper --non-interactive install "${need[@]}"
+  else
+    printf '[ERR] need %s to unpack the installer but no supported package manager was found.\n' "${need[*]}" >&2
+    printf '      install them manually (e.g. `dnf install -y tar gzip`) and re-run.\n' >&2
+    exit 1
+  fi
+  # Re-verify — a silent package-manager no-op (repo disabled, etc.)
+  # should still fail loudly here rather than at the tar call.
+  command -v tar  >/dev/null 2>&1 || { printf '[ERR] tar still missing after install attempt\n' >&2; exit 1; }
+  command -v gzip >/dev/null 2>&1 || { printf '[ERR] gzip still missing after install attempt\n' >&2; exit 1; }
+}
+
 printf '[INFO] downloading installer payload (%s @ %s)\n' "$ELCHI_REPO" "$ELCHI_REF"
 curl -fL --retry 3 --retry-delay 2 -o "${WORKDIR}/repo.tar.gz" "$URL" \
   || { printf '[ERR] failed to fetch %s\n' "$URL" >&2; exit 1; }
 
+_ensure_extract_tools
+
 printf '[INFO] extracting\n'
 tar -xzf "${WORKDIR}/repo.tar.gz" -C "$WORKDIR"
 
-# GitHub codeload extracts into <repo-name>-<ref>/. Find it.
-ROOT=$(find "$WORKDIR" -maxdepth 1 -mindepth 1 -type d | head -n1)
+# GitHub codeload extracts into <repo-name>-<ref>/. Find it with a pure
+# bash glob rather than `find` — minimal RHEL/Alma/Rocky images that
+# dropped tar also can't be assumed to ship findutils, and this script
+# must stay runnable before install.sh's toolchain bootstrap.
+ROOT=""
+for _d in "$WORKDIR"/*/; do
+  [ -d "$_d" ] && { ROOT=${_d%/}; break; }
+done
 [ -n "$ROOT" ] || { printf '[ERR] tarball produced no directory\n' >&2; exit 1; }
 
 INSTALLER_DIR="${ROOT}/deploy/standalone"

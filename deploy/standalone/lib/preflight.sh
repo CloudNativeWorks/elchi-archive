@@ -57,14 +57,17 @@ preflight::_check_supported_version() {
       esac
       ;;
     rhel|centos|rocky|almalinux|ol|oracle)
-      # 9 and 10 are both supported: MongoDB 8.0 publishes yum repos for
-      # redhat/9 and redhat/10, ClickHouse + Grafana ship distro-agnostic
-      # vendor repos, and the systemd hardening floor (247) is cleared by
-      # both (EL9 = 252, EL10 = 257). mongodb::_install_rhel still probes
-      # the per-major repo and fails loudly if a future major lacks one.
+      # Major 9 only. EL10 (Rocky/Alma/CentOS-Stream 10) is intentionally
+      # NOT accepted yet: MongoDB has not published the el10 SERVER RPMs
+      # (mongodb-org-server / the mongodb-org metapackage) — the el10 repo
+      # ships only client tools — so the bundled local mongod can't be
+      # installed there. Rather than half-support EL10 (works only with
+      # --mongo=external), we reject it at the gate until upstream mongo
+      # ships el10 server packages. EL8 is rejected separately by
+      # check_systemd (systemd 239 < the 247 hardening floor).
       case "$major" in
-        9|10) ;;
-        *) die "$ELCHI_OS_ID $ELCHI_OS_VERSION is not supported. Use major version 9 or 10 (RHEL/Rocky/Alma/Oracle)." ;;
+        9) ;;
+        *) die "$ELCHI_OS_ID $ELCHI_OS_VERSION is not supported. Use major version 9 (RHEL/Rocky/Alma/Oracle). EL10 lacks published MongoDB server RPMs; EL8 ships systemd older than the 247 hardening floor." ;;
       esac
       ;;
   esac
@@ -822,8 +825,16 @@ preflight::run() {
   require_root
   preflight::detect_os
   preflight::detect_arch
-  preflight::check_systemd
+  # install_tools BEFORE check_systemd: check_systemd parses
+  # `systemctl --version` with awk and reads journald state — but awk
+  # (gawk) is not guaranteed on a minimal RHEL/Alma/Rocky image (the
+  # same image class that drops tar/gzip). Installing the full CLI
+  # toolchain first means every later preflight step — and check_systemd
+  # itself — can rely on awk / sed / grep / jq / curl being present.
+  # install_tools only needs ELCHI_OS_FAMILY (from detect_os) + the
+  # package manager, so it is safe to run this early.
   preflight::install_tools
+  preflight::check_systemd
   # OS upgrade after install_tools so jq/curl/etc. exist for downstream
   # logic, but BEFORE any service install — that way the new kernel /
   # libssl / openssl etc. are in place before we start mongod/grafana.

@@ -157,10 +157,32 @@ mongodb::_install_rhel() {
   pm=$(command -v dnf || command -v yum)
 
   local major=${ELCHI_OS_VERSION%%.*}
+  local base="https://repo.mongodb.org/yum/redhat/${major}/mongodb-org/${v}/x86_64"
 
-  local probe="https://repo.mongodb.org/yum/redhat/${major}/mongodb-org/${v}/x86_64/repodata/repomd.xml"
-  if ! curl -fsI --max-time 15 "$probe" >/dev/null 2>&1; then
+  # Two-level availability check. The repomd.xml existing only proves
+  # MongoDB created the repo SKELETON for this EL major — it does NOT
+  # prove the server packages are published. On a freshly-released RHEL
+  # major (e.g. EL10 as of mid-2026) MongoDB stands up the directory and
+  # ships the client tools (mongosh, database-tools) WEEKS before the
+  # server (mongodb-org-server / the mongodb-org metapackage) lands.
+  # Probing only repomd.xml lets the install sail past here and then die
+  # with an opaque "No match for argument: mongodb-org" at dnf time.
+  if ! curl -fsI --max-time 15 "${base}/repodata/repomd.xml" >/dev/null 2>&1; then
     die "MongoDB ${v} has no yum repo for RHEL ${major}. Re-run with --mongo-version=8.0."
+  fi
+  # Confirm the SERVER package itself is in the published metadata, not
+  # just the repo shell. We parse primary.xml.gz for <name>mongodb-org-server.
+  if ! mongodb::_rhel_repo_has_server "$base"; then
+    die "MongoDB ${v} server packages are NOT yet published for ${ELCHI_OS_ID} ${major}.
+       The el${major} repo currently ships only client tools (mongosh,
+       database-tools) — mongodb-org-server / the mongodb-org metapackage
+       are missing, so a LOCAL mongo install can't proceed. Options:
+         1) Install on RHEL/Rocky/Alma/Oracle 9 (server fully published), OR
+         2) Use an external mongo:
+              --mongo=external --mongo-uri=mongodb://user:pass@host:27017/elchi
+       (Everything else — backend, envoy, clickhouse, grafana — installs
+        fine on ${ELCHI_OS_ID} ${major}; only the bundled mongod is blocked
+        until MongoDB publishes el${major} server RPMs.)"
   fi
 
   mongodb::_clean_stale_rhel_repos "$v"
@@ -168,13 +190,50 @@ mongodb::_install_rhel() {
   cat > "/etc/yum.repos.d/mongodb-org-${v}.repo" <<EOF
 [mongodb-org-${v}]
 name=MongoDB Repository
-baseurl=https://repo.mongodb.org/yum/redhat/${major}/mongodb-org/${v}/x86_64/
+baseurl=${base}/
 gpgcheck=1
 enabled=1
 gpgkey=https://pgp.mongodb.org/server-${v}.asc
 EOF
 
   "$pm" install -y mongodb-org
+}
+
+# mongodb::_rhel_repo_has_server <repo-base-url> — true iff the repo's
+# published metadata actually contains the mongodb-org-server package.
+# Reads repomd.xml → primary.xml(.gz) → greps for the package name.
+#
+# Return contract:
+#   0  → server package present (proceed) OR introspection unavailable
+#        (network blip / unexpected metadata layout — don't block, let
+#        the subsequent `dnf install` be the real gate)
+#   1  → metadata fetched cleanly AND mongodb-org-server is absent
+#        (this is the el10-server-not-published case we want to catch)
+#
+# gz data is streamed to a temp file rather than captured in a shell
+# variable — command substitution strips trailing newlines and chokes
+# on the NUL bytes in gzip output.
+mongodb::_rhel_repo_has_server() {
+  local base=$1
+  local primary_href
+  primary_href=$(curl -fsSL --max-time 15 "${base}/repodata/repomd.xml" 2>/dev/null \
+    | grep -oE 'location href="[^"]*primary\.xml[^"]*"' | head -1 \
+    | sed -E 's/.*href="([^"]+)".*/\1/')
+  [ -n "$primary_href" ] || return 0   # can't introspect → don't block
+
+  local tmp
+  tmp=$(mktemp) || return 0
+  if ! curl -fsSL --max-time 20 "${base}/${primary_href}" -o "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; return 0             # fetch failed → don't block
+  fi
+
+  local found=1
+  case "$primary_href" in
+    *.gz) gunzip -c "$tmp" 2>/dev/null | grep -q '<name>mongodb-org-server</name>' && found=0 ;;
+    *)    grep -q '<name>mongodb-org-server</name>' "$tmp" && found=0 ;;
+  esac
+  rm -f "$tmp"
+  return "$found"
 }
 
 mongodb::_clean_stale_debian_repos() {
