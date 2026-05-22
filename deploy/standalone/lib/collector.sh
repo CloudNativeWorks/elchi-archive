@@ -36,7 +36,7 @@ readonly COLLECTOR_DATA=${ELCHI_LIB}/collector
 # coredns-elchi / elchi-gslb / elchi-client binaries already live.
 #
 # Per release, in github.com/CloudNativeWorks/elchi-archive:
-#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.7
+#   release tag : elchi-collector-<version>      e.g. elchi-collector-v0.1.8
 #   assets      : elchi-collector-linux-<arch>   e.g. elchi-collector-linux-amd64
 #                 elchi-collector-linux-<arch>.sha256
 # (same tag/asset convention as elchi-gslb-vX.Y.Z / coredns-elchi-linux-amd64).
@@ -134,6 +134,13 @@ ELCHI_COLLECTOR_HTTP_ADDR=:${ELCHI_PORT_COLLECTOR_HTTP}
 # Go runtime soft memory limit — keep below MemoryMax so GC turns
 # aggressive before the cgroup OOM-kills the process.
 GOMEMLIMIT=${ELCHI_COLLECTOR_GOMEMLIMIT:-450MiB}
+
+# GOGC controls GC frequency: GC runs when the heap grows this percent
+# over the live set (default 100 = 2x live). Raising it to 200 (3x live)
+# cuts GC frequency ~2x under the allocation-heavy flush path; GOMEMLIMIT
+# above is the hard safety net so peak heap stays bounded even with the
+# laxer GOGC. Override with ELCHI_COLLECTOR_GOGC=.
+GOGC=${ELCHI_COLLECTOR_GOGC:-200}
 
 # --- MongoDB (shared with the rest of the elchi stack) ---
 MONGO_URI=${mongo_uri}
