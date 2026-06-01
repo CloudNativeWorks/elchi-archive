@@ -1,0 +1,251 @@
+name: Download Elchi Backend
+
+# Mirrors every elchi-backend variant binary from its PRIVATE source repo
+# (CloudNativeWorks/elchi-backend) into THIS public elchi-archive release
+# mirror — the same idea as build-elchi-collector.yml / build-elchi-gslb.yml.
+#
+# Why this exists: the standalone installer (deploy/standalone) fetches
+# every component binary with an UNAUTHENTICATED curl. elchi-backend is a
+# private repo, so its own release assets 404 for the installer.
+# Re-publishing the binaries here (a public repo) makes them reachable —
+# lib/backend.sh downloads from:
+#   github.com/CloudNativeWorks/elchi-archive/releases/download/
+#     elchi-backend-<version>/<variant-tag>
+#
+# A single source release (e.g. v1.4.8) carries ONE binary per
+# control-plane / Envoy variant, each asset named after the full variant
+# tag (elchi-v1.4.8-v0.14.0-envoy1.36.2) plus a matching .sha256. This
+# workflow mirrors ALL of them into one elchi-archive release tagged
+# `elchi-backend-<version>`, keeping the asset names byte-for-byte
+# identical so lib/topology.sh::backend_asset_basename needs no change.
+#
+# ── PREREQUISITES ───────────────────────────────────────────────────
+#  1. A secret `GH_PAT` reachable by this workflow with read access to
+#     CloudNativeWorks/elchi-backend (classic PAT `repo` scope, or
+#     fine-grained: repo elchi-backend, Contents: Read-only). The default
+#     GITHUB_TOKEN is scoped to elchi-archive only and cannot read another
+#     private repo even in the same org. Manage GH_PAT once as an
+#     ORGANIZATION secret on CloudNativeWorks and share it with the repos
+#     that mirror (elchi-archive, elchi-collector, …).
+#  2. The elchi-backend release must already exist — cut it first in that
+#     repo, THEN run this one.
+#
+# Trigger: Actions tab → "Download Elchi Backend" → Run workflow →
+#          enter the version (e.g. v1.4.8).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'elchi-backend release version to mirror (e.g., v1.4.8)'
+        required: true
+        type: string
+
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20. Drop this block once every
+  # action used here ships a native Node 24 manifest.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-backend-download"
+  cancel-in-progress: false
+
+jobs:
+  download-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download elchi-backend variant binaries from the private repo
+        env:
+          # gh authenticates with GH_TOKEN. The default GITHUB_TOKEN is
+          # scoped to elchi-archive only and cannot read the private
+          # elchi-backend repo — a cross-repo PAT is required.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          SRC_REPO="CloudNativeWorks/elchi-backend"
+
+          mkdir -p "releases/elchi-backend-${VERSION}"
+          cd "releases/elchi-backend-${VERSION}"
+
+          echo "Downloading ALL release assets from ${SRC_REPO}@${VERSION}..."
+          # No --pattern: pull every variant binary + its .sha256. gh does
+          # NOT download the auto-generated "Source code" tarballs, so we
+          # get only the real release assets.
+          gh release download "${VERSION}" --repo "${SRC_REPO}"
+
+          # Verify every checksum against the upstream .sha256 before we
+          # re-publish. Asset names are kept identical, so the .sha256
+          # files stay valid as-is — no rename, no regeneration.
+          shopt -s nullglob
+          checked=0
+          for s in *.sha256; do
+            sha256sum -c "$s"
+            checked=$((checked + 1))
+          done
+          [ "$checked" -ge 1 ] || { echo "no .sha256 assets found — aborting" >&2; exit 1; }
+
+          # Mark binaries executable (the variant tags themselves are the
+          # binary filenames; .sha256 are the only non-binaries).
+          for f in *; do
+            case "$f" in *.sha256) ;; *) chmod +x "$f" ;; esac
+          done
+          echo "Mirrored ${checked} variant binaries:"
+          ls -la
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: elchi-backend-${{ github.event.inputs.version }}
+          path: releases/elchi-backend-${{ github.event.inputs.version }}/*
+
+  update-index:
+    needs: download-files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: elchi-backend-${{ github.event.inputs.version }}
+          path: releases/elchi-backend-${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Build the backend_releases entry by scanning every mirrored
+          # variant binary (anything that is NOT a .sha256 file). Each
+          # binary's sha256 comes from its sibling .sha256 file.
+          python3 << 'EOF'
+          import json, os, glob, datetime
+
+          version = os.environ['VERSION']
+          repo = os.environ['REPO']
+          rel_dir = f"releases/elchi-backend-{version}"
+
+          binaries = []
+          for path in sorted(glob.glob(f"{rel_dir}/*")):
+              name = os.path.basename(path)
+              if name.endswith('.sha256'):
+                  continue
+              sha_path = f"{path}.sha256"
+              with open(sha_path) as f:
+                  sha = f.read().split()[0]
+              # No `arch` key on purpose: every variant is linux-amd64, so
+              # the download portal (index.html renders `arch || name`)
+              # would otherwise label every row "linux-amd64". The variant
+              # tag in `name` is the meaningful per-row label.
+              binaries.append({
+                  "name": name,
+                  "type": "binary",
+                  "description": f"elchi-backend control-plane variant {name}",
+                  "download_url": f"https://github.com/{repo}/releases/download/elchi-backend-{version}/{name}",
+                  "sha256": sha,
+              })
+
+          if not binaries:
+              raise SystemExit("no variant binaries found to index")
+
+          new_release = {
+              "version": version,
+              "date": datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+              "binaries": binaries,
+          }
+
+          try:
+              with open('index.json') as f:
+                  index = json.load(f)
+          except Exception:
+              index = {"releases": []}
+
+          index.setdefault('backend_releases', [])
+
+          for i, r in enumerate(index['backend_releases']):
+              if r['version'] == version:
+                  index['backend_releases'][i] = new_release
+                  break
+          else:
+              index['backend_releases'].append(new_release)
+
+          index['backend_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: elchi-backend-${{ github.event.inputs.version }}
+          name: Elchi Backend ${{ github.event.inputs.version }}
+          body: |
+            ## elchi-backend ${{ github.event.inputs.version }}
+
+            elchi-backend variant binaries — one per control-plane / Envoy
+            version. The same Go binary serves registry, controller and
+            control-plane via subcommands.
+
+            Mirrored from the private source repo
+            `CloudNativeWorks/elchi-backend@${{ github.event.inputs.version }}`
+            so the standalone installer's unauthenticated download works.
+            Asset names are identical to upstream (the full variant tag).
+
+            ### Installation (handled automatically by the installer)
+
+            ```bash
+            # Pick the variant that matches your Envoy fleet.
+            VARIANT=elchi-${{ github.event.inputs.version }}-v0.14.0-envoy1.36.2
+            curl -fL -o elchi-backend \
+              https://github.com/${{ github.repository }}/releases/download/elchi-backend-${{ github.event.inputs.version }}/${VARIANT}
+            chmod +x elchi-backend
+            ```
+          files: |
+            releases/elchi-backend-${{ github.event.inputs.version }}/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi Backend ${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,230 @@
+name: Download Envoy Binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Envoy version to download (e.g., 1.34.2)'
+        required: true
+        type: string
+
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20. Drop this block once every
+  # action used here ships a native Node 24 manifest.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  download-binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download Envoy Binaries
+        run: |
+          # Fetch Envoy versions JSON
+          curl -o envoy-versions.json https://archive.tetratelabs.io/envoy/envoy-versions.json
+          
+          # Extract download URLs and checksums using Python
+          python3 << 'EOF'
+          import json
+          import os
+          
+          version = "${{ github.event.inputs.version }}"
+          
+          with open('envoy-versions.json', 'r') as f:
+              data = json.load(f)
+          
+          if version not in data['versions']:
+              print(f"Version {version} not found in available versions")
+              exit(1)
+          
+          version_data = data['versions'][version]
+          
+          # Get URLs for Linux AMD64 and ARM64
+          amd64_url = version_data['tarballs'].get('linux/amd64')
+          arm64_url = version_data['tarballs'].get('linux/arm64')
+          
+          if not amd64_url or not arm64_url:
+              print(f"Missing binaries for version {version}")
+              exit(1)
+          
+          # Get checksums
+          amd64_filename = amd64_url.split('/')[-1]
+          arm64_filename = arm64_url.split('/')[-1]
+          amd64_checksum = data['sha256sums'].get(amd64_filename, '')
+          arm64_checksum = data['sha256sums'].get(arm64_filename, '')
+          
+          # Save to environment variables
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f"AMD64_URL={amd64_url}\n")
+              f.write(f"ARM64_URL={arm64_url}\n")
+              f.write(f"AMD64_CHECKSUM={amd64_checksum}\n")
+              f.write(f"ARM64_CHECKSUM={arm64_checksum}\n")
+              f.write(f"RELEASE_DATE={version_data['releaseDate']}\n")
+          EOF
+
+      - name: Download and Extract Binaries
+        run: |
+          mkdir -p releases/v${{ github.event.inputs.version }}
+          cd releases/v${{ github.event.inputs.version }}
+          
+          # Download AMD64 tarball
+          curl -L -o envoy-amd64.tar.xz "$AMD64_URL"
+          
+          # Download ARM64 tarball  
+          curl -L -o envoy-arm64.tar.xz "$ARM64_URL"
+          
+          # Verify checksums
+          echo "$AMD64_CHECKSUM  envoy-amd64.tar.xz" | sha256sum -c
+          echo "$ARM64_CHECKSUM  envoy-arm64.tar.xz" | sha256sum -c
+          
+          # Extract binaries dynamically
+          tar -xf envoy-amd64.tar.xz
+          find . -name envoy -type f -exec mv {} envoy-linux-amd64 \;
+          rm -rf envoy-v*
+          
+          tar -xf envoy-arm64.tar.xz
+          find . -name envoy -type f -exec mv {} envoy-linux-arm64 \;
+          rm -rf envoy-v*
+          
+          # Clean up tarballs
+          rm envoy-amd64.tar.xz envoy-arm64.tar.xz
+          
+          # Generate checksums for binaries
+          sha256sum envoy-linux-amd64 > envoy-linux-amd64.sha256
+          sha256sum envoy-linux-arm64 > envoy-linux-arm64.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: envoy-binaries-v${{ github.event.inputs.version }}
+          path: releases/v${{ github.event.inputs.version }}/*
+
+  update-index:
+    needs: download-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: envoy-binaries-v${{ github.event.inputs.version }}
+          path: releases/v${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        run: |
+          # Read hashes from downloaded artifacts
+          AMD64_SHA256=$(cat releases/v${{ github.event.inputs.version }}/envoy-linux-amd64.sha256 | cut -d' ' -f1)
+          ARM64_SHA256=$(cat releases/v${{ github.event.inputs.version }}/envoy-linux-arm64.sha256 | cut -d' ' -f1)
+          
+          # Update JSON
+          cat > temp_release.json << EOF
+          {
+            "version": "v${{ github.event.inputs.version }}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "binaries": [
+              {
+                "arch": "linux-amd64",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/envoy-linux-amd64",
+                "sha256": "$AMD64_SHA256"
+              },
+              {
+                "arch": "linux-arm64", 
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/envoy-linux-arm64",
+                "sha256": "$ARM64_SHA256"
+              }
+            ]
+          }
+          EOF
+          
+          # Update existing index.json
+          python3 << 'EOF'
+          import json
+          
+          # Read existing index
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+          
+          # Read new release
+          with open('temp_release.json', 'r') as f:
+              new_release = json.load(f)
+          
+          # Update if same version exists, otherwise add
+          existing = False
+          for i, release in enumerate(index['releases']):
+              if release['version'] == new_release['version']:
+                  index['releases'][i] = new_release
+                  existing = True
+                  break
+          
+          if not existing:
+              index['releases'].append(new_release)
+          
+          # Sort by version (newest to oldest)
+          index['releases'].sort(key=lambda x: x['version'], reverse=True)
+          
+          # Save
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: Envoy v${{ github.event.inputs.version }}
+          files: |
+            releases/v${{ github.event.inputs.version }}/envoy-linux-amd64
+            releases/v${{ github.event.inputs.version }}/envoy-linux-arm64
+            releases/v${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Envoy v${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

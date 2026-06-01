@@ -1,0 +1,217 @@
+name: Download Elchi UI
+
+# Mirrors the elchi UI distribution bundle from its PRIVATE source repo
+# (CloudNativeWorks/elchi) into THIS public elchi-archive release mirror —
+# the same idea as build-elchi-collector.yml / build-elchi-backend.yml.
+#
+# Why this exists: the standalone installer (deploy/standalone) fetches
+# the UI bundle with an UNAUTHENTICATED curl. elchi is a private repo, so
+# its own release assets 404 for the installer. Re-publishing the bundle
+# here (a public repo) makes it reachable — lib/ui.sh downloads from:
+#   github.com/CloudNativeWorks/elchi-archive/releases/download/
+#     elchi-ui-<version>/elchi-dist-<version>.tar.gz
+#
+# Unlike the binary mirrors, the upstream UI release ships NO .sha256
+# asset, so we compute the checksum ourselves after download and publish
+# it alongside the tarball (for index.json + Pages; lib/ui.sh itself does
+# not yet verify it). The asset name is kept identical to upstream so
+# lib/ui.sh only needs its base URL changed.
+#
+# ── PREREQUISITES ───────────────────────────────────────────────────
+#  1. A secret `GH_PAT` reachable by this workflow with read access to
+#     CloudNativeWorks/elchi (classic PAT `repo` scope, or fine-grained:
+#     repo elchi, Contents: Read-only). Same org-wide GH_PAT the other
+#     mirror workflows use.
+#  2. The elchi UI release must already exist — cut it first in that repo,
+#     THEN run this one.
+#
+# Trigger: Actions tab → "Download Elchi UI" → Run workflow →
+#          enter the version (e.g. v1.4.4).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'elchi UI release version to mirror (e.g., v1.4.4)'
+        required: true
+        type: string
+
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20. Drop this block once every
+  # action used here ships a native Node 24 manifest.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-ui-download"
+  cancel-in-progress: false
+
+jobs:
+  download-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download elchi UI bundle from the private repo
+        env:
+          # gh authenticates with GH_TOKEN. The default GITHUB_TOKEN is
+          # scoped to elchi-archive only and cannot read the private elchi
+          # repo — a cross-repo PAT is required.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          SRC_REPO="CloudNativeWorks/elchi"
+          SRC_ASSET="elchi-dist-${VERSION}.tar.gz"
+
+          mkdir -p "releases/elchi-ui-${VERSION}"
+          cd "releases/elchi-ui-${VERSION}"
+
+          echo "Downloading ${SRC_ASSET} from ${SRC_REPO}@${VERSION}..."
+          gh release download "${VERSION}" \
+            --repo "${SRC_REPO}" \
+            --pattern "${SRC_ASSET}"
+
+          # Upstream ships no checksum for the UI bundle — generate one so
+          # index.json and the Pages portal can advertise it.
+          sha256sum "${SRC_ASSET}" > "${SRC_ASSET}.sha256"
+          ls -la
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: elchi-ui-${{ github.event.inputs.version }}
+          path: releases/elchi-ui-${{ github.event.inputs.version }}/*
+
+  update-index:
+    needs: download-files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: elchi-ui-${{ github.event.inputs.version }}
+          path: releases/elchi-ui-${{ github.event.inputs.version }}
+
+      - name: Update index.json
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          ASSET="elchi-dist-${VERSION}.tar.gz"
+          BUNDLE_SHA256=$(cut -d' ' -f1 "releases/elchi-ui-${VERSION}/${ASSET}.sha256")
+
+          cat > temp_elchi_ui_release.json << EOF
+          {
+            "version": "${VERSION}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "${ASSET}",
+                "type": "bundle",
+                "description": "elchi UI static distribution bundle (index.html + assets)",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-ui-${VERSION}/${ASSET}",
+                "sha256": "$BUNDLE_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with a ui_releases section.
+          python3 << PYEOF
+          import json
+
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except Exception:
+              index = {"releases": []}
+
+          if 'ui_releases' not in index:
+              index['ui_releases'] = []
+
+          with open('temp_elchi_ui_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          existing = False
+          for i, release in enumerate(index['ui_releases']):
+              if release['version'] == new_release['version']:
+                  index['ui_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['ui_releases'].append(new_release)
+
+          index['ui_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          PYEOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: elchi-ui-${{ github.event.inputs.version }}
+          name: Elchi UI ${{ github.event.inputs.version }}
+          body: |
+            ## elchi UI ${{ github.event.inputs.version }}
+
+            elchi UI static distribution bundle (`elchi-dist-*.tar.gz`) —
+            index.html + assets/, served by nginx on bare-metal.
+
+            Mirrored from the private source repo
+            `CloudNativeWorks/elchi@${{ github.event.inputs.version }}`
+            so the standalone installer's unauthenticated download works.
+
+            ### Installation (handled automatically by the installer)
+
+            ```bash
+            curl -fL -o elchi-dist.tar.gz \
+              https://github.com/${{ github.repository }}/releases/download/elchi-ui-${{ github.event.inputs.version }}/elchi-dist-${{ github.event.inputs.version }}.tar.gz
+            ```
+          files: |
+            releases/elchi-ui-${{ github.event.inputs.version }}/elchi-dist-${{ github.event.inputs.version }}.tar.gz
+            releases/elchi-ui-${{ github.event.inputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi UI ${{ github.event.inputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

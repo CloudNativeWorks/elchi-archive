@@ -1,0 +1,217 @@
+name: Publish Install Script
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'install.sh'
+    branches:
+      - main
+
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20. Drop this block once every
+  # action used here ships a native Node 24 manifest.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "install-script-publish"
+  cancel-in-progress: false
+
+jobs:
+  publish-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: |
+          # Date-based tag for every run (manual + push). install_script_releases
+          # holds a single rolling entry, so collisions across same-day runs
+          # just overwrite the index entry; the GitHub Release tag may
+          # already exist for today, in which case action-gh-release updates
+          # it in place.
+          VERSION="v$(date -u +%Y.%m.%d)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
+
+      - name: Prepare release files
+        run: |
+          mkdir -p releases/install-script-${{ steps.version.outputs.version }}
+          cp install.sh releases/install-script-${{ steps.version.outputs.version }}/
+          cp uninstall.sh releases/install-script-${{ steps.version.outputs.version }}/
+
+          # Generate checksums
+          cd releases/install-script-${{ steps.version.outputs.version }}
+          sha256sum install.sh > install.sh.sha256
+          sha256sum uninstall.sh > uninstall.sh.sha256
+
+          # Make executable
+          chmod +x install.sh uninstall.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: install-script-${{ steps.version.outputs.version }}
+          path: releases/install-script-${{ steps.version.outputs.version }}/*
+
+  update-index:
+    needs: publish-script
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: |
+          VERSION="v$(date -u +%Y.%m.%d)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: install-script-${{ steps.version.outputs.version }}
+          path: releases/install-script-${{ steps.version.outputs.version }}
+
+      - name: Update index.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Read checksums
+          INSTALL_SHA256=$(cat releases/install-script-${VERSION}/install.sh.sha256 | cut -d' ' -f1)
+          UNINSTALL_SHA256=$(cat releases/install-script-${VERSION}/uninstall.sh.sha256 | cut -d' ' -f1)
+
+          # Create new install script release entry
+          cat > temp_install_script_release.json << EOF
+          {
+            "version": "$VERSION",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "install.sh",
+                "type": "script",
+                "description": "Elchi Stack installation script for Ubuntu 24.04",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/install-script-$VERSION/install.sh",
+                "sha256": "$INSTALL_SHA256"
+              },
+              {
+                "name": "uninstall.sh",
+                "type": "script",
+                "description": "Elchi Stack uninstallation script",
+                "download_url": "https://github.com/${{ github.repository }}/releases/download/install-script-$VERSION/uninstall.sh",
+                "sha256": "$UNINSTALL_SHA256"
+              }
+            ]
+          }
+          EOF
+
+          # Update index.json with install script releases section.
+          # Contract: install_script_releases holds exactly one entry — the
+          # latest publish. index.html consumes [0] and the install.sh URL
+          # is "always-current" by design. Older versions stay reachable
+          # via their GitHub Release tags, which we don't delete.
+          python3 << 'EOF'
+          import json
+
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except:
+              index = {"releases": []}
+
+          with open('temp_install_script_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          index['install_script_releases'] = [new_release]
+
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: install-script-${{ steps.version.outputs.version }}
+          name: Install Script ${{ steps.version.outputs.version }}
+          body: |
+            Elchi Stack Installation Script ${{ steps.version.outputs.version }}
+
+            ## Quick Install
+
+            ```bash
+            # Download and run
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/install-script-${{ steps.version.outputs.version }}/install.sh | bash -s -- <mainAddress> <port>
+            ```
+
+            ## Download Only
+
+            ```bash
+            # Download the script
+            wget https://github.com/${{ github.repository }}/releases/download/install-script-${{ steps.version.outputs.version }}/install.sh
+
+            # Make it executable
+            chmod +x install.sh
+
+            # Run with your configuration
+            ./install.sh elchi.example.com 8080
+            ```
+
+            ## Requirements
+            - Ubuntu 24.04 (recommended)
+            - Root or sudo privileges
+            - At least 15GB disk space
+            - Internet connectivity
+
+            ## What it installs
+            - Docker
+            - kubectl
+            - kind (Kubernetes in Docker)
+            - Helm
+            - Elchi Stack via Helm chart
+          files: |
+            releases/install-script-${{ steps.version.outputs.version }}/install.sh
+            releases/install-script-${{ steps.version.outputs.version }}/uninstall.sh
+            releases/install-script-${{ steps.version.outputs.version }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Install Script ${{ steps.version.outputs.version }}" || exit 0
+          git push
+
+  deploy:
+    needs: update-index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

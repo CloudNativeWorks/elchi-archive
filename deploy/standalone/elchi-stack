@@ -1,0 +1,1348 @@
+#!/usr/bin/env bash
+# elchi-stack — operator helper. Installed at /usr/local/bin/elchi-stack
+# during install. Provides cluster-wide control: status, logs,
+# reload-envoy, add-node, init-replica-set, export-bundle.
+
+set -Eeuo pipefail
+
+ELCHI_INSTALLER_ROOT=${ELCHI_INSTALLER_ROOT:-/opt/elchi-installer}
+
+# Source the same lib/ tree the installer used. This is shipped during
+# install (orchestrator copies the installer to /opt/elchi-installer on
+# every node).
+if [ -d "${ELCHI_INSTALLER_ROOT}/lib" ]; then
+  # shellcheck source=lib/common.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/common.sh"
+  # shellcheck source=lib/topology.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/topology.sh"
+  # shellcheck source=lib/ssh.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/ssh.sh"
+  # shellcheck source=lib/envoy.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/envoy.sh"
+  # shellcheck source=lib/mongodb.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/mongodb.sh"
+  # shellcheck source=lib/secrets.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/secrets.sh"
+  # shellcheck source=lib/bundle.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/bundle.sh"
+  # shellcheck source=lib/dirs.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/dirs.sh"
+  # shellcheck source=lib/backend.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/backend.sh"
+  # shellcheck source=lib/grafana.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/grafana.sh"
+  # shellcheck source=lib/systemd.sh
+  . "${ELCHI_INSTALLER_ROOT}/lib/systemd.sh"
+  # shellcheck source=lib/verify.sh
+  # Sourced so cmd_verify can call verify::_mongo_rs_leader for M1-only
+  # cluster-state probes (rs.status() needs root creds that only live
+  # on M1). The per-node remote probe inside cmd_verify covers Keeper.
+  . "${ELCHI_INSTALLER_ROOT}/lib/verify.sh"
+else
+  printf 'elchi-stack: installer libs missing (looked under %s)\n' "$ELCHI_INSTALLER_ROOT" >&2
+  exit 1
+fi
+
+# _ssh_setup — pull persisted SSH creds from /etc/elchi/orchestrator.env
+# (USER/PORT/KEY) into env vars, then call ssh::configure so subsequent
+# ssh::run / ssh::scp use the cluster key non-interactively. Every
+# subcommand that touches a remote host MUST call this first; otherwise
+# ssh falls back to the default identity → password prompt.
+_ssh_setup() {
+  ssh::load_persisted_creds
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" ""
+}
+
+usage() {
+  cat <<EOF
+elchi-stack — operator helper
+
+Usage:
+  elchi-stack status                  cluster-wide service summary
+  elchi-stack logs <unit> [-f]        tail journalctl on every node
+  elchi-stack reload-envoy            re-render bootstrap and restart Envoy on every node
+  elchi-stack add-node <ip>           extend the cluster (M1 only)
+  elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
+  elchi-stack mongo-status            replica-set health snapshot (M1 only)
+                                       — primary, per-member state / health /
+                                       uptime / replication lag / heartbeat msg
+  elchi-stack clickhouse-status       ClickHouse cluster health snapshot
+                                       (run on any CH node — first 3 by topology)
+                                       — version, Keeper quorum, elchi_cluster
+                                       member errors, Replicated DB engine,
+                                       per-table total/active replicas + delay
+  elchi-stack export-bundle <out> [--reuse-bundle-key]
+                                      repackage the encrypted cluster bundle.
+                                       --reuse-bundle-key uses the install-time
+                                       key persisted at /etc/elchi/.bundle-key
+                                       so an exported bundle can be reapplied
+                                       to the existing cluster without
+                                       redistributing a fresh decryption key.
+  elchi-stack show-secret <name>      print a stored credential
+                                       (grafana | jwt | gslb | mongo-app | mongo-root |
+                                        clickhouse | collector | all)
+  elchi-stack rotate-secret <name>    rotate JWT/GSLB/Grafana secret (cluster-wide restart for jwt/gslb)
+  elchi-stack verify                  end-to-end cluster health check
+                                       (registration logs, Envoy admin, listener ports)
+
+  Day-2 quality-of-life:
+  elchi-stack mongosh [args...]       open mongosh against the local mongod
+                                       with creds pre-loaded (root on M1, app
+                                       elsewhere) — pass-through args, e.g.
+                                       `mongosh --eval 'rs.status()'`
+  elchi-stack ch-client [args...]     open clickhouse-client locally as the
+                                       \`elchi\` user (CH-node only — first 3)
+  elchi-stack ssh <node> [cmd...]     open SSH to a cluster node using the
+                                       persisted cluster key. <node> = m1/m2/m3,
+                                       hostname, or IP. No args → interactive
+                                       admin-user shell; with args → run them
+                                       as root via sudo.
+  elchi-stack stack-version           one-screen "what's installed where" —
+                                       topology version block + the actual
+                                       binary versions on this node.
+  elchi-stack tls-info                cluster TLS cert: subject, SANs, validity
+                                       window, days-to-expiry, sha256 fingerprint.
+  elchi-stack endpoint-test           synthetic HTTPS probes through this node's
+                                       envoy listener — UI, VictoriaMetrics,
+                                       Grafana, internal :8080.
+  elchi-stack collector-stats         per-node elchi-collector Prometheus
+                                       counters (events in/out, drops, queue,
+                                       ClickHouse rows, error counts).
+
+EOF
+}
+
+cmd_status() {
+  if [ ! -f /etc/elchi/nodes.list ]; then
+    printf 'no /etc/elchi/nodes.list — is this M1?\n' >&2
+    exit 1
+  fi
+  _ssh_setup
+
+  # Status query: every "elchi-*" unit (templates included via the @* glob)
+  # PLUS the externally-managed services we drive (mongod, grafana-server,
+  # nginx). Without listing those, M1 looks like it's missing mongo/VM/UI
+  # because those packages don't carry an "elchi-" prefix even though
+  # elchi-stack owns their config + lifecycle on this host. The glob is
+  # passed through bash -c on the remote side so the shell on the local
+  # box doesn't try to expand 'elchi-*' against /etc.
+  local query=$(cat <<'EOF'
+systemctl list-units --no-pager --no-legend --type=service \
+  'elchi-*' 'elchi-control-plane-*@*' \
+  mongod.service grafana-server.service nginx.service clickhouse-server.service 2>/dev/null
+EOF
+)
+  local host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
+    if ssh::is_local "$host"; then
+      bash -c "$query" | awk '{printf "  %-50s %s\n", $1, $4}'
+    else
+      ssh::run "$host" bash -c "$query" | awk '{printf "  %-50s %s\n", $1, $4}'
+    fi
+  done < /etc/elchi/nodes.list
+}
+
+cmd_logs() {
+  local unit=${1:-}
+  shift || true
+  [ -n "$unit" ] || { printf 'unit name required\n' >&2; exit 2; }
+  local follow=0
+  case "${1:-}" in
+    -f|--follow) follow=1 ;;
+  esac
+
+  _ssh_setup
+
+  if [ "$follow" = "1" ]; then
+    # Multi-host live tail: each node's `journalctl -f` runs in the
+    # background and writes to a shared stdout. Two issues to handle:
+    #
+    #   (a) Interleaving — without per-line prefixing, a line from node A
+    #       can land under node B's banner and look like it came from B.
+    #       Pipe each stream through `sed` to prepend "[host] ".
+    #
+    #   (b) Ctrl+C — `wait` returns 130 on SIGINT, and `set -Eeuo
+    #       pipefail` then triggers the global ERR handler ("[ERR]
+    #       installer exited with rc=130"). Trap INT/TERM so the user
+    #       can break out of `-f` cleanly: kill the children, exit 0.
+    local pids=() host
+    # shellcheck disable=SC2064
+    trap 'kill ${pids[*]:-} 2>/dev/null || true; exit 0' INT TERM
+    while IFS= read -r host; do
+      [ -z "$host" ] && continue
+      if ssh::is_local "$host"; then
+        ( journalctl -u "$unit" -f --no-pager 2>&1 \
+            | sed -u "s/^/[$host] /" ) &
+      else
+        ( ssh::run "$host" bash -c "journalctl -u '$unit' -f --no-pager" 2>&1 \
+            | sed -u "s/^/[$host] /" ) &
+      fi
+      pids+=("$!")
+    done < /etc/elchi/nodes.list
+    wait
+    return 0
+  fi
+
+  # Non-follow mode: serial dump per host with a banner — no interleave
+  # risk, no SIGINT loop to manage.
+  local host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    printf '\n%s── %s : %s ──%s\n' "$C_BOLD" "$host" "$unit" "$C_RESET"
+    if ssh::is_local "$host"; then
+      journalctl -u "$unit" -n 50 --no-pager
+    else
+      ssh::run "$host" bash -c "journalctl -u '$unit' -n 50 --no-pager"
+    fi
+  done < /etc/elchi/nodes.list
+}
+
+cmd_reload_envoy() {
+  _ssh_setup
+  local host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    log::node "$host" "re-rendering envoy.yaml + restarting"
+    if ssh::is_local "$host"; then
+      envoy::reload
+    else
+      # Render new bootstrap locally (state is identical cluster-wide
+      # since it derives from /etc/elchi/topology.full.yaml + ports.full.json),
+      # then push to the remote and restart over there.
+      envoy::render_bootstrap
+      # ssh::scp now streams via `sudo install /dev/stdin` so we can
+      # write directly to the final destination with no /tmp dance.
+      # Fix up ownership (install lands it root:root) and restart.
+      ssh::scp /etc/elchi/config/envoy.yaml "$host" /etc/elchi/config/envoy.yaml
+      ssh::run_sudo "$host" "chown root:elchi /etc/elchi/config/envoy.yaml && chmod 0640 /etc/elchi/config/envoy.yaml && systemctl restart elchi-envoy.service"
+    fi
+  done < /etc/elchi/nodes.list
+  log::ok "envoy reloaded cluster-wide"
+}
+
+cmd_add_node() {
+  local new_ip=""
+  local skip_confirm=0
+  # Two-pass arg loop: pull --yes-i-mean-it / -y out for the prompt,
+  # let everything else (e.g. --ssh-key, --ssh-port) pass through to
+  # install.sh below. Keeps the flag surface compatible with operator
+  # muscle memory from `bash get.sh --uninstall --yes-i-mean-it`.
+  #
+  # CRITICAL: install.sh interprets the LAST --foo=value when a flag
+  # appears twice. We're already forwarding --nodes / --main-address /
+  # --backend-version / --gslb-* read out of topology; if the operator
+  # also typed any of them on the command line, the passthru would
+  # land AFTER our forwards and silently overwrite the cluster's
+  # canonical state. e.g. `add-node 10.0.0.5 --nodes=foo` would bypass
+  # the merged-list logic entirely, partial-installing a single-node
+  # cluster on top of the existing topology. Reject the overlap up
+  # front with a clear error.
+  local -a passthru=()
+  local arg flag
+  while [ "$#" -gt 0 ]; do
+    arg=$1
+    case "$arg" in
+      --yes-i-mean-it|-y) skip_confirm=1 ;;
+      -h|--help)
+        printf 'Usage: elchi-stack add-node <ip> [--yes-i-mean-it] [install.sh flags forwarded as-is]\n'
+        printf '  Reserved flags (managed automatically from /etc/elchi/topology.full.yaml):\n'
+        printf '    --nodes  --main-address  --port  --backend-version\n'
+        printf '    --ui-version  --envoy-version  --coredns-version\n'
+        printf '    --gslb  --gslb-zone  --gslb-admin-email  --gslb-nameservers  --gslb-regions\n'
+        return 0
+        ;;
+      -*)
+        # Strip everything after the first `=` (long-option form) or
+        # treat the whole token as the flag name (short form). Reject
+        # any flag we already manage from topology — silent override
+        # would re-shape the cluster in surprising ways.
+        flag=${arg%%=*}
+        case "$flag" in
+          --nodes|--main-address|--port|--backend-version|--ui-version|--envoy-version|--coredns-version|--gslb|--no-gslb|--gslb-zone|--gslb-admin-email|--gslb-nameservers|--gslb-regions)
+            die "${flag} cannot be passed to add-node — it's managed from /etc/elchi/topology.full.yaml. To change ${flag} use 'sudo bash get.sh --upgrade ${flag}=...' instead."
+            ;;
+        esac
+        passthru+=("$arg")
+        ;;
+      *)
+        if [ -z "$new_ip" ]; then new_ip=$arg
+        else passthru+=("$arg")
+        fi
+        ;;
+    esac
+    shift
+  done
+  [ -n "$new_ip" ] || die "new node IP required: elchi-stack add-node <ip>"
+
+  if [ ! -f /etc/elchi/nodes.list ] || [ ! -f /etc/elchi/topology.full.yaml ]; then
+    die "no /etc/elchi/nodes.list or topology.full.yaml — run install.sh first"
+  fi
+
+  # Existing topology: nodes + persisted install-time choices. We
+  # forward all of these to install.sh on rerun so the operator
+  # doesn't have to re-type --main-address / --backend-version /
+  # --gslb-zone / --ui-version / --envoy-version. install.sh would
+  # otherwise hard-fail on the missing --main-address.
+  local existing_csv existing_count new_pos
+  existing_csv=$(paste -sd, /etc/elchi/nodes.list)
+  existing_count=$(wc -l < /etc/elchi/nodes.list | tr -d ' ')
+  new_pos=$(( existing_count + 1 ))
+
+  if grep -qxF "$new_ip" /etc/elchi/nodes.list 2>/dev/null; then
+    die "${new_ip} is already in /etc/elchi/nodes.list — refusing to add a duplicate"
+  fi
+
+  local merged="${existing_csv},${new_ip}"
+
+  local main_addr port install_gslb gslb_zone gslb_admin gslb_nameservers gslb_regions
+  main_addr=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  port=$(awk      '/^cluster:/{f=1; next} f && /^[[:space:]]+port:/{print $2; exit}'         /etc/elchi/topology.full.yaml)
+  install_gslb=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+install_gslb:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  gslb_zone=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_zone:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  gslb_admin=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_admin_email:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  # Nameservers + regions are operator-supplied at install time and must
+  # round-trip through topology.full.yaml so add-node's install.sh rerun
+  # doesn't re-render Corefile / zone.db without them.
+  gslb_nameservers=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_nameservers:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  gslb_regions=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+gslb_regions:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+  [ -n "$main_addr" ] || die "main_address missing from topology.full.yaml — file may be corrupt"
+
+  local ui_version envoy_version coredns_version
+  ui_version=$(awk      '/^versions:/{f=1; next} f && /^  ui:/{print $2; exit}'      /etc/elchi/topology.full.yaml)
+  envoy_version=$(awk   '/^versions:/{f=1; next} f && /^  envoy:/{print $2; exit}'   /etc/elchi/topology.full.yaml)
+  coredns_version=$(awk '/^versions:/{f=1; next} f && /^  coredns:/{print $2; exit}' /etc/elchi/topology.full.yaml)
+
+  # backend_variants is a multi-line list under `versions:` — collect
+  # to CSV in document order so install.sh + the cluster keep their
+  # existing port allocations.
+  local variants_csv
+  variants_csv=$(awk '
+    /^  backend_variants:/ { f=1; next }
+    f && /^    -[[:space:]]+/ { sub(/^    -[[:space:]]+/, "", $0); printf "%s%s", sep, $0; sep="," }
+    f && /^[a-zA-Z]/ { exit }
+  ' /etc/elchi/topology.full.yaml)
+  [ -n "$variants_csv" ] || die "backend_variants missing from topology.full.yaml"
+
+  # ---- mongo impact (drives the preview banner + operator warnings) -----
+  # Mirrors lib/topology.sh::is_mongo_node:
+  #   N=1|2  → only idx=1 runs mongo (standalone)
+  #   N>=3   → idx 1..3 run mongo (replica set)
+  # The interesting transition is N=2 → N=3: M1 flips standalone→RS,
+  # M2 gets a fresh mongod install for the first time, M3 same. That's
+  # the only shape that imposes a brief write-availability gap.
+  local mongo_impact_label mongo_impact_lines
+  if [ "$existing_count" = "1" ] && [ "$new_pos" = "2" ]; then
+    mongo_impact_label="no migration"
+    mongo_impact_lines="this node will NOT run mongo (will reach M1's standalone mongod over LAN)"
+  elif [ "$existing_count" = "2" ] && [ "$new_pos" = "3" ]; then
+    # Bash 3.2 (macOS dev shell) has parser bugs with heredocs nested
+    # inside $(...) when the body contains parens / apostrophes — build
+    # this multi-line message with explicit \n joins instead of cat<<EOF
+    # so the script lints cleanly across every shell version.
+    mongo_impact_label="${C_YELLOW}STANDALONE -> REPLICA SET migration${C_RESET}"
+    mongo_impact_lines="M1 mongod will be reconfigured (replSetName=elchi-rs) and restarted
+M2 + M3 will install mongo for the first time (apt-get mongodb-org)
+rs.initiate() will run with all 3 members
+expected write-availability gap: ~10-30s during M1 restart
+existing M1 data is preserved and replicated to M2/M3 on initial sync"
+  elif [ "$new_pos" -le 3 ] 2>/dev/null; then
+    mongo_impact_label="this node joins the RS"
+    mongo_impact_lines="mongod will be installed and added to the elchi-rs replica set"
+  else
+    mongo_impact_label="no mongo (capped at 3 RS members)"
+    mongo_impact_lines="mongo stays on M1+M2+M3; this node connects via the cluster URI like every other backend service"
+  fi
+
+  # ---- preview banner ---------------------------------------------------
+  printf '\n%b==> Add-node preview%b\n\n' "$C_BOLD" "$C_RESET"
+  printf '  current cluster:  %d node(s) — %s\n' "$existing_count" "$existing_csv"
+  printf '  new node:         %s (will be M%d)\n' "$new_ip" "$new_pos"
+  printf '  cluster size:     %d → %d\n\n' "$existing_count" "$new_pos"
+
+  printf '  what will happen:\n'
+  printf '    [admin user]    create elchi-cluster-admin on %s (cluster key authorized)\n' "$new_ip"
+  printf '    [bootstrap]     ssh-copy-id cluster key (interactive password if needed)\n'
+  printf '    [mongo]         %b\n' "$mongo_impact_label"
+  while IFS= read -r _line; do
+    [ -n "$_line" ] && printf '                    %s\n' "$_line"
+  done <<<"$mongo_impact_lines"
+  printf '    [new node]      install backend (controller + control-plane), envoy, nginx, coredns, otel\n'
+  printf '    [topology]      re-render topology.full.yaml + ports.full.json\n'
+  printf '    [tls]           regenerate self-signed cert (SAN list will include %s)\n' "$new_ip"
+  printf '    [/etc/hosts]    push the new managed block to every node\n'
+  if [ "$install_gslb" = "1" ]; then
+    printf '    [coredns]       new CoreDNS instance binds %s:53 with the same Corefile\n' "$new_ip"
+    if [ -n "$gslb_nameservers" ]; then
+      printf '                    NS records preserved from topology (--gslb-nameservers=%s);\n' "$gslb_nameservers"
+      printf '                    operator-supplied list is NOT auto-extended -- pass a new\n'
+      printf '                    --gslb-nameservers=... if you want %s to advertise as NS\n' "$new_ip"
+    else
+      # auto-derive default kicks in: every cluster node becomes an ns<idx>
+      printf '                    no operator NS list -- defaults to one ns<idx> entry per\n'
+      printf '                    cluster node; %s will be added as ns%d:%s automatically\n' \
+        "$new_ip" "$new_pos" "$new_ip"
+    fi
+  fi
+  printf '    [existing M*]   envoy.yaml + backend common.env get re-rendered with the\n'
+  printf '                    new peer set; fingerprint reconcile restarts envoy and the\n'
+  printf '                    affected backends on each existing node (~1-3s gap per\n'
+  printf '                    node, sequential -- front-door HTTPS may briefly 5xx)\n\n'
+  printf '  estimated time:   3-5 min\n\n'
+
+  # ---- confirm ----------------------------------------------------------
+  if [ "$skip_confirm" != "1" ]; then
+    if [ ! -t 0 ]; then
+      die "no controlling tty; pass --yes-i-mean-it for non-interactive add-node"
+    fi
+    local ans
+    read -r -p "About to add ${new_ip} to the cluster (size ${existing_count} → ${new_pos}). Type 'yes' to continue: " ans
+    [ "$ans" = "yes" ] || die "aborted"
+  fi
+
+  # ---- compose + exec install.sh re-run ---------------------------------
+  # --non-interactive is only forced when the operator passed
+  # --yes-i-mean-it (CI / scripted teardown). In the interactive path
+  # we already showed the preview + confirmed manually, so install.sh
+  # should be allowed to prompt for an SSH password if the new node's
+  # cluster key isn't authorized yet. With --non-interactive, the
+  # bootstrap path dies instead of prompting — that's the right
+  # failure mode for automation but a UX trap when the operator is
+  # actually sitting in front of the terminal.
+  local -a cmd=(
+    bash "${ELCHI_INSTALLER_ROOT}/install.sh"
+    --nodes="$merged"
+    --main-address="$main_addr"
+    --backend-version="$variants_csv"
+  )
+  [ "$skip_confirm" = "1" ] && cmd+=(--non-interactive)
+  [ -n "$port" ]            && cmd+=(--port="$port")
+  [ -n "$ui_version" ]      && cmd+=(--ui-version="$ui_version")
+  [ -n "$envoy_version" ]   && cmd+=(--envoy-version="$envoy_version")
+  [ -n "$coredns_version" ] && cmd+=(--coredns-version="$coredns_version")
+  [ "$install_gslb" = "1" ] && cmd+=(--gslb)
+  [ -n "$gslb_zone" ]       && cmd+=(--gslb-zone="$gslb_zone")
+  [ -n "$gslb_admin" ]      && cmd+=(--gslb-admin-email="$gslb_admin")
+  [ -n "$gslb_nameservers" ] && cmd+=(--gslb-nameservers="$gslb_nameservers")
+  [ -n "$gslb_regions" ]     && cmd+=(--gslb-regions="$gslb_regions")
+  [ -n "${ELCHI_SSH_USER:-}" ] && cmd+=(--ssh-user="$ELCHI_SSH_USER")
+  [ -n "${ELCHI_SSH_KEY:-}" ]  && cmd+=(--ssh-key="$ELCHI_SSH_KEY")
+  [ -n "${ELCHI_SSH_PORT:-}" ] && cmd+=(--ssh-port="$ELCHI_SSH_PORT")
+
+  log::info "extending cluster: ${existing_csv} → ${merged}"
+  exec "${cmd[@]}" "${passthru[@]}"
+}
+
+cmd_init_rs() {
+  mongodb::initiate_replica_set
+}
+
+# cmd_mongo_status — print mongo replica-set health from M1's perspective.
+# Single-shot rs.status() snapshot: PRIMARY identification, per-member
+# state / health / uptime / replication lag / lastHeartbeatMessage.
+#
+# M1-only: the only node where /etc/elchi/mongo/root.env exists (mongo
+# root creds — never shipped to M2/M3 in the bundle). Cross-node read
+# would require either persisting root creds elsewhere or proxying via
+# SSH; both add attack surface for a tool that's purely diagnostic.
+# Operators on M2/M3 get a clean error pointing at M1 instead.
+cmd_mongo_status() {
+  if [ ! -f /etc/elchi/mongo/root.env ]; then
+    local m1_ip=""
+    [ -f /etc/elchi/nodes.list ] && m1_ip=$(head -1 /etc/elchi/nodes.list)
+    printf 'mongo-status is M1-only — run on M1%s\n' \
+      "${m1_ip:+ ($m1_ip)}" >&2
+    exit 1
+  fi
+
+  local size=1
+  if [ -f /etc/elchi/topology.full.yaml ]; then
+    size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+             /etc/elchi/topology.full.yaml)
+  fi
+
+  # Standalone shortcut. cluster_size < 3 means this install never
+  # configured a replica set (lib/topology.sh::is_mongo_node caps RS
+  # at 3 members and uses standalone for size 1-2). rs.status() would
+  # error here with NotYetInitialized, so just report the basic
+  # mongod liveness instead of a misleading "RS down".
+  if [ "${size:-1}" -lt 3 ] 2>/dev/null; then
+    printf '%bStandalone mongo%b (cluster size=%s, no replica set)\n' \
+      "$C_BOLD" "$C_RESET" "$size"
+    if systemctl is-active --quiet mongod 2>/dev/null; then
+      log::ok "mongod active on 127.0.0.1:27017"
+    else
+      log::err "mongod NOT active"
+      exit 1
+    fi
+    return 0
+  fi
+
+  # RS path. Emit one tagged line per member from inside mongosh.
+  # Each line survives the `  [mongosh] ` prefix wrapping that
+  # `mongodb::eval_root` adds (lib/mongodb.sh:262), so we parse with
+  # `sed -n 's/.*MEMBER|/MEMBER|/p'` rather than line-anchored grep.
+  # The pipe (`|`) is the field separator since hostnames can contain
+  # ':' and lastHeartbeatMessage can contain spaces / commas.
+  #
+  # try/catch + a NOT_INITIALIZED sentinel: rs.status() throws
+  # NotYetInitialized when mongod is up with replSetName configured
+  # but rs.initiate() hasn't run yet — common state if M1 phase 1
+  # finished but the orchestrator died before the gate. Operator
+  # gets a recovery hint instead of a generic "rs.status() failed".
+  local out
+  out=$(mongodb::eval_root "
+    try {
+      var s = rs.status();
+      print('SUMMARY|' + s.set + '|' + (s.term || 0) + '|' + s.ok);
+      var primaryOptime = null;
+      s.members.forEach(function(m) {
+        if (m.stateStr === 'PRIMARY' && m.optimeDate) primaryOptime = m.optimeDate;
+      });
+      s.members.forEach(function(m) {
+        var lag = '-';
+        if (m.optimeDate && primaryOptime) {
+          lag = (primaryOptime - m.optimeDate) + 'ms';
+        }
+        var hb = m.lastHeartbeatMessage || '';
+        print('MEMBER|' + m._id + '|' + m.name + '|' + m.stateStr +
+              '|' + m.health + '|' + (m.uptime || 0) + '|' + lag +
+              '|' + hb);
+      });
+    } catch (e) {
+      if (e.codeName === 'NotYetInitialized') {
+        print('NOT_INITIALIZED');
+      } else {
+        print('ERR|' + (e.codeName || 'unknown') + '|' + (e.message || ''));
+      }
+    }
+    print('EVAL_OK');
+  " 2>/dev/null) || die "rs.status() call failed - is mongod running on M1? (check 'systemctl status mongod')"
+
+  if printf '%s\n' "$out" | grep -q 'NOT_INITIALIZED'; then
+    printf '%bMongo replica set is NOT yet initialized%b\n' "$C_YELLOW" "$C_RESET"
+    printf '  cluster size: %s (RS configured but rs.initiate() never ran)\n' "$size"
+    printf '  recover with: sudo elchi-stack init-replica-set\n\n'
+    return 0
+  fi
+  if printf '%s\n' "$out" | grep -q '^[[:space:]]*\[mongosh\][[:space:]]*ERR|'; then
+    local err_line
+    err_line=$(printf '%s\n' "$out" | sed -n 's/.*ERR|/ERR|/p' | head -1)
+    die "rs.status() error: ${err_line}"
+  fi
+
+  local set_name term ok
+  read -r set_name term ok < <(
+    printf '%s\n' "$out" \
+      | sed -n 's/.*SUMMARY|\([^|]*\)|\([^|]*\)|\([^|]*\).*/\1 \2 \3/p' \
+      | head -1
+  )
+
+  printf '\n%bReplica set:%b %s (term=%s, ok=%s)\n\n' \
+    "$C_BOLD" "$C_RESET" "${set_name:-?}" "${term:-?}" "${ok:-?}"
+
+  local id name state health uptime lag hb marker color
+  while IFS='|' read -r id name state health uptime lag hb; do
+    [ -z "$id" ] && continue
+    # ASCII markers only. Multi-line case branches: bash 3.2 (the
+    # macOS dev shell) chokes on inline `;` separators in some
+    # locales. Production is bash 5.x but the dev `bash -n` lint
+    # runs on the workstation, so be defensive.
+    case "$state" in
+      PRIMARY)
+        marker='[P]'
+        color="$C_GREEN"
+        ;;
+      SECONDARY)
+        marker='[S]'
+        color="$C_BLUE"
+        ;;
+      STARTUP|STARTUP2|RECOVERING|ROLLBACK)
+        marker='[~]'
+        color="$C_YELLOW"
+        ;;
+      *)
+        marker='[X]'
+        color="$C_RED"
+        ;;
+    esac
+    printf '  %b%s%b  %-28s  %-10s  health=%s  uptime=%ss  lag=%s' \
+      "$color" "$marker" "$C_RESET" "$name" "$state" "$health" "$uptime" "$lag"
+    [ -n "$hb" ] && printf '  "%s"' "$hb"
+    printf '\n'
+  done < <(
+    printf '%s\n' "$out" \
+      | sed -n 's/.*MEMBER|//p'
+  )
+  printf '\n'
+}
+
+# cmd_clickhouse_status — ClickHouse cluster health snapshot. Analogous
+# to cmd_mongo_status: runs on a ClickHouse node (first 3 by topology),
+# queries the LOCAL clickhouse-server, and prints Keeper quorum +
+# elchi_cluster member errors + Replicated database engine + per-table
+# replica state.
+cmd_clickhouse_status() {
+  if ! systemctl list-unit-files --no-legend clickhouse-server.service 2>/dev/null | grep -q .; then
+    printf 'clickhouse-status: this node does not run ClickHouse — run it on a CH node (first 3 in the topology)\n' >&2
+    exit 1
+  fi
+  if ! systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+    log::err "clickhouse-server NOT active on this node"
+    exit 1
+  fi
+
+  local sec=/etc/elchi/secrets.env
+  [ -r "$sec" ] || die "$sec not readable (need root)"
+  local user pwd db
+  user=$(grep -E '^ELCHI_CLICKHOUSE_USERNAME=' "$sec" | tail -n1 | cut -d= -f2-)
+  pwd=$(grep -E '^ELCHI_CLICKHOUSE_PASSWORD=' "$sec" | tail -n1 | cut -d= -f2-)
+  user=${user:-elchi}
+  [ -n "$pwd" ] || die "ELCHI_CLICKHOUSE_PASSWORD missing from $sec"
+  db=elchi
+
+  local size=1
+  if [ -f /etc/elchi/topology.full.yaml ]; then
+    size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+             /etc/elchi/topology.full.yaml)
+  fi
+
+  _ch_q() {
+    clickhouse-client --host 127.0.0.1 --port 9000 \
+      --user "$user" --password "$pwd" --query "$1" 2>&1
+  }
+
+  printf '%bClickHouse on this node%b\n' "$C_BOLD" "$C_RESET"
+  printf '  version : %s\n' "$(_ch_q 'SELECT version()')"
+  printf '  uptime  : %ss\n' "$(_ch_q 'SELECT uptime()')"
+
+  # Standalone shortcut. is_clickhouse_node caps CH at the first 3 nodes
+  # and uses standalone for size 1-2. No Keeper / no Replicated DB here.
+  if [ "${size:-1}" -lt 3 ] 2>/dev/null; then
+    printf '\n%bStandalone%b (cluster size=%s, no Keeper / cluster)\n' \
+      "$C_BOLD" "$C_RESET" "$size"
+    local db_engine
+    db_engine=$(_ch_q "SELECT engine FROM system.databases WHERE name='${db}'")
+    printf '  %s database engine : %s\n' "$db" "${db_engine:-<missing>}"
+    printf '\n'
+    return 0
+  fi
+
+  # ---- Cluster path ----
+  printf '\n%bKeeper%b\n' "$C_BOLD" "$C_RESET"
+  local keeper_children
+  keeper_children=$(_ch_q "SELECT count() FROM system.zookeeper WHERE path='/'")
+  if [[ "$keeper_children" =~ ^[0-9]+$ ]]; then
+    printf '  %s[ OK ]%s reachable (root children=%s) — quorum formed\n' \
+      "$C_GREEN" "$C_RESET" "$keeper_children"
+  else
+    printf '  %s[ERR ]%s unreachable: %s\n' "$C_RED" "$C_RESET" "$keeper_children"
+  fi
+
+  printf '\n%belchi_cluster members%b  (system.clusters)\n' "$C_BOLD" "$C_RESET"
+  _ch_q "SELECT host_address, port, errors_count, estimated_recovery_time
+           FROM system.clusters WHERE cluster='elchi_cluster' FORMAT TabSeparated" \
+    | awk -v g="$C_GREEN" -v y="$C_YELLOW" -v r="$C_RESET" '
+        BEGIN { printf "  %-18s %-6s %-8s %s\n","host","port","errors","recovery_s" }
+        NF    { tag = ($3+0 == 0 ? g"OK  "r : y"ERR "r);
+                printf "  %-18s %-6s %-8s %s  %s\n", $1, $2, $3, $4, tag }'
+
+  printf '\n%bDatabase %s%b\n' "$C_BOLD" "$db" "$C_RESET"
+  local db_engine
+  db_engine=$(_ch_q "SELECT engine FROM system.databases WHERE name='${db}'")
+  if [ "$db_engine" = "Replicated" ]; then
+    printf '  %s[ OK ]%s engine: Replicated\n' "$C_GREEN" "$C_RESET"
+  else
+    printf '  %s[WARN]%s engine: %s (expected Replicated)\n' \
+      "$C_YELLOW" "$C_RESET" "${db_engine:-<missing>}"
+  fi
+
+  printf '\n%bReplicated tables%b  (system.replicas)\n' "$C_BOLD" "$C_RESET"
+  local rep_out
+  rep_out=$(_ch_q "SELECT database, table, total_replicas, active_replicas,
+                          queue_size, absolute_delay
+                     FROM system.replicas FORMAT TabSeparated")
+  if [ -z "$rep_out" ] || ! printf '%s' "$rep_out" | head -1 | grep -q .; then
+    printf '  (no replicated tables yet — the collector creates them on its first ALS write)\n'
+  else
+    printf '%s\n' "$rep_out" \
+      | awk 'BEGIN { printf "  %-10s %-24s %-7s %-7s %-6s %s\n","db","table","total","active","queue","delay_s" }
+             NF    { printf "  %-10s %-24s %-7s %-7s %-6s %s\n", $1, $2, $3, $4, $5, $6 }'
+  fi
+  printf '\n'
+}
+
+# ─────────────────────────────────────────────────────────────────────
+# Operator quality-of-life subcommands. Each one wraps a tedious bit of
+# "ssh to node X, grep some creds, type a long command" into a single
+# `elchi-stack <verb>`. Pure read/diagnostic — no cluster mutation.
+# ─────────────────────────────────────────────────────────────────────
+
+# cmd_mongosh — open mongosh against the LOCAL mongod. Uses root creds
+# (/etc/elchi/mongo/root.env, M1 only) when available; falls back to the
+# app user on RS members M2/M3 (no root.env there). All remaining args
+# are passed through, so `elchi-stack mongosh --eval 'rs.status()'` works.
+cmd_mongosh() {
+  command -v mongosh >/dev/null 2>&1 \
+    || die "mongosh not installed — run on a mongo node (first 3 by topology)"
+  if ! systemctl is-active --quiet mongod 2>/dev/null; then
+    die "mongod not active on this node"
+  fi
+  local user pwd authdb=admin
+  if [ -r /etc/elchi/mongo/root.env ]; then
+    user=$(grep -E '^MONGO_ROOT_USERNAME=' /etc/elchi/mongo/root.env | cut -d= -f2-)
+    pwd=$( grep -E '^MONGO_ROOT_PASSWORD=' /etc/elchi/mongo/root.env | cut -d= -f2-)
+  else
+    user=$(secrets::value ELCHI_MONGO_USERNAME)
+    pwd=$( secrets::value ELCHI_MONGO_PASSWORD)
+  fi
+  [ -n "$user" ] && [ -n "$pwd" ] || die "mongo credentials not found"
+  exec mongosh --quiet --host 127.0.0.1 --port 27017 \
+    -u "$user" -p "$pwd" --authenticationDatabase "$authdb" "$@"
+}
+
+# cmd_ch_client — open clickhouse-client against the LOCAL clickhouse
+# as the `elchi` user. Only meaningful on a CH node (first 3 by topology);
+# elsewhere clickhouse-client isn't installed.
+cmd_ch_client() {
+  command -v clickhouse-client >/dev/null 2>&1 \
+    || die "clickhouse-client not installed — run on a CH node (first 3 by topology)"
+  if ! systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+    die "clickhouse-server not active on this node"
+  fi
+  local user pwd
+  user=$(secrets::value ELCHI_CLICKHOUSE_USERNAME); user=${user:-elchi}
+  pwd=$( secrets::value ELCHI_CLICKHOUSE_PASSWORD)
+  [ -n "$pwd" ] || die "ELCHI_CLICKHOUSE_PASSWORD missing from /etc/elchi/secrets.env"
+  exec clickhouse-client --host 127.0.0.1 --port 9000 \
+    --user "$user" --password "$pwd" --database elchi "$@"
+}
+
+# cmd_ssh — open SSH to a cluster node using the persisted cluster key,
+# no flag typing. Accepts `m1`/`m2`/`m3` (positional aliases), a system
+# hostname, or an IPv4 address. With no extra args opens an interactive
+# admin-user shell; with extra args runs them as root via sudo.
+cmd_ssh() {
+  local target=${1:-}
+  [ -n "$target" ] && shift \
+    || die "usage: elchi-stack ssh <m1|m2|m3|hostname|ip> [cmd...]"
+
+  local topo=/etc/elchi/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing — install not complete"
+
+  local ip=""
+  case "$target" in
+    m[0-9]*)
+      local idx=${target#m}
+      ip=$(awk -v want="$idx" '
+        /^  - index:/ { in_node = (($3+0) == want) }
+        in_node && /^    host:/ { print $2; exit }
+      ' "$topo")
+      ;;
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+      ip=$target
+      ;;
+    *)
+      ip=$(awk -v hn="$target" '
+        /^  - index:/    { idx=$3 }
+        /^    host:/     { cur=$2 }
+        /^    hostname:/ { if ($2 == hn) { print cur; exit } }
+      ' "$topo")
+      ;;
+  esac
+  [ -n "$ip" ] || die "could not resolve '$target' — try m1/m2/m3, the system hostname, or an IP"
+
+  ssh::load_persisted_creds
+  local user=${ELCHI_SSH_USER:-root}
+  local port=${ELCHI_SSH_PORT:-22}
+  local key=${ELCHI_SSH_KEY:-}
+
+  if [ "$#" -gt 0 ]; then
+    # One-off command — run as root via the same path the orchestrator
+    # uses (printf %q quoting + sudo on the remote).
+    ssh::configure "$user" "$port" "$key" ""
+    ssh::run_sudo "$ip" "$@"
+    return $?
+  fi
+
+  # Interactive shell — bypass ssh::run (BatchMode + no-tty) and exec
+  # ssh directly so the caller gets a real PTY with the admin user.
+  local opts=(-o StrictHostKeyChecking=accept-new
+              -o UserKnownHostsFile=/root/.ssh/known_hosts.elchi
+              -o ConnectTimeout=10
+              -p "$port")
+  [ -n "$key" ] && opts+=(-i "$key")
+  exec ssh "${opts[@]}" "${user}@${ip}"
+}
+
+# cmd_stack_version — single screen of "what is actually installed here".
+# Two blocks: (1) the cluster-wide pins from topology.full.yaml's
+# `versions:` block; (2) the binary versions on THIS node (so an
+# operator running it on M2 sees what M2 is actually running).
+cmd_stack_version() {
+  local topo=/etc/elchi/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing — install not complete"
+
+  printf '%bComponent versions — host %s%b\n' "$C_BOLD" "$(hostname -s)" "$C_RESET"
+
+  printf '\n  %bcluster-wide (topology.full.yaml versions block)%b\n' "$C_DIM" "$C_RESET"
+  awk '/^versions:/{f=1; next}
+       f && /^[a-zA-Z]/{exit}
+       f' "$topo" | sed 's/^/    /'
+
+  printf '\n  %bbackend variants%b\n' "$C_DIM" "$C_RESET"
+  awk '/^  backend_variants:/{f=1; next}
+       f && /^    -/{print "    " $0; next}
+       f && /^[a-zA-Z]/{exit}' "$topo" | sed 's/^    /    /'
+
+  printf '\n  %binstalled binaries on this node%b\n' "$C_DIM" "$C_RESET"
+  # _probe_version <label> <command...> — runs the command, captures the
+  # first 1-2 lines, extracts a vX.Y.Z-style token (or falls back to the
+  # whole first line), and prints "<label> : <version>". EVERY probe is
+  # wrapped in `|| true` so a binary that doesn't honour --version (rc=1,
+  # `unknown flag`, missing subcommand, exec-format mismatch on a stripped
+  # build) doesn't kill cmd_stack_version under the inherited
+  # `set -Eeuo pipefail` + ERR trap. Bash's set -e doesn't fault on
+  # `v=$(failing)` assignments by itself, but common.sh's ERR trap does —
+  # so we neutralise it here per call.
+  _probe_version() {
+    local label=$1 ; shift
+    local out v
+    out=$("$@" 2>&1 || true)
+    # Try, in order:
+    #   1. first vX.Y.Z[.W] token anywhere in the first 4 lines
+    #   2. first standalone "X.Y.Z[.W]" number
+    #   3. raw first line, trimmed
+    v=$(printf '%s\n' "$out" | head -n 4 \
+          | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?' \
+          | head -n 1 \
+          || true)
+    if [ -z "$v" ]; then
+      v=$(printf '%s\n' "$out" | head -n 1 \
+            | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+    fi
+    printf '    %-15s : %s\n' "$label" "${v:-?}"
+  }
+
+  command -v mongod                          >/dev/null 2>&1 \
+    && _probe_version mongod          mongod --version
+  command -v clickhouse-server               >/dev/null 2>&1 \
+    && _probe_version clickhouse      clickhouse-server --version
+  [ -x /opt/elchi/bin/victoria-metrics-prod ] \
+    && _probe_version victoriametrics /opt/elchi/bin/victoria-metrics-prod -version
+  [ -x /opt/elchi/bin/otelcol-contrib ] \
+    && _probe_version otel-collector  /opt/elchi/bin/otelcol-contrib --version
+  [ -x /opt/elchi/bin/envoy ] \
+    && _probe_version envoy           /opt/elchi/bin/envoy --version
+  # elchi-collector binary does not expose --version (the upstream
+  # cmd line doesn't define the flag; passing it returns rc=1 and
+  # "Unknown flag"). Read the canonical version from the topology
+  # `versions:` block instead — same source the orchestrator used to
+  # decide which binary to download in the first place.
+  if [ -x /opt/elchi/bin/elchi-collector ]; then
+    local _coll_v
+    _coll_v=$(awk '/^versions:/{f=1; next} f && /^[a-zA-Z]/{exit} f && /^[[:space:]]+collector:/{print $2; exit}' \
+                "$topo" 2>/dev/null || true)
+    printf '    %-15s : %s\n' elchi-collector "${_coll_v:-? (binary present, version unreadable)}"
+  fi
+  command -v grafana-server                  >/dev/null 2>&1 \
+    && _probe_version grafana         grafana-server -v
+  command -v nginx                           >/dev/null 2>&1 \
+    && _probe_version nginx           nginx -v
+  unset -f _probe_version
+  printf '\n'
+}
+
+# cmd_tls_info — subject, SANs, validity window, days-to-expiry and the
+# sha256 fingerprint of the cluster TLS cert. Highlights the expiry in
+# red when <30 days, yellow under 90.
+cmd_tls_info() {
+  local crt=/etc/elchi/tls/server.crt
+  [ -r "$crt" ] || die "$crt not readable (need root)"
+  command -v openssl >/dev/null 2>&1 || die "openssl not installed"
+
+  printf '%bTLS certificate%b  %s\n\n' "$C_BOLD" "$C_RESET" "$crt"
+
+  local subject issuer
+  subject=$(openssl x509 -in "$crt" -noout -subject 2>/dev/null | sed 's/^subject=//')
+  issuer=$( openssl x509 -in "$crt" -noout -issuer  2>/dev/null | sed 's/^issuer=//')
+  printf '  subject : %s\n' "$subject"
+  printf '  issuer  : %s\n' "$issuer"
+
+  local not_before not_after exp_ts now_ts days color tag
+  not_before=$(openssl x509 -in "$crt" -noout -startdate 2>/dev/null | cut -d= -f2)
+  not_after=$( openssl x509 -in "$crt" -noout -enddate    2>/dev/null | cut -d= -f2)
+  printf '  valid   : %s\n            → %s\n' "$not_before" "$not_after"
+
+  exp_ts=$(date -d "$not_after" +%s 2>/dev/null || echo 0)
+  now_ts=$(date +%s)
+  if [ "$exp_ts" -gt 0 ]; then
+    days=$(( (exp_ts - now_ts) / 86400 ))
+    if   [ "$days" -lt 0 ]   ; then color=$C_RED;    tag="EXPIRED"
+    elif [ "$days" -lt 30 ]  ; then color=$C_RED;    tag="EXPIRING SOON"
+    elif [ "$days" -lt 90 ]  ; then color=$C_YELLOW; tag="renew soon"
+    else                            color=$C_GREEN;  tag="ok"
+    fi
+    printf '  expires : %s%s days (%s)%s\n' "$color" "$days" "$tag" "$C_RESET"
+  fi
+
+  printf '\n  %bSubject Alternative Names%b\n' "$C_BOLD" "$C_RESET"
+  openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null \
+    | tail -n +2 | sed 's/^[[:space:]]*/    /'
+
+  printf '\n  %bFingerprint (sha256)%b\n' "$C_BOLD" "$C_RESET"
+  openssl x509 -in "$crt" -noout -fingerprint -sha256 2>/dev/null \
+    | sed 's/^/    /'
+  printf '\n'
+}
+
+# cmd_endpoint_test — synthetic HTTPS probes through THIS node's envoy
+# (public listener resolved to 127.0.0.1 via curl --resolve, so DNS /
+# the cluster's main_address don't have to be pointed here yet).
+# Confirms the major route classes still respond after an upgrade.
+cmd_endpoint_test() {
+  local topo=/etc/elchi/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing"
+  local main port
+  main=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' "$topo")
+  port=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+port:/{print $2; exit}' "$topo")
+  [ -n "$main" ] && [ -n "$port" ] || die "could not read main_address/port from topology"
+  command -v curl >/dev/null 2>&1 || die "curl not installed"
+
+  printf '%bEndpoint probes via this node'\''s envoy listener%b\n' "$C_BOLD" "$C_RESET"
+  printf '  main_address: %s  port: %s  (resolved to 127.0.0.1 for this probe)\n\n' "$main" "$port"
+
+  _probe() {
+    local label=$1 url_path=$2 expect=$3 scheme=${4:-https} host=${5:-${main}:${port}}
+    local code resolve_opt=()
+    if [ "$scheme" = "https" ]; then
+      resolve_opt=(--resolve "${main}:${port}:127.0.0.1")
+    fi
+    code=$(curl -sk "${resolve_opt[@]}" -o /dev/null \
+             --connect-timeout 3 --max-time 10 \
+             -w '%{http_code}' "${scheme}://${host}${url_path}" 2>/dev/null) || code=000
+    if [ "$code" = "$expect" ]; then
+      printf '  %s[ OK ]%s %-28s %-30s → HTTP %s\n' "$C_GREEN" "$C_RESET" "$label" "$url_path" "$code"
+    else
+      printf '  %s[FAIL]%s %-28s %-30s → HTTP %s (expected %s)\n' "$C_RED" "$C_RESET" "$label" "$url_path" "$code" "$expect"
+    fi
+  }
+
+  _probe "UI (nginx via envoy)"      "/"                          200
+  _probe "VictoriaMetrics /api/v1"   "/api/v1/query?query=up"     200
+  _probe "Grafana health"            "/grafana/api/health"        200
+  _probe "internal :8080 root"       "/"                          200 http "127.0.0.1:8080"
+  printf '\n'
+}
+
+# cmd_collector_stats — fetch /metrics from elchi-collector on every
+# cluster node, pull the operationally interesting counters into one
+# screen. Best-effort: metric names are the ones the collector
+# (internal/metrics/metrics.go) currently exports; missing metrics
+# render as 0 rather than failing the whole report.
+cmd_collector_stats() {
+  [ -f /etc/elchi/nodes.list ] || die "/etc/elchi/nodes.list missing"
+  ssh::load_persisted_creds 2>/dev/null || true
+  ssh::configure "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${ELCHI_SSH_KEY:-}" "" 2>/dev/null || true
+
+  printf '%belchi-collector metrics — per node (from :18091/metrics)%b\n\n' "$C_BOLD" "$C_RESET"
+
+  # Pull one metric value out of Prometheus exposition format. Sums all
+  # label permutations for *_total counters; for gauges this collapses
+  # to the single value. `$1 ~` regex is anchored at line start.
+  _ck_extract() {
+    local body=$1 name=$2
+    printf '%s\n' "$body" | awk -v m="$name" '
+      $0 ~ ("^"m"({|$| )") { s+=$NF }
+      END { printf "%g", s+0 }'
+  }
+
+  local n metrics
+  while IFS= read -r n; do
+    [ -z "$n" ] && continue
+    printf '  %s%s%s\n' "$C_CYAN" "$n" "$C_RESET"
+    if ssh::is_local "$n"; then
+      metrics=$(curl -fsSL --max-time 5 http://127.0.0.1:18091/metrics 2>/dev/null || true)
+    else
+      metrics=$(ssh::run_sudo "$n" curl -fsSL --max-time 5 http://127.0.0.1:18091/metrics 2>/dev/null || true)
+    fi
+    if [ -z "$metrics" ]; then
+      printf '    %s[unreachable]%s collector /metrics not responding\n\n' "$C_RED" "$C_RESET"
+      continue
+    fi
+    printf '    events received      : %s\n' "$(_ck_extract "$metrics" events_received_total)"
+    printf '    events dropped       : %s\n' "$(_ck_extract "$metrics" events_dropped_total)"
+    printf '    active ALS streams   : %s\n' "$(_ck_extract "$metrics" active_streams)"
+    printf '    batcher queue depth  : %s\n' "$(_ck_extract "$metrics" batcher_queue_depth)"
+    printf '    rows → ClickHouse    : %s\n' "$(_ck_extract "$metrics" clickhouse_rows_inserted_total)"
+    printf '    ClickHouse errors    : %s\n' "$(_ck_extract "$metrics" clickhouse_errors_total)"
+    printf '    Mongo errors         : %s\n' "$(_ck_extract "$metrics" mongo_errors_total)"
+    printf '    flush count          : %s\n' "$(_ck_extract "$metrics" flush_count_total)"
+    printf '    detector suppressed  : %s\n' "$(_ck_extract "$metrics" detector_suppressed_total)"
+    printf '    pipeline panics      : %s\n' "$(_ck_extract "$metrics" pipeline_panics_total)"
+    printf '\n'
+  done < /etc/elchi/nodes.list
+}
+
+cmd_export_bundle() {
+  local out='' reuse_key=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --reuse-bundle-key) reuse_key=1 ;;
+      -*) die "unknown export-bundle flag: $1" ;;
+      *)  [ -z "$out" ] && out=$1 || die "export-bundle takes one positional <out>" ;;
+    esac
+    shift
+  done
+  [ -n "$out" ] || die "output path required: elchi-stack export-bundle <out> [--reuse-bundle-key]"
+
+  local key=''
+  if [ "$reuse_key" = "1" ]; then
+    key=$(bundle::read_persisted_key) \
+      || die "no persisted bundle key at /etc/elchi/.bundle-key — run on M1 of an installed cluster"
+    [ -n "$key" ] || die "persisted bundle key is empty — sealed credential may be unreadable"
+    log::info "reusing install-time bundle key from /etc/elchi/.bundle-key"
+  else
+    key=$(rand_hex 32)
+  fi
+
+  local clear=/tmp/elchi-bundle-$$.tar.gz
+  # Make sure the clear tarball never lingers on a failure mid-encrypt.
+  trap 'rm -f "'"$clear"'"' RETURN
+  bundle::build "$clear"
+  bundle::encrypt "$clear" "$out" "$key"
+  rm -f "$clear"
+
+  printf 'bundle written to %s\n' "$out"
+  if [ "$reuse_key" = "1" ]; then
+    printf 'decryption key: (reused from /etc/elchi/.bundle-key)\n'
+  else
+    printf 'decryption key: %s\n' "$key"
+  fi
+}
+
+cmd_verify() {
+  if [ ! -f /etc/elchi/topology.full.yaml ]; then
+    die "no /etc/elchi/topology.full.yaml — install hasn't completed"
+  fi
+  _ssh_setup
+
+  local total_fails=0 host
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
+
+    local probe='set -e
+      fails=0
+
+      # 1. systemd state for every elchi-* service (watchdog is the
+      # only intentional exception — Type=oneshot driven by .timer).
+      while read -r unit; do
+        [ -z "$unit" ] && continue
+        case "$unit" in elchi-watchdog*) continue ;; esac
+        if ! systemctl is-active --quiet "$unit"; then
+          echo "  [FAIL] $unit not active"
+          fails=$((fails+1))
+        fi
+      done < <(systemctl list-units --no-legend --type=service "elchi-*" 2>/dev/null | awk "{print \$1}")
+
+      # 2. External package services we drive. Only checked where the
+      # unit file is present — mongod / clickhouse-server are first-3
+      # nodes only, nginx/grafana sit on different node subsets.
+      for ext in mongod clickhouse-server grafana-server nginx; do
+        if systemctl list-unit-files --no-legend "${ext}.service" 2>/dev/null | grep -q .; then
+          if systemctl is-active --quiet "$ext"; then
+            echo "  [ OK ] ${ext}.service active"
+          else
+            echo "  [FAIL] ${ext}.service not active"
+            fails=$((fails+1))
+          fi
+        fi
+      done
+
+      # 3. Envoy admin /clusters + /listeners. NOTE: deliberately no
+      # journalctl grep for "Controller registered" / "Successfully
+      # registered control-plane" — those messages drift across backend
+      # releases and a 200-line journal window does not always reach
+      # back to a startup-only line, producing pure false-positives.
+      # lib/verify.sh::deep_health dropped the same grep for the same
+      # reason; mirroring its design here keeps verify honest.
+      if command -v curl >/dev/null 2>&1; then
+        cluster_dump=$(curl -sf --max-time 5 http://127.0.0.1:9901/clusters?format=json 2>/dev/null || true)
+        if [ -z "$cluster_dump" ]; then
+          echo "  [WARN] envoy admin :9901 unreachable"
+          fails=$((fails+1))
+        elif command -v jq >/dev/null 2>&1; then
+          # Inline jq probe: silently skip clusters absent from the
+          # bootstrap (e.g. elchi-collector-cluster on --no-collector
+          # installs) instead of flagging them as missing.
+          #
+          # Healthy = active health check did NOT fail. We deliberately
+          # avoid .health_status.eds_health_status because STRICT_DNS
+          # clusters always report HEALTHY there (EDS field is only
+          # meaningful when an EDS server actually overrides it),
+          # which masked a 4-vs-3 endpoint count bug for months. The
+          # failed_active_health_check field is the authoritative
+          # source for whether the configured health_checks block
+          # accepted this host; when false or absent on a node Envoy
+          # has not yet probed, the host is considered healthy.
+          for cl in registry-cluster controller-rest-cluster elchi-collector-cluster; do
+            total=$(echo "$cluster_dump" \
+              | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[]] | length" 2>/dev/null || echo 0)
+            [ "$total" -gt 0 ] 2>/dev/null || continue
+            healthy=$(echo "$cluster_dump" \
+              | jq --arg c "$cl" "[.cluster_statuses[] | select(.name==\$c) | .host_statuses[] | select((.health_status.failed_active_health_check // false) == false)] | length" 2>/dev/null || echo 0)
+            if [ "$healthy" = "0" ]; then
+              echo "  [FAIL] envoy: ${cl} has 0/${total} healthy endpoints"
+              fails=$((fails+1))
+            else
+              echo "  [INFO] envoy: ${cl} ${healthy}/${total} healthy"
+            fi
+          done
+        fi
+
+        # Public listener bound check.
+        lst=$(curl -sf --max-time 3 http://127.0.0.1:9901/listeners 2>/dev/null || true)
+        if [ -n "$lst" ] && ! echo "$lst" | grep -q "0.0.0.0:"; then
+          echo "  [FAIL] envoy public listener not bound"
+          fails=$((fails+1))
+        fi
+      fi
+
+      # 4. ClickHouse Keeper leader probe — only meaningful on 3+ node
+      # CH clusters (standalone single-node has no Keeper). Use the 4lw
+      # `mntr` command; a healthy ensemble reports this node as leader
+      # or follower. Anything else means Raft has not converged.
+      if systemctl is-active --quiet clickhouse-server 2>/dev/null; then
+        ch_size=$(awk "/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print \$2; exit}" \
+                    /etc/elchi/topology.full.yaml 2>/dev/null)
+        if [ "${ch_size:-1}" -ge 3 ] 2>/dev/null; then
+          # Probe the 4lw mntr endpoint. Prefer nc, fall back to the
+          # bash /dev/tcp builtin — minimal RHEL/Alma/Rocky images ship
+          # no netcat, and without the fallback this reported a false
+          # [FAIL] "no zk_server_state" on a perfectly healthy Keeper.
+          if command -v nc >/dev/null 2>&1; then
+            kstate=$(printf "mntr\n" | nc -w 3 127.0.0.1 9181 2>/dev/null \
+                       | awk -F"\t" "/^zk_server_state/{print \$2; exit}")
+          else
+            kstate=$( { exec 3<>/dev/tcp/127.0.0.1/9181 2>/dev/null || exit 1
+                        printf "mntr\n" >&3
+                        timeout 3 cat <&3 2>/dev/null
+                        exec 3<&- ; exec 3>&-
+                      } | awk -F"\t" "/^zk_server_state/{print \$2; exit}")
+          fi
+          case "$kstate" in
+            leader|follower) echo "  [ OK ] clickhouse-keeper: ${kstate}" ;;
+            observer)        echo "  [WARN] clickhouse-keeper: observer (non-voting)" ;;
+            "")              echo "  [FAIL] clickhouse-keeper: no zk_server_state on :9181"
+                             fails=$((fails+1)) ;;
+            *)               echo "  [FAIL] clickhouse-keeper: unexpected state ${kstate}"
+                             fails=$((fails+1)) ;;
+          esac
+        fi
+      fi
+
+      exit $fails
+    '
+    if ssh::is_local "$host"; then
+      bash -c "$probe" || total_fails=$(( total_fails + $? ))
+    else
+      ssh::run "$host" bash -c "$probe" || total_fails=$(( total_fails + $? ))
+    fi
+  done < /etc/elchi/nodes.list
+
+  # M1-only deep cluster-state probe: rs.status() needs root creds that
+  # only exist at /etc/elchi/mongo/root.env on M1 (never shipped to
+  # M2/M3 in the bundle). The per-node probe above can't reach this;
+  # we run it once here against the local mongod.
+  if [ -f /etc/elchi/mongo/root.env ]; then
+    printf '\n%s── cluster state (M1) ──%s\n' "$C_BOLD" "$C_RESET"
+    verify::_mongo_rs_leader || total_fails=$(( total_fails + 1 ))
+  fi
+
+  printf '\n'
+  if [ "$total_fails" = "0" ]; then
+    log::ok "cluster verify: all checks passed"
+  else
+    log::err "cluster verify: ${total_fails} issue(s) found"
+    return 1
+  fi
+}
+
+cmd_show_secret() {
+  local name=${1:-}
+  local sec_file=/etc/elchi/secrets.env
+  if [ ! -r "$sec_file" ]; then
+    die "cannot read ${sec_file} (must run as root on M1)"
+  fi
+
+  # Read a single key=value, returning just the value.
+  _read() { grep -E "^${1}=" "$sec_file" | tail -n1 | cut -d= -f2-; }
+
+  case "$name" in
+    grafana)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_GRAFANA_USER)" "$(_read ELCHI_GRAFANA_PASSWORD)"
+      ;;
+    jwt)        _read ELCHI_JWT_SECRET; printf '\n' ;;
+    gslb)       _read ELCHI_GSLB_SECRET; printf '\n' ;;
+    mongo-app)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_MONGO_USERNAME)" "$(_read ELCHI_MONGO_PASSWORD)"
+      ;;
+    mongo-root)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_MONGO_ROOT_USERNAME)" "$(_read ELCHI_MONGO_ROOT_PASSWORD)"
+      ;;
+    clickhouse)
+      printf 'username: %s\npassword: %s\n' \
+        "$(_read ELCHI_CLICKHOUSE_USERNAME)" "$(_read ELCHI_CLICKHOUSE_PASSWORD)"
+      ;;
+    collector)
+      # HASH_SALT seeds the SHA-256 of source IP / user-agent / consumer
+      # values. It is intentionally NOT rotatable — rotating breaks the
+      # correlation of every event already in ClickHouse.
+      printf 'hash-salt: %s\n' "$(_read ELCHI_COLLECTOR_HASH_SALT)"
+      ;;
+    bundle-key)
+      # M1-only — /etc/elchi/.bundle-key is the persisted (sealed via
+      # systemd-creds where available, else 0600 plaintext) bundle
+      # decryption key. Recovered here so operators who used
+      # --quiet-key during install can still see the full value when
+      # they need it for --skip-orchestration / debug.
+      local key
+      key=$(bundle::read_persisted_key) \
+        || die "no persisted bundle key at /etc/elchi/.bundle-key — run on M1 of an installed cluster"
+      [ -n "$key" ] || die "persisted bundle key is empty — sealed credential may be unreadable"
+      printf '%s\n' "$key"
+      ;;
+    all)
+      printf '%sCredentials at %s (mode 0600 root:root)%s\n\n' \
+        "$C_BOLD" "$sec_file" "$C_RESET"
+      printf '  %sGrafana admin:%s   %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_GRAFANA_USER)" "$(_read ELCHI_GRAFANA_PASSWORD)"
+      printf '  %sJWT secret:%s      %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_JWT_SECRET)"
+      printf '  %sGSLB secret:%s     %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_GSLB_SECRET)"
+      printf '  %sMongo app user:%s  %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_MONGO_USERNAME)" "$(_read ELCHI_MONGO_PASSWORD)"
+      printf '  %sMongo root:%s      %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_MONGO_ROOT_USERNAME)" "$(_read ELCHI_MONGO_ROOT_PASSWORD)"
+      printf '  %sClickHouse user:%s %s / %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_CLICKHOUSE_USERNAME)" "$(_read ELCHI_CLICKHOUSE_PASSWORD)"
+      printf '  %sCollector salt:%s  %s\n' "$C_CYAN" "$C_RESET" \
+        "$(_read ELCHI_COLLECTOR_HASH_SALT)"
+      ;;
+    "")
+      die "secret name required (one of: grafana, jwt, gslb, mongo-app, mongo-root, clickhouse, collector, bundle-key, all)"
+      ;;
+    *)
+      die "unknown secret: $name (use grafana | jwt | gslb | mongo-app | mongo-root | clickhouse | collector | bundle-key | all)"
+      ;;
+  esac
+}
+
+cmd_rotate_secret() {
+  local name=${1:?secret name required (one of: jwt, gslb, grafana)}
+
+  # Grafana is a special case: the new password must also be pushed
+  # into the live grafana DB via grafana-cli, and the rotation only
+  # affects M1 (Grafana is singleton). Handle it before the cluster-
+  # wide JWT/GSLB path so we don't touch every node.
+  if [ "$name" = "grafana" ]; then
+    local new_pwd
+    new_pwd="elchi-$(rand_hex 6)"
+    grafana::rotate_admin_password "$new_pwd"
+    log::info "new grafana admin password: ${new_pwd}"
+    log::info "  retrieve later via: elchi-stack show-secret grafana"
+    return 0
+  fi
+
+  local key var
+  case "$name" in
+    jwt)  var=ELCHI_JWT_SECRET;  key=$(rand_hex 32) ;;
+    gslb) var=ELCHI_GSLB_SECRET; key=$(rand_alnum 48) ;;
+    *) die "unknown secret: $name (use jwt|gslb|grafana)" ;;
+  esac
+
+  log::info "rotating ${var}"
+  sed -i "s|^${var}=.*|${var}=${key}|" /etc/elchi/secrets.env
+
+  # The secret is also baked into every variant's common.env (which is
+  # what the systemd units actually source). secrets.env is the source of
+  # truth, but rotation has to also re-render the per-variant common.env
+  # files and push them to every node — otherwise the restart picks up
+  # the OLD value and the rotation is silently a no-op.
+  log::info "re-rendering per-variant common.env on M1"
+  backend::render_per_version_configs
+
+  # SSH driver — credentials come from persisted /etc/elchi/orchestrator.env
+  # via _ssh_setup, so this works without operator flags.
+  _ssh_setup
+
+  # Walk every variant and ship its newly-rendered common.env to every
+  # remote node. Local node is already updated by render_per_version_configs.
+  local -a variants
+  mapfile -t variants < <(
+    awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2}
+         f && /^[a-zA-Z]/{exit}' /etc/elchi/topology.full.yaml
+  )
+
+  local host v
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    if ssh::is_local "$host"; then
+      # M1: secrets.env + every variant's common.env are already on disk.
+      # Restart everything that consumes them.
+      systemctl restart 'elchi-controller.service' 'elchi-control-plane-*@*.service' 'elchi-registry.service' 2>/dev/null || true
+    else
+      # M2/M3: ship secrets.env (for completeness/future tooling) + every
+      # variant's common.env, then restart. ssh::scp streams via
+      # `sudo install /dev/stdin` so we write straight to the final
+      # destination — no /tmp staging that systemd-tmpfiles or a
+      # reboot could evict between two SSH calls.
+      ssh::scp /etc/elchi/secrets.env "$host" /etc/elchi/secrets.env
+      for v in "${variants[@]}"; do
+        ssh::scp "/etc/elchi/${v}/common.env" "$host" "/etc/elchi/${v}/common.env"
+      done
+      # Fix up ownership and restart. secrets.env is root:root 0600 —
+      # no service reads it directly (per-variant common.env files are
+      # what systemd EnvironmentFiles), so tightening to root-only is
+      # safe. common.env stays root:elchi 0640 because backend service
+      # units run as the elchi user and DO read it via EnvironmentFile.
+      local remote_cmd="chown root:root /etc/elchi/secrets.env && chmod 0600 /etc/elchi/secrets.env"
+      for v in "${variants[@]}"; do
+        remote_cmd+=" && chown root:elchi /etc/elchi/${v}/common.env && chmod 0640 /etc/elchi/${v}/common.env"
+      done
+      remote_cmd+=' && systemctl restart "elchi-controller.service" "elchi-control-plane-*@*.service"'
+      ssh::run_sudo "$host" "$remote_cmd"
+    fi
+  done < /etc/elchi/nodes.list
+  log::ok "${var} rotated and propagated"
+}
+
+# ----- dispatch ----------------------------------------------------------
+case "${1:-}" in
+  status)            shift; cmd_status "$@" ;;
+  logs)              shift; cmd_logs "$@" ;;
+  reload-envoy)      shift; cmd_reload_envoy "$@" ;;
+  add-node)          shift; cmd_add_node "$@" ;;
+  init-replica-set)  shift; cmd_init_rs "$@" ;;
+  mongo-status)      shift; cmd_mongo_status "$@" ;;
+  clickhouse-status) shift; cmd_clickhouse_status "$@" ;;
+  mongosh)           shift; cmd_mongosh "$@" ;;
+  ch-client)         shift; cmd_ch_client "$@" ;;
+  ssh)               shift; cmd_ssh "$@" ;;
+  stack-version)     shift; cmd_stack_version "$@" ;;
+  tls-info)          shift; cmd_tls_info "$@" ;;
+  endpoint-test)     shift; cmd_endpoint_test "$@" ;;
+  collector-stats)   shift; cmd_collector_stats "$@" ;;
+  export-bundle)     shift; cmd_export_bundle "$@" ;;
+  show-secret)       shift; cmd_show_secret "$@" ;;
+  rotate-secret)     shift; cmd_rotate_secret "$@" ;;
+  verify)            shift; cmd_verify "$@" ;;
+  -h|--help|"")      usage ;;
+  *) printf 'unknown subcommand: %s\n\n' "$1" >&2; usage; exit 2 ;;
+esac

@@ -1,0 +1,7 @@
+[Unit]
+Description=elchi-stack target — groups all elchi-* services
+Documentation=https://github.com/CloudNativeWorks/elchi-backend
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target
