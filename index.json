@@ -97,9 +97,22 @@
           "name": "elchi-collector-linux-amd64",
           "type": "binary",
           "arch": "linux-amd64",
-          "description": "elchi-collector — Envoy ALS ingestion service — for Linux AMD64",
+          "description": "elchi-collector \u2014 Envoy ALS ingestion service \u2014 for Linux AMD64",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-collector-v0.1.8/elchi-collector-linux-amd64",
           "sha256": "00efa115d9473addd996e6d0b6453ea5de18eb77fe86af5b9b16bbd84ef94857"
+        }
+      ]
+    }
+  ],
+  "coroza_releases": [
+    {
+      "version": "v0.6.0",
+      "date": "2026-06-01T18:34:11Z",
+      "binaries": [
+        {
+          "arch": "wasm-amd64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/coroza-v0.6.0/coraza-amd64.wasm",
+          "sha256": "740f64c01ed26f06670b6416387e98624316f7b7ce72909a6c147590bace7c67"
         }
       ]
     }
