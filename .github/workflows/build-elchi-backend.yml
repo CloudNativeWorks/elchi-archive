@@ -79,11 +79,12 @@ jobs:
           mkdir -p "releases/elchi-backend-${VERSION}"
           cd "releases/elchi-backend-${VERSION}"
 
-          echo "Downloading ALL release assets from ${SRC_REPO}@${VERSION}..."
-          # No --pattern: pull every variant binary + its .sha256. gh does
-          # NOT download the auto-generated "Source code" tarballs, so we
-          # get only the real release assets.
-          gh release download "${VERSION}" --repo "${SRC_REPO}"
+          echo "Downloading control-plane variant binaries from ${SRC_REPO}@${VERSION}..."
+          # Restrict to the variant binaries (elchi-<version>-...) and their
+          # .sha256. This DELIBERATELY excludes any source tarball asset
+          # (e.g. elchi-backend-<version>.tar.gz): elchi-backend is private
+          # and its source must NOT be re-published on the public mirror.
+          gh release download "${VERSION}" --repo "${SRC_REPO}" --pattern "elchi-${VERSION}-*"
 
           # Verify every checksum against the upstream .sha256 before we
           # re-publish. Asset names are kept identical, so the .sha256
@@ -140,12 +141,12 @@ jobs:
           repo = os.environ['REPO']
           rel_dir = f"releases/elchi-backend-{version}"
 
+          # Index one entry per variant binary. Iterate the .sha256 files so
+          # any asset WITHOUT a checksum is ignored — robust even if a
+          # non-binary asset slips through the download pattern.
           binaries = []
-          for path in sorted(glob.glob(f"{rel_dir}/*")):
-              name = os.path.basename(path)
-              if name.endswith('.sha256'):
-                  continue
-              sha_path = f"{path}.sha256"
+          for sha_path in sorted(glob.glob(f"{rel_dir}/*.sha256")):
+              name = os.path.basename(sha_path)[:-len('.sha256')]
               with open(sha_path) as f:
                   sha = f.read().split()[0]
               # No `arch` key on purpose: every variant is linux-amd64, so
