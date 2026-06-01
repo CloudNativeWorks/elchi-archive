@@ -116,5 +116,20 @@
         }
       ]
     }
+  ],
+  "ui_releases": [
+    {
+      "version": "v1.4.4",
+      "date": "2026-06-01T19:01:34Z",
+      "files": [
+        {
+          "name": "elchi-dist-v1.4.4.tar.gz",
+          "type": "bundle",
+          "description": "elchi UI static distribution bundle (index.html + assets)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.4.4/elchi-dist-v1.4.4.tar.gz",
+          "sha256": "2fe1fc99b26731863ff8e1927b8995c9b82b1f86ec2abb250cb3b3ef43d5b152"
+        }
+      ]
+    }
   ]
 }
