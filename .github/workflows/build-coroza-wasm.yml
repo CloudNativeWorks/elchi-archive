@@ -67,50 +67,8 @@ jobs:
             coraza-proxy-wasm/coraza-amd64.wasm
             coraza-proxy-wasm/coraza-amd64.wasm.sha256
 
-  build-arm64:
-    runs-on: self-hosted
-    steps:
-      - name: Normalize version
-        id: normalize
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          # Remove 'v' prefix if present
-          VERSION="${VERSION#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Checkout Coraza Proxy WASM
-        uses: actions/checkout@v5
-        with:
-          repository: corazawaf/coraza-proxy-wasm
-          ref: ${{ steps.normalize.outputs.version }}
-          path: coraza-proxy-wasm
-
-      - name: Build in Docker
-        run: |
-          docker run --rm \
-            -v $(pwd)/coraza-proxy-wasm:/workspace \
-            -w /workspace \
-            golang:1.23-bookworm \
-            bash -c "
-              apt-get update && apt-get install -y wget && \
-              wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo_0.34.0_arm64.deb && \
-              dpkg -i tinygo_0.34.0_arm64.deb || true && \
-              apt-get install -f -y && \
-              go run mage.go build && \
-              mv build/main.wasm coraza-arm64.wasm && \
-              sha256sum coraza-arm64.wasm > coraza-arm64.wasm.sha256
-            "
-
-      - name: Upload ARM64 artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: coraza-wasm-arm64
-          path: |
-            coraza-proxy-wasm/coraza-arm64.wasm
-            coraza-proxy-wasm/coraza-arm64.wasm.sha256
-
   update-index:
-    needs: [build-amd64, build-arm64]
+    needs: [build-amd64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout archive repo
@@ -124,17 +82,10 @@ jobs:
           name: coraza-wasm-amd64
           path: releases/coroza-${{ github.event.inputs.version }}
 
-      - name: Download ARM64 artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: coraza-wasm-arm64
-          path: releases/coroza-${{ github.event.inputs.version }}
-
       - name: Update index.json
         run: |
           # Read hashes
           AMD64_SHA256=$(cat releases/coroza-${{ github.event.inputs.version }}/coraza-amd64.wasm.sha256 | cut -d' ' -f1)
-          ARM64_SHA256=$(cat releases/coroza-${{ github.event.inputs.version }}/coraza-arm64.wasm.sha256 | cut -d' ' -f1)
 
           # Create new Coroza release entry
           cat > temp_coroza_release.json << EOF
@@ -146,11 +97,6 @@ jobs:
                 "arch": "wasm-amd64",
                 "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-${{ github.event.inputs.version }}/coraza-amd64.wasm",
                 "sha256": "$AMD64_SHA256"
-              },
-              {
-                "arch": "wasm-arm64",
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/coroza-${{ github.event.inputs.version }}/coraza-arm64.wasm",
-                "sha256": "$ARM64_SHA256"
               }
             ]
           }
@@ -201,7 +147,6 @@ jobs:
           name: Coroza WASM ${{ github.event.inputs.version }}
           files: |
             releases/coroza-${{ github.event.inputs.version }}/coraza-amd64.wasm
-            releases/coroza-${{ github.event.inputs.version }}/coraza-arm64.wasm
             releases/coroza-${{ github.event.inputs.version }}/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

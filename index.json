@@ -23,24 +23,6 @@
       ]
     }
   ],
-  "coroza_releases": [
-    {
-      "version": "v0.6.0",
-      "date": "2025-10-17T12:23:49Z",
-      "binaries": [
-        {
-          "arch": "wasm-amd64",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/coroza-v0.6.0/coraza-amd64.wasm",
-          "sha256": "9e3bf6417170824173cbf9d9a7b9fa585d061019d51a7c828193785cfe7cca00"
-        },
-        {
-          "arch": "wasm-arm64",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/coroza-v0.6.0/coraza-arm64.wasm",
-          "sha256": "0fe9bf2289ba1fbe836791d38eaee29d88b6c7b54ab080d1e036c8c0395dc7e7"
-        }
-      ]
-    }
-  ],
   "elchi_client_releases": [
     {
       "version": "v1.1.0",
@@ -57,24 +39,6 @@
           "type": "script",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.1.0/elchi-install.sh",
           "sha256": "8f7ab8da07a1778784e2a175c51399c7a761c8679c550e99c2d97e638dcd9851"
-        }
-      ]
-    },
-    {
-      "version": "v1.0.0",
-      "date": "2026-02-06T07:45:09Z",
-      "files": [
-        {
-          "name": "elchi-client-linux-amd64",
-          "type": "binary",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.0.0/elchi-client-linux-amd64",
-          "sha256": "743bc586dce6686886b0bec529eb0964c6b3273f837979f452786423244910ef"
-        },
-        {
-          "name": "elchi-install.sh",
-          "type": "script",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.0.0/elchi-install.sh",
-          "sha256": "9cf22cc134476edea3ff3cb04e0d06d910d1f86ff2a34336c130a0b6f3d9a03d"
         }
       ]
     }
@@ -122,69 +86,6 @@
           "sha256": "291d2e72f0544c6d5de226173bbd538ec16206818a4caea322817aa321afb435"
         }
       ]
-    },
-    {
-      "version": "v0.1.3",
-      "date": "2026-05-04T10:27:34Z",
-      "files": [
-        {
-          "name": "coredns-elchi-linux-amd64",
-          "type": "binary",
-          "arch": "linux-amd64",
-          "description": "CoreDNS with Elchi GSLB plugin for Linux AMD64",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.3/coredns-elchi-linux-amd64",
-          "sha256": "938f2b4e6899f052dcc32687df265ea2d91f7f8ac72a4b9708c9be296e7d7283"
-        },
-        {
-          "name": "elchi-gslb-v0.1.3.tar.gz",
-          "type": "source",
-          "description": "Elchi GSLB source code tarball",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.3/elchi-gslb-v0.1.3.tar.gz",
-          "sha256": "5683b4da4a1618f40f9110ec0e783470ac54d4d242b2c2d61adc03ff37f1aa1d"
-        }
-      ]
-    },
-    {
-      "version": "v0.1.1",
-      "date": "2026-02-07T15:25:32Z",
-      "files": [
-        {
-          "name": "coredns-elchi-linux-amd64",
-          "type": "binary",
-          "arch": "linux-amd64",
-          "description": "CoreDNS with Elchi GSLB plugin for Linux AMD64",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.1/coredns-elchi-linux-amd64",
-          "sha256": "05eb3723fece166b4eb1beab8d2fb180a69e8bed61901c213c63c8b2a3dc54fe"
-        },
-        {
-          "name": "elchi-gslb-v0.1.1.tar.gz",
-          "type": "source",
-          "description": "Elchi GSLB source code tarball",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.1/elchi-gslb-v0.1.1.tar.gz",
-          "sha256": "6726773c9cbe181bcdc8d9837ce240be85fdd24bed422f9ffd3c895a4b5c1ebb"
-        }
-      ]
-    },
-    {
-      "version": "v0.1.0",
-      "date": "2026-01-14T19:44:25Z",
-      "files": [
-        {
-          "name": "coredns-elchi-linux-amd64",
-          "type": "binary",
-          "arch": "linux-amd64",
-          "description": "CoreDNS with Elchi GSLB plugin for Linux AMD64",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.0/coredns-elchi-linux-amd64",
-          "sha256": "05eb3723fece166b4eb1beab8d2fb180a69e8bed61901c213c63c8b2a3dc54fe"
-        },
-        {
-          "name": "elchi-gslb-v0.1.0.tar.gz",
-          "type": "source",
-          "description": "Elchi GSLB source code tarball",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-v0.1.0/elchi-gslb-v0.1.0.tar.gz",
-          "sha256": "aec7b1847d15913df01271fb6cfe7579079e53047eb07d3dc7539f79e7208bf9"
-        }
-      ]
     }
   ],
   "elchi_collector_releases": [
@@ -196,7 +97,7 @@
           "name": "elchi-collector-linux-amd64",
           "type": "binary",
           "arch": "linux-amd64",
-          "description": "elchi-collector \u2014 Envoy ALS ingestion service \u2014 for Linux AMD64",
+          "description": "elchi-collector — Envoy ALS ingestion service — for Linux AMD64",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-collector-v0.1.8/elchi-collector-linux-amd64",
           "sha256": "00efa115d9473addd996e6d0b6453ea5de18eb77fe86af5b9b16bbd84ef94857"
         }
