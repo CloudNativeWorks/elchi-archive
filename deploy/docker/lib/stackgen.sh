@@ -373,6 +373,8 @@ EOF
   elchi-registry:
     image: $(stackgen::_backend_image "$first_variant")
     command: ["elchi-registry", "--config", "/config/config-prod.yaml", "--port=${PORT_REGISTRY_GRPC:-1870}"]
+    environment:
+      REGISTRY_LISTEN_ADDR: "0.0.0.0:${PORT_REGISTRY_GRPC:-1870}"
     configs:
       - source: ${_CFG_NAME[cp_$(ver::sanitize "$first_variant")]}
         target: /config/config-prod.yaml
@@ -395,6 +397,10 @@ EOF
     hostname: node${ni}
     environment:
       ELCHI_NODE_HOST: "node${ni}"
+      CONTROLLER_PORT: "${PORT_CONTROLLER_REST:-1980}"
+      CONTROLLER_GRPC_PORT: "${PORT_CONTROLLER_GRPC:-1960}"
+      CONTROLLER_REST_LISTEN: "0.0.0.0:${PORT_CONTROLLER_REST:-1980}"
+      CONTROLLER_GRPC_LISTEN: "0.0.0.0:${PORT_CONTROLLER_GRPC:-1960}"
     configs:
       - source: ${_CFG_NAME[cp_$(ver::sanitize "$first_variant")]}
         target: /config/config-prod.yaml
@@ -411,11 +417,13 @@ EOF
     # ---- control-plane: ONE per (node, variant) ----
     # Same hostname=node<i> → CONTROL_PLANE_ID=node<i>-controlplane-<envoy-X.Y.Z>
     # (the embedded envoy version differs per variant, so the IDs stay unique).
-    local full cpsvc
+    local full cpsvc cpport slot
     for ((ni=1;ni<=nc;ni++)); do
+      slot=0
       for v in "${variants[@]}"; do
         full=$(ver::envoy_full "$v")
         cpsvc="elchi-cp-${full//./-}-node${ni}"
+        cpport=$(( ${PORT_CONTROL_PLANE_BASE:-1990} + slot ))
         key="cp_$(ver::sanitize "$v")"
         cat <<EOF
   ${cpsvc}:
@@ -424,6 +432,8 @@ EOF
     hostname: node${ni}
     environment:
       ELCHI_NODE_HOST: "node${ni}"
+      CONTROL_PLANE_PORT: "${cpport}"
+      CONTROL_PLANE_LISTEN: "0.0.0.0:${cpport}"
     configs:
       - source: ${_CFG_NAME[$key]}
         target: /config/config-prod.yaml
@@ -435,6 +445,7 @@ EOF
         constraints: ["$(stackgen::_node_constraint "$ni")"]
       restart_policy: {condition: on-failure}
 EOF
+        slot=$(( slot + 1 ))
       done
     done
 
@@ -527,7 +538,10 @@ EOF
     networks: [elchi-net]
     deploy:
       mode: global
-      restart_policy: {condition: on-failure}
+      # 'any' (not on-failure): if coredns ever exits cleanly (e.g. a transient
+      # plugin/endpoint hiccup at startup) Swarm must still restart it —
+      # on-failure leaves a global service silently at 0/0 on a clean exit.
+      restart_policy: {condition: any, delay: 5s}
 EOF
     fi
 

@@ -661,7 +661,7 @@ EOF
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: {address: ${SVC_UI}, port_value: ${UI_PORT}}
+              socket_address: {address: tasks.${SVC_UI}, port_value: ${UI_PORT}}
 EOF
 
   # otel cluster (gRPC h2).

@@ -443,21 +443,36 @@ deploy() {
 # ----- health wait + summary ----------------------------------------------
 health_wait() {
   log::step "Waiting for services to converge"
-  local deadline=$(( SECONDS + ${ELCHI_HEALTH_TIMEOUT:-300} ))
+  # First-time multi-node deploys pull every image on every node — that can
+  # take several minutes. Default 10 min; the loop prints live progress so the
+  # screen never looks frozen.
+  local deadline=$(( SECONDS + ${ELCHI_HEALTH_TIMEOUT:-600} ))
+  local last="" lastbeat=0
   while [ $SECONDS -lt $deadline ]; do
-    local not_ready
-    not_ready=$(docker stack services --format '{{.Name}} {{.Replicas}}' "$STACK_NAME" 2>/dev/null \
-      | awk '{split($2,a,"/"); if (a[1]+0 < a[2]+0 || a[2]+0==0) print $1}')
-    if [ -z "$not_ready" ]; then
-      log::ok "all services converged"
+    local lines pending total ready
+    lines=$(docker stack services --format '{{.Name}} {{.Replicas}}' "$STACK_NAME" 2>/dev/null)
+    pending=$(printf '%s\n' "$lines" | awk 'NF{split($2,a,"/"); if (a[1]+0 < a[2]+0 || a[2]+0==0) print $1}')
+    total=$(printf '%s\n' "$lines" | grep -c .)
+    ready=$(( total - $(printf '%s\n' "$pending" | grep -c .) ))
+    if [ -z "$pending" ] && [ "$total" -gt 0 ]; then
+      log::ok "all ${total} services converged"
       docker stack services "$STACK_NAME" 2>/dev/null || true
       return 0
     fi
+    # Print on change, or at least every 20s (heartbeat) so it's clearly alive.
+    if [ "${ready}/${total}" != "$last" ] || [ $(( SECONDS - lastbeat )) -ge 20 ]; then
+      local short
+      short=$(printf '%s ' $pending | sed "s/${STACK_NAME}_elchi-/ /g")
+      log::info "converged ${ready}/${total} — still pulling/starting:${short}"
+      last="${ready}/${total}"; lastbeat=$SECONDS
+    fi
     sleep 5
   done
-  log::warn "timeout waiting for convergence — current state:"
+  log::warn "convergence timed out — current state:"
   docker stack services "$STACK_NAME" 2>/dev/null || true
-  log::warn "inspect a stuck service: docker service ps --no-trunc ${STACK_NAME}_<svc>"
+  log::warn "first-time multi-node image pulls can exceed the timeout; it may still finish."
+  log::warn "watch:   watch docker stack services ${STACK_NAME}"
+  log::warn "inspect: docker service ps --no-trunc ${STACK_NAME}_<svc>"
 }
 
 summary() {
