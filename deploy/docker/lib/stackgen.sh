@@ -52,7 +52,12 @@ stackgen::_node_count() {
 }
 stackgen::_node_constraint() {
   local i=$1
-  if [ -n "${ELCHI_NODES:-}" ]; then
+  # Prefer node IDs resolved from --nodes (IPs or hostnames) by install.sh —
+  # node.id is unique + stable. Fall back to node.hostname (dry-run, where
+  # nodes aren't resolved) or the manager (single host).
+  if [ -n "${ELCHI_NODE_IDS:-}" ]; then
+    printf 'node.id == %s' "$(csv_split "$ELCHI_NODE_IDS" | sed -n "${i}p")"
+  elif [ -n "${ELCHI_NODES:-}" ]; then
     printf 'node.hostname == %s' "$(csv_split "$ELCHI_NODES" | sed -n "${i}p")"
   else
     printf 'node.role == manager'

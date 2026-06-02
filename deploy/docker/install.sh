@@ -213,6 +213,56 @@ preflight() {
   log::info "backend variants: ${ELCHI_BACKEND_VARIANTS}"
 }
 
+# ----- resolve --nodes (IPs or hostnames) to Swarm node IDs ---------------
+# Swarm pins by hostname/id, not IP, so we map every --nodes entry to a real
+# joined node (by hostname OR advertised address) and pin via node.id. If any
+# node hasn't joined the swarm, STOP with the exact join command instead of
+# deploying a half-scheduled stack (services for the missing nodes would hang
+# Pending — the symptom of "Keeper quorum forming" forever).
+resolve_nodes() {
+  [ -n "${ELCHI_NODES:-}" ] || return 0
+  log::step "Resolving --nodes to Swarm nodes"
+
+  # Snapshot the swarm: "id<TAB>hostname<TAB>statusAddr<TAB>managerAddr" per
+  # node. Status.Addr and ManagerStatus.Addr are kept as SEPARATE fields —
+  # on a manager BOTH are populated and must not be concatenated.
+  local snap; snap=$(
+    for id in $(docker node ls -q 2>/dev/null); do
+      docker node inspect "$id" --format \
+        '{{.ID}}	{{.Description.Hostname}}	{{with .Status.Addr}}{{.}}{{end}}	{{with .ManagerStatus}}{{.Addr}}{{end}}' 2>/dev/null
+    done
+  )
+
+  local -a ids=() missing=()
+  local e nid
+  while IFS= read -r e; do
+    [ -z "$e" ] && continue
+    # match by hostname, or by either address (strip :port).
+    nid=$(printf '%s\n' "$snap" | awk -F'\t' -v e="$e" '
+      $2==e { print $1; exit }
+      { split($3,a,":"); if (a[1]!="" && a[1]==e) { print $1; exit } }
+      { split($4,b,":"); if (b[1]!="" && b[1]==e) { print $1; exit } }')
+    if [ -n "$nid" ]; then ids+=("$nid"); else missing+=("$e"); fi
+  done < <(csv_split "$ELCHI_NODES")
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    local tok mgr
+    tok=$(docker swarm join-token -q worker 2>/dev/null)
+    mgr=$(docker node inspect self --format '{{with .ManagerStatus}}{{.Addr}}{{end}}' 2>/dev/null)
+    log::err "these --nodes are NOT part of the Swarm yet: ${missing[*]}"
+    log::err "Docker can't auto-join remote machines (no SSH). On EACH missing node, run:"
+    log::err ""
+    log::err "    docker swarm join --token ${tok:-<worker-token>} ${mgr:-<manager-ip:2377>}"
+    log::err ""
+    log::err "Also open the Swarm ports between nodes: 2377/tcp, 7946/tcp+udp, 4789/udp."
+    log::err "Then re-run this installer (it is idempotent)."
+    die "swarm join required for ${#missing[@]} node(s)"
+  fi
+
+  export ELCHI_NODE_IDS=$(IFS=,; printf '%s' "${ids[*]}")
+  log::ok "resolved ${#ids[@]} node(s): ${ELCHI_NODE_IDS}"
+}
+
 # ----- offline image load --------------------------------------------------
 load_offline() {
   [ -n "$OFFLINE_BUNDLE" ] || return 0
@@ -359,6 +409,7 @@ main() {
   fi
 
   preflight
+  resolve_nodes
   load_offline
   copy_assets
   secrets::mint
