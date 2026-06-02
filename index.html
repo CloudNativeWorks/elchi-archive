@@ -1736,14 +1736,11 @@
                             (= <code>--storage-replicas=3</code>).</div>
                         <code>--storage-replicas=&lt;n&gt;</code>
                         <div class="desc">Stateful-tier replica count. <span class="default">Default:
-                                <code>1</code></span> (standalone).</div>
-                        <code>--m1-node=&lt;node&gt;</code>
-                        <div class="desc">Swarm node to pin the M1 singletons (VictoriaMetrics + Grafana) to;
-                            labels it <code>elchi_m1=true</code>.</div>
-                        <code>--storage-nodes=&lt;n1,n2,n3&gt;</code>
-                        <div class="desc">Swarm nodes for the storage members; labels them
-                            <code>elchi_storage_1..N=true</code>. Count must match
-                            <code>--ha</code>/<code>--storage-replicas</code>.</div>
+                                <code>1</code></span> (standalone). Like the bare-metal installer, the
+                            <strong>first <code>n</code> of <code>--nodes</code></strong> run the
+                            MongoDB / ClickHouse members and the <strong>first node is M1</strong>
+                            (VictoriaMetrics + Grafana) — no separate storage/M1 flags; placement is
+                            derived from <code>--nodes</code> via <code>node.hostname</code>.</div>
                     </div>
                 </details>
 
@@ -1758,8 +1755,9 @@
                                 <code>elchi</code>.</span></div>
                         <code>--placement-m1="&lt;expr&gt;"</code>
                         <div class="desc">Override the placement constraint for M1 singletons.
-                            <span class="default">Default: <code>node.role == manager</code></span> (or the
-                            <code>elchi_m1</code> label when <code>--m1-node</code> is set).</div>
+                            <span class="default">Default: the first <code>--nodes</code> host
+                            (<code>node.hostname == …</code>), or <code>node.role == manager</code> for a
+                            single host.</span></div>
                         <code>--state-dir=&lt;path&gt;</code>
                         <div class="desc">Where secrets / TLS / rendered config / dashboards live.
                             <span class="default">Default: <code>~/.elchi-docker</code>.</span> Must persist
@@ -1839,18 +1837,18 @@
                 <h4>5. High availability (multi-node)</h4>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     Join the worker machines to the Swarm first (<code>docker swarm join …</code> using the
-                    token from <code>docker swarm join-token worker</code>), then deploy with
-                    <code>--ha</code>, pinning the storage members and the M1 singletons by node label:
+                    token from <code>docker swarm join-token worker</code>), then pass the elchi node list
+                    with <code>--nodes</code> and turn on <code>--ha</code>. Like the standalone installer,
+                    the first node is M1 and the first 3 run the storage members — no extra flags:
                 </p>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
-                    --ha \
-                    --m1-node=&lt;manager-node&gt; \
-                    --storage-nodes=&lt;node1&gt;,&lt;node2&gt;,&lt;node3&gt;</div>
+                    --nodes=host-a,host-b,host-c \
+                    --ha</div>
                 <p class="note" style="margin: 8px 0;">
-                    <code>--ha</code> labels the nodes and switches the stateful tier from standalone to:
+                    <code>--ha</code> switches the stateful tier from standalone to:
                     a <strong>MongoDB replica set</strong> (3 pinned services <code>elchi-mongo-1..3</code>
                     with keyfile auth; member-1 retries <code>rs.initiate</code> until all members are up,
                     then creates the scoped app user), and a <strong>ClickHouse Keeper cluster</strong>

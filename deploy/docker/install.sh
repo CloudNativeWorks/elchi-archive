@@ -88,11 +88,10 @@ Multi-node topology (standalone parity — every node runs the full tier):
 High availability (Stage 2, multi-node):
   --ha                        3-member MongoDB replica set + 3-node ClickHouse
                               Keeper cluster (= --storage-replicas=3).
-  --storage-replicas=<n>      Stateful-tier replica count (default 1).
-  --m1-node=<node>            Swarm node to pin M1 singletons (vm/grafana) to
-                              (labels it elchi_m1=true).
-  --storage-nodes=<n1,n2,n3>  Swarm nodes for the storage members (labels them
-                              elchi_storage_1..N=true). Count must match --ha/-replicas.
+  --storage-replicas=<n>      Stateful-tier replica count (default 1). Like the
+                              standalone installer, the storage members run on
+                              the FIRST <n> --nodes; the first node is M1
+                              (VictoriaMetrics + Grafana). No extra flags.
 
 Operational:
   --offline=<tarball>         docker load images from a save-images.sh bundle
@@ -128,8 +127,6 @@ for arg in "$@"; do
     --nodes=*)             export ELCHI_NODES=${arg#*=} ;;
     --ha)                  export ELCHI_STORAGE_REPLICAS=3 ;;
     --storage-replicas=*)  export ELCHI_STORAGE_REPLICAS=${arg#*=} ;;
-    --m1-node=*)           export ELCHI_M1_NODE=${arg#*=} ;;
-    --storage-nodes=*)     export ELCHI_STORAGE_NODES=${arg#*=} ;;
     --mongo=*)             export ELCHI_MONGO_MODE=${arg#*=} ;;
     --mongo-uri=*)         export ELCHI_MONGO_URI=${arg#*=} ;;
     --mongo-hosts=*)       export ELCHI_MONGO_HOSTS=${arg#*=} ;;
@@ -173,11 +170,10 @@ export ELCHI_INSTALL_GSLB=${ELCHI_INSTALL_GSLB:-1}
 export ELCHI_INSTALL_COLLECTOR=${ELCHI_INSTALL_COLLECTOR:-1}
 export ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-elchi.local}
 export ELCHI_STORAGE_REPLICAS=${ELCHI_STORAGE_REPLICAS:-1}
-# When the operator labels an M1 node, pin the M1 singletons to that label
-# (unless they already overrode the placement explicitly).
-if [ -n "${ELCHI_M1_NODE:-}" ] && [ -z "${ELCHI_PLACEMENT_M1:-}" ]; then
-  export ELCHI_PLACEMENT_M1="node.labels.elchi_m1 == true"
-fi
+# M1 singletons (VictoriaMetrics + Grafana) and storage members are pinned by
+# --nodes hostname (the first node = M1, first <storage-replicas> nodes = the
+# replica-set / Keeper members), exactly like the standalone installer — no
+# separate node-label flags. stackgen derives all placement from --nodes.
 # TLS on unless the operator picked plaintext via --port=80 with no override.
 if [ -z "${ELCHI_TLS_ENABLED:-}" ]; then
   if [ "$ELCHI_PORT" = "80" ]; then export ELCHI_TLS_ENABLED=false; else export ELCHI_TLS_ENABLED=true; fi
@@ -253,27 +249,13 @@ tls_setup() {
   log::ok "self-signed certificate generated (${TLS_DIR})"
 }
 
-# ----- node labeling (HA multi-node) --------------------------------------
-label_nodes() {
-  [ -n "${ELCHI_M1_NODE:-}" ] || [ -n "${ELCHI_STORAGE_NODES:-}" ] || return 0
-  log::step "Labeling Swarm nodes"
-  if [ -n "${ELCHI_M1_NODE:-}" ]; then
-    docker node update --label-add elchi_m1=true "$ELCHI_M1_NODE" >/dev/null \
-      && log::info "labeled ${ELCHI_M1_NODE}: elchi_m1=true" \
-      || die "failed to label M1 node '${ELCHI_M1_NODE}' (is it a valid swarm node? run on a manager)"
-  fi
-  if [ -n "${ELCHI_STORAGE_NODES:-}" ]; then
-    local i=0 n
-    while IFS= read -r n; do
-      i=$(( i + 1 ))
-      docker node update --label-add "elchi_storage_${i}=true" "$n" >/dev/null \
-        && log::info "labeled ${n}: elchi_storage_${i}=true" \
-        || die "failed to label storage node '${n}'"
-    done < <(csv_split "$ELCHI_STORAGE_NODES")
-    if [ "$i" -lt "$ELCHI_STORAGE_REPLICAS" ]; then
-      die "--storage-replicas=${ELCHI_STORAGE_REPLICAS} but only ${i} --storage-nodes supplied"
-    fi
-  fi
+# ----- preflight: --nodes sanity for HA -----------------------------------
+check_nodes() {
+  [ "$ELCHI_STORAGE_REPLICAS" -gt 1 ] 2>/dev/null || return 0
+  [ -n "${ELCHI_NODES:-}" ] || { log::warn "--storage-replicas/--ha without --nodes: all storage members land on this single node (fine for a dev/test box, not real HA)"; return 0; }
+  local n; n=$(csv_split "$ELCHI_NODES" | grep -c .)
+  [ "$n" -ge "$ELCHI_STORAGE_REPLICAS" ] \
+    || die "--storage-replicas=${ELCHI_STORAGE_REPLICAS} needs at least that many --nodes (got ${n})"
 }
 
 # ----- ClickHouse HA: create the Replicated database on each member --------
@@ -380,7 +362,7 @@ main() {
   fi
 
   preflight
-  label_nodes
+  check_nodes
   load_offline
   copy_assets
   secrets::mint

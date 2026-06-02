@@ -73,7 +73,9 @@ stackgen::generate() {
   local vm_image=${ELCHI_VM_IMAGE:-$ELCHI_DEFAULT_VM_IMAGE}
   local otel_image=${ELCHI_OTEL_IMAGE:-$ELCHI_DEFAULT_OTEL_IMAGE}
 
-  local placement=${ELCHI_PLACEMENT_M1:-node.role == manager}
+  # M1 singletons (vm/grafana) pin to the FIRST --nodes host (= node1), or the
+  # manager when --nodes is unset. --placement-m1 overrides.
+  local placement=${ELCHI_PLACEMENT_M1:-$(stackgen::_node_constraint 1)}
   local port=${ELCHI_PORT:-443}
   local tls=${ELCHI_TLS_ENABLED:-true}
   local main=${ELCHI_MAIN_ADDRESS:-localhost}
@@ -176,12 +178,13 @@ stackgen::generate() {
       restart_policy: {condition: on-failure}
 EOF
     elif [ "$mongo_local" = "1" ] && [ "$ha" = "1" ]; then
-      # HA: one single-replica service per replica-set member, each pinned to
-      # a distinct storage node (or the manager when no labels are set, e.g.
-      # single-node testing). Member 1 runs the validated bootstrap script.
+      # HA: one single-replica service per replica-set member, pinned to the
+      # mi-th --nodes host (= the first <sr> nodes, like the standalone
+      # installer), or the manager when --nodes is unset (single-node testing).
+      # Member 1 runs the validated bootstrap script.
+      local sc
       for ((mi=1;mi<=sr;mi++)); do
-        local sc="$placement"
-        [ -n "${ELCHI_STORAGE_NODES:-}" ] && sc="node.labels.elchi_storage_${mi} == true"
+        sc=$(stackgen::_node_constraint "$mi")
         if [ "$mi" = "1" ]; then
           cat <<EOF
   elchi-mongo-1:
@@ -248,11 +251,12 @@ EOF
       restart_policy: {condition: on-failure}
 EOF
     elif [ "$ch_local" = "1" ] && [ "$ha" = "1" ]; then
-      # HA: one server per replica with embedded Keeper (Raft quorum). The
-      # Replicated 'elchi' database is created post-deploy by install.sh.
+      # HA: one server per replica with embedded Keeper (Raft quorum), pinned
+      # to the mi-th --nodes host. The Replicated 'elchi' database is created
+      # post-deploy by install.sh.
+      local sc
       for ((mi=1;mi<=sr;mi++)); do
-        local sc="$placement"
-        [ -n "${ELCHI_STORAGE_NODES:-}" ] && sc="node.labels.elchi_storage_${mi} == true"
+        sc=$(stackgen::_node_constraint "$mi")
         cat <<EOF
   elchi-clickhouse-${mi}:
     image: ${clickhouse_image}

@@ -94,9 +94,9 @@ and `elchi-cp-<envoy>-node<i>`, each pinned via `node.hostname` with container
 `node<i>-controlplane-<X.Y.Z>` (exactly the standalone `<hostname>-…` scheme),
 and the Envoy bootstrap carries a matching cluster + `x-target-cluster` route
 for **each (node, variant)** — so the registry can pin a client's xDS stream to
-a specific instance, not just round-robin. Storage nodes (`--storage-nodes`)
-run mongo/clickhouse *in addition to* this full tier — they are not DB-only.
-Without `--nodes` it's a single node (`node1`) on the manager.
+a specific instance, not just round-robin. The first `--storage-replicas`
+`--nodes` run mongo/clickhouse *in addition to* this full tier — they are not
+DB-only. Without `--nodes` it's a single node (`node1`) on the manager.
 
 ## How it's wired (vs the standalone installer)
 
@@ -140,16 +140,17 @@ deploy/docker/uninstall.sh --purge          # also drop volumes, configs, secret
 ## High availability (`--ha`, multi-node)
 
 ```bash
-# label nodes + deploy a 3-member mongo RS + 3-node ClickHouse Keeper cluster
+# join the workers to the swarm first (docker swarm join …), then:
 sudo deploy/docker/install.sh \
   --main-address=elchi.example.com \
-  --ha \
-  --m1-node=<swarm-node-for-vm/grafana> \
-  --storage-nodes=<node1>,<node2>,<node3>
+  --nodes=host-a,host-b,host-c \
+  --ha
 ```
 
-`--ha` (= `--storage-replicas=3`) switches the stateful tier from standalone
-to HA:
+`--nodes` is the single list of elchi nodes (swarm hostnames). Like the
+standalone installer, the **first node is M1** (VictoriaMetrics + Grafana) and
+the **first `--storage-replicas` nodes** run the MongoDB / ClickHouse members.
+`--ha` (= `--storage-replicas=3`) switches the stateful tier from standalone to HA:
 
 - **MongoDB replica set**: 3 single-replica services `elchi-mongo-1..3`, each
   on its own volume, with keyfile internal auth. Member-1 runs a bootstrap
@@ -160,10 +161,9 @@ to HA:
   an embedded Keeper (Raft) and the `elchi_cluster` remote-servers config. The
   Replicated `elchi` database is created post-deploy by `install.sh` against
   each member (so it's never accidentally created as a plain Atomic DB).
-- **Placement**: `--m1-node` labels a node `elchi_m1=true` (pins VictoriaMetrics
-  + Grafana); `--storage-nodes` labels nodes `elchi_storage_1..N=true` (pins the
-  storage members). Without labels (e.g. single-node testing) everything lands
-  on the manager.
+- **Placement**: derived from `--nodes` via `node.hostname` constraints — the
+  storage member `i` pins to the `i`-th `--nodes` host; M1 singletons pin to the
+  first. Without `--nodes` (single-node testing) everything lands on the manager.
 
 Stateless services (envoy/otel/collector/coredns/registry are `global`;
 controller/cp/ui are replicable) scale the same way in both modes.
