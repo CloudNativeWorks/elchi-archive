@@ -43,6 +43,22 @@ stackgen::_sec() {
 stackgen::_repo() { printf '%s' "${ELCHI_IMAGE_REPO:-${ELCHI_DEFAULT_IMAGE_REPO:-jhonbrownn}}"; }
 stackgen::_backend_image() { printf '%s/elchi-backend:%s' "$(stackgen::_repo)" "$1"; }
 
+# Elchi runtime node count + per-node placement (standalone parity: every
+# node runs the full controller/control-plane tier). N from --nodes (CSV of
+# swarm hostnames) or 1. Per-node service i is pinned to the i-th hostname,
+# or the manager when --nodes is unset (single host).
+stackgen::_node_count() {
+  if [ -n "${ELCHI_NODES:-}" ]; then csv_split "$ELCHI_NODES" | grep -c .; else echo 1; fi
+}
+stackgen::_node_constraint() {
+  local i=$1
+  if [ -n "${ELCHI_NODES:-}" ]; then
+    printf 'node.hostname == %s' "$(csv_split "$ELCHI_NODES" | sed -n "${i}p")"
+  else
+    printf 'node.role == manager'
+  fi
+}
+
 stackgen::generate() {
   log::step "Generating stack file ${GEN_DIR}/stack.yml"
 
@@ -115,6 +131,16 @@ stackgen::generate() {
     printf '%s\n' "# Re-generate via: deploy/docker/install.sh (or upgrade.sh)."
     printf '%s\n' "version: \"3.8\""
     printf '\n'
+    # No deploy.resources limits anywhere — every service may use the FULL
+    # node CPU/RAM (unlike the standalone systemd units' MemoryMax/CPUQuota).
+    # The one thing we DO raise is the open-files ulimit: Docker's default
+    # soft nofile is 1024, which throttles ClickHouse / Envoy / Mongo under
+    # load. Swarm honours this at runtime (verified). Host-level sysctls
+    # (vm.max_map_count, swappiness) still belong to the node — see README.
+    printf '%s\n' "x-elchi-ulimits: &elchi-ulimits"
+    printf '%s\n' "  nofile: {soft: 1048576, hard: 1048576}"
+    printf '%s\n' "  nproc:  {soft: 65535, hard: 65535}"
+    printf '\n'
     printf '%s\n' "networks:"
     printf '%s\n' "  elchi-net:"
     printf '%s\n' "    driver: overlay"
@@ -141,6 +167,7 @@ stackgen::generate() {
         target: /docker-entrypoint-initdb.d/init.js
     volumes:
       - elchi-mongo-data:/data/db
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -168,6 +195,7 @@ EOF
         target: MONGO_KEYFILE
     volumes:
       - elchi-mongo-1-data:/data/db
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -185,6 +213,7 @@ EOF
         target: MONGO_KEYFILE
     volumes:
       - elchi-mongo-${mi}-data:/data/db
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -210,6 +239,7 @@ EOF
         target: /docker-entrypoint-initdb.d/init.sql
     volumes:
       - elchi-clickhouse-data:/var/lib/clickhouse
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -237,6 +267,7 @@ EOF
         target: /etc/clickhouse-server/config.d/cluster.xml
     volumes:
       - elchi-clickhouse-${mi}-data:/var/lib/clickhouse
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -258,6 +289,7 @@ EOF
       - "--httpListenAddr=0.0.0.0:8428"
     volumes:
       - elchi-vm-data:/victoria-metrics-data
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -275,6 +307,7 @@ EOF
     configs:
       - source: ${_CFG_NAME[otel]}
         target: /etc/otel/config.yaml
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       mode: global
@@ -317,6 +350,7 @@ EOF
         source: ${ELCHI_DASHBOARDS_DIR}
         target: /var/lib/grafana/dashboards-json
         read_only: true
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
@@ -333,42 +367,66 @@ EOF
     configs:
       - source: ${_CFG_NAME[cp_$(ver::sanitize "$first_variant")]}
         target: /config/config-prod.yaml
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       mode: global
       restart_policy: {condition: on-failure}
 EOF
 
-    # ---- controller (singleton) ----
-    cat <<EOF
-  elchi-controller:
+    # ---- controller: ONE per elchi node (version-agnostic singleton) ----
+    # hostname=node<i> so the backend auto-derives CONTROLLER_ID=node<i>-controller,
+    # matching the Envoy cluster/route (standalone <hostname>-controller model).
+    local nc ni; nc=$(stackgen::_node_count)
+    for ((ni=1;ni<=nc;ni++)); do
+      cat <<EOF
+  elchi-controller-node${ni}:
     image: $(stackgen::_backend_image "$first_variant")
     command: ["elchi-controller", "--config", "/config/config-prod.yaml"]
+    hostname: node${ni}
+    environment:
+      ELCHI_NODE_HOST: "node${ni}"
     configs:
       - source: ${_CFG_NAME[cp_$(ver::sanitize "$first_variant")]}
         target: /config/config-prod.yaml
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
+      placement:
+        constraints: ["$(stackgen::_node_constraint "$ni")"]
       restart_policy: {condition: on-failure}
 EOF
+    done
 
-    # ---- control-plane per variant ----
-    for v in "${variants[@]}"; do
-      local cp_svc; cp_svc=$(ver::cp_service "$v")
-      key="cp_$(ver::sanitize "$v")"
-      cat <<EOF
-  ${cp_svc}:
+    # ---- control-plane: ONE per (node, variant) ----
+    # Same hostname=node<i> → CONTROL_PLANE_ID=node<i>-controlplane-<envoy-X.Y.Z>
+    # (the embedded envoy version differs per variant, so the IDs stay unique).
+    local full cpsvc
+    for ((ni=1;ni<=nc;ni++)); do
+      for v in "${variants[@]}"; do
+        full=$(ver::envoy_full "$v")
+        cpsvc="elchi-cp-${full//./-}-node${ni}"
+        key="cp_$(ver::sanitize "$v")"
+        cat <<EOF
+  ${cpsvc}:
     image: $(stackgen::_backend_image "$v")
     command: ["elchi-control-plane", "--config", "/config/config-prod.yaml"]
+    hostname: node${ni}
+    environment:
+      ELCHI_NODE_HOST: "node${ni}"
     configs:
       - source: ${_CFG_NAME[$key]}
         target: /config/config-prod.yaml
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       replicas: 1
+      placement:
+        constraints: ["$(stackgen::_node_constraint "$ni")"]
       restart_policy: {condition: on-failure}
 EOF
+      done
     done
 
     # ---- envoy (global edge) ----
@@ -396,6 +454,7 @@ EOF
         published: ${port}
         protocol: tcp
         mode: ingress
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       mode: global
@@ -409,9 +468,10 @@ EOF
     configs:
       - source: ${_CFG_NAME[ui_config]}
         target: /usr/share/nginx/html/config.js
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
-      replicas: 1
+      mode: global
       restart_policy: {condition: on-failure}
 EOF
 
@@ -422,6 +482,7 @@ EOF
     image: ${collector_image}
     env_file:
       - ./config/collector.env
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       mode: global
@@ -453,6 +514,7 @@ EOF
 EOF
       fi
       cat <<EOF
+    ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
       mode: global

@@ -51,10 +51,27 @@ SVC_COREDNS=elchi-coredns
 # UI nginx image listens on :80 (verified from jhonbrownn/elchi image config).
 UI_PORT=${ELCHI_UI_PORT:-80}
 
-# Cluster ID the controller registers under (CONTROLLER_ID) — equals the
-# controller Swarm service name so the Envoy cluster + x-target-cluster
-# route match line up.
-CTRL_ID=$SVC_CONTROLLER
+# ----- elchi runtime nodes (standalone parity) -----------------------------
+# Every elchi node runs the FULL control-plane tier: 1 controller + one
+# control-plane PER backend variant + UI, plus the global services. Per-node
+# instances are individually addressable so the registry can pin a client's
+# xDS stream to a specific instance — exactly like the standalone installer's
+# <hostname>-controller / <hostname>-controlplane-<X.Y.Z> naming.
+#
+# Node keys are node1..nodeN. Each per-node service sets container
+# hostname=node<i> (+ ELCHI_NODE_HOST=node<i>), so the backend auto-derives:
+#   controller    -> node<i>-controller
+#   control-plane -> node<i>-controlplane-<envoy-X.Y.Z>
+# and the Envoy clusters/routes use those exact names.
+#
+# N comes from --nodes (CSV of swarm node hostnames, one per elchi node) or
+# defaults to 1 (single host).
+render::_node_count() {
+  if [ -n "${ELCHI_NODES:-}" ]; then csv_split "$ELCHI_NODES" | grep -c .; else echo 1; fi
+}
+# Per-node service base names.
+render::_ctrl_svc()  { printf 'elchi-controller-node%s' "$1"; }              # $1 = node index
+render::_cp_svc()    { printf 'elchi-cp-%s-node%s' "${2//./-}" "$1"; }       # $1=idx $2=envoy full (1.36.2)
 
 # ----- secret accessor -----------------------------------------------------
 # sec <NAME> — read a minted secret value from ${SECRETS_DIR}/<NAME>.
@@ -147,10 +164,9 @@ render::config_prod() {
   local variant=$1 slot=$2
   local out="${CONFIG_DIR}/config-prod-${variant}.yaml"
   local main=${ELCHI_MAIN_ADDRESS:-} port=${ELCHI_PORT:-443} tls=${ELCHI_TLS_ENABLED:-true}
-  local versions_list cp_port cp_id
+  local versions_list cp_port
   versions_list=$(render::_versions_list)
   cp_port=$(( PORT_CONTROL_PLANE_BASE + slot ))
-  cp_id=$(ver::cp_id "$variant")
 
   local mongo_user mongo_pwd jwt mongo_replset='' auth_mech
   mongo_user=$(sec ELCHI_MONGO_USERNAME); mongo_pwd=$(sec ELCHI_MONGO_PASSWORD)
@@ -198,10 +214,12 @@ REGISTRY_PORT: ${PORT_ENVOY_INTERNAL}
 REGISTRY_TLS_ENABLED: false
 CONTROL_PLANE_PORT: ${cp_port}
 
-# Deterministic identity (Swarm service names) so the registry's
-# x-target-cluster header matches the Envoy cluster names.
-CONTROLLER_ID: "${CTRL_ID}"
-CONTROL_PLANE_ID: "${cp_id}"
+# Identity is AUTO-DERIVED from the container hostname (each per-node service
+# sets hostname=node<i> + ELCHI_NODE_HOST=node<i>), exactly like the standalone
+# installer — so a node runs node<i>-controller and node<i>-controlplane-<X.Y.Z>,
+# and the Envoy clusters/routes match those names. Left unset on purpose:
+# # CONTROLLER_ID: ""
+# # CONTROL_PLANE_ID: ""
 
 MONGODB_HOSTS: "${mongo_hosts}"
 MONGODB_USERNAME: "${mongo_user}"
@@ -395,27 +413,35 @@ EOF
                 route: {cluster: elchi-collector-cluster, timeout: 0s, idle_timeout: 0s, max_stream_duration: {max_stream_duration: 0s, grpc_timeout_header_max: 0s}}
 EOF
   fi
-  # Controller (singleton) x-target-cluster route.
-  cat <<EOF
-              - match:
-                  prefix: "/"
-                  headers:
-                  - name: "x-target-cluster"
-                    string_match: {exact: "${CTRL_ID}"}
-                route: {cluster: ${SVC_CONTROLLER}, timeout: 0s, idle_timeout: 0s, max_stream_duration: {max_stream_duration: 0s}}
-EOF
-  # Per-variant control-plane x-target-cluster routes.
-  local v cp_id cp_svc
-  for v in "${variants[@]}"; do
-    cp_id=$(ver::cp_id "$v"); cp_svc=$(ver::cp_service "$v")
+  local n; n=$(render::_node_count)
+  local i v full
+  # Per-node controller routes — controller is a version-agnostic singleton
+  # per node, addressed as node<i>-controller (matches the registry's
+  # x-target-cluster, mirroring the standalone <hostname>-controller naming).
+  for ((i=1;i<=n;i++)); do
     cat <<EOF
               - match:
                   prefix: "/"
                   headers:
                   - name: "x-target-cluster"
-                    string_match: {exact: "${cp_id}"}
-                route: {cluster: ${cp_svc}, timeout: 0s, idle_timeout: 0s, max_stream_duration: {max_stream_duration: 0s, grpc_timeout_header_max: 0s}}
+                    string_match: {exact: "node${i}-controller"}
+                route: {cluster: node${i}-controller, timeout: 0s, idle_timeout: 0s, max_stream_duration: {max_stream_duration: 0s}}
 EOF
+  done
+  # Per-(node, variant) control-plane routes — one control-plane per node per
+  # variant, addressed as node<i>-controlplane-<envoy-X.Y.Z>.
+  for v in "${variants[@]}"; do
+    full=$(ver::envoy_full "$v")
+    for ((i=1;i<=n;i++)); do
+      cat <<EOF
+              - match:
+                  prefix: "/"
+                  headers:
+                  - name: "x-target-cluster"
+                    string_match: {exact: "node${i}-controlplane-${full}"}
+                route: {cluster: node${i}-controlplane-${full}, timeout: 0s, idle_timeout: 0s, max_stream_duration: {max_stream_duration: 0s, grpc_timeout_header_max: 0s}}
+EOF
+    done
   done
   cat <<'EOF'
               - match: {prefix: "/dns/"}
@@ -521,6 +547,14 @@ EOF
         - endpoint:
             address:
               socket_address: {address: tasks.${SVC_REGISTRY}, port_value: ${PORT_REGISTRY_GRPC}}
+EOF
+
+  local n; n=$(render::_node_count)
+  local i v full slot
+
+  # controller-rest-cluster — round-robins every node's controller REST
+  # (controller is a version-agnostic singleton per node).
+  cat <<EOF
 
   - name: controller-rest-cluster
     connect_timeout: 1s
@@ -538,42 +572,22 @@ EOF
       cluster_name: controller-rest-cluster
       endpoints:
       - lb_endpoints:
+EOF
+  for ((i=1;i<=n;i++)); do
+    cat <<EOF
         - endpoint:
             address:
-              socket_address: {address: tasks.${SVC_CONTROLLER}, port_value: ${PORT_CONTROLLER_REST}}
-
-  - name: ${SVC_CONTROLLER}
-    connect_timeout: 1s
-    type: STRICT_DNS
-    lb_policy: ROUND_ROBIN
-    common_lb_config:
-      close_connections_on_host_set_change: true
+              socket_address: {address: $(render::_ctrl_svc "$i"), port_value: ${PORT_CONTROLLER_REST}}
 EOF
-  render::_h2opts
-  cat <<EOF
-    health_checks:
-    - timeout: 1s
-      interval: 5s
-      unhealthy_threshold: 3
-      healthy_threshold: 1
-      tcp_health_check: {}
-    load_assignment:
-      cluster_name: ${SVC_CONTROLLER}
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address: {address: tasks.${SVC_CONTROLLER}, port_value: ${PORT_CONTROLLER_GRPC}}
-EOF
+  done
 
-  # Per-variant control-plane clusters.
-  local v cp_svc slot=0
-  for v in "${variants[@]}"; do
-    cp_svc=$(ver::cp_service "$v")
+  # Per-node controller gRPC clusters — name node<i>-controller matches the
+  # x-target-cluster the registry emits (standalone <hostname>-controller).
+  for ((i=1;i<=n;i++)); do
     cat <<EOF
 
-  - name: ${cp_svc}
-    connect_timeout: 15s
+  - name: node${i}-controller
+    connect_timeout: 1s
     type: STRICT_DNS
     lb_policy: ROUND_ROBIN
     common_lb_config:
@@ -582,20 +596,55 @@ EOF
     render::_h2opts
     cat <<EOF
     health_checks:
+    - timeout: 1s
+      interval: 5s
+      unhealthy_threshold: 3
+      healthy_threshold: 1
+      tcp_health_check: {}
+    load_assignment:
+      cluster_name: node${i}-controller
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: {address: $(render::_ctrl_svc "$i"), port_value: ${PORT_CONTROLLER_GRPC}}
+EOF
+  done
+
+  # Per-(node, variant) control-plane clusters — one per node per variant,
+  # name node<i>-controlplane-<envoy-X.Y.Z>. The variant's port is the same on
+  # every node (base + variant position), mirroring the standalone allocator.
+  for ((i=1;i<=n;i++)); do
+    slot=0
+    for v in "${variants[@]}"; do
+      full=$(ver::envoy_full "$v")
+      cat <<EOF
+
+  - name: node${i}-controlplane-${full}
+    connect_timeout: 15s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    common_lb_config:
+      close_connections_on_host_set_change: true
+EOF
+      render::_h2opts
+      cat <<EOF
+    health_checks:
     - timeout: 2s
       interval: 5s
       unhealthy_threshold: 3
       healthy_threshold: 1
       tcp_health_check: {}
     load_assignment:
-      cluster_name: ${cp_svc}
+      cluster_name: node${i}-controlplane-${full}
       endpoints:
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: {address: tasks.${cp_svc}, port_value: $(( PORT_CONTROL_PLANE_BASE + slot ))}
+              socket_address: {address: $(render::_cp_svc "$i" "$full"), port_value: $(( PORT_CONTROL_PLANE_BASE + slot ))}
 EOF
-    slot=$(( slot + 1 ))
+      slot=$(( slot + 1 ))
+    done
   done
 
   # UI cluster.

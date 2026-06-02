@@ -69,9 +69,9 @@ standalone `lib/versions.sh`).
 |---|---|---|---|
 | `elchi-envoy` | `envoyproxy/envoy` | global | Edge L7 router + TLS, publishes `:<port>` |
 | `elchi-registry` | `jhonbrownn/elchi-backend:<v0>` | global | xDS routing / ext_proc target |
-| `elchi-controller` | `jhonbrownn/elchi-backend:<v0>` | 1 | REST + gRPC API |
-| `elchi-cp-<envoy>` | `jhonbrownn/elchi-backend:<variant>` | 1 / variant | control-plane (xDS) |
-| `elchi-ui` | `jhonbrownn/elchi` | 1 | SPA (nginx); `config.js` injected |
+| `elchi-controller-node<i>` | `jhonbrownn/elchi-backend:<v0>` | 1 **per node** | REST + gRPC API singleton (version-agnostic) |
+| `elchi-cp-<envoy>-node<i>` | `jhonbrownn/elchi-backend:<variant>` | 1 **per node per variant** | control-plane (xDS) |
+| `elchi-ui` | `jhonbrownn/elchi` | global | SPA (nginx); `config.js` injected |
 | `elchi-mongo` | `mongo:8.0` | 1 (M1) | standalone; scoped `elchi` app user |
 | `elchi-clickhouse` | `clickhouse/clickhouse-server` | 1 (M1) | event store (collector) |
 | `elchi-victoriametrics` | `victoriametrics/victoria-metrics` | 1 (M1) | metrics TSDB |
@@ -83,6 +83,20 @@ standalone `lib/versions.sh`).
 All services share the `elchi-net` overlay network; Envoy and the backend
 address each other by **Swarm service DNS** (`tasks.<service>`), replacing the
 standalone installer's `/etc/hosts` aliases.
+
+**Per-node topology (standalone parity).** Like the bare-metal installer,
+**every elchi node runs the full control-plane tier**: 1 controller + one
+control-plane *per backend variant* + the global services (envoy / registry /
+otel / collector / coredns / ui). With `--nodes=<h1,h2,h3>` the installer
+creates per-node, individually-addressable services — `elchi-controller-node<i>`
+and `elchi-cp-<envoy>-node<i>`, each pinned via `node.hostname` with container
+`hostname=node<i>`. The backend then auto-derives `node<i>-controller` /
+`node<i>-controlplane-<X.Y.Z>` (exactly the standalone `<hostname>-…` scheme),
+and the Envoy bootstrap carries a matching cluster + `x-target-cluster` route
+for **each (node, variant)** — so the registry can pin a client's xDS stream to
+a specific instance, not just round-robin. Storage nodes (`--storage-nodes`)
+run mongo/clickhouse *in addition to* this full tier — they are not DB-only.
+Without `--nodes` it's a single node (`node1`) on the manager.
 
 ## How it's wired (vs the standalone installer)
 
@@ -174,6 +188,31 @@ Keeper quorum.
   collector ever wins the race it would create a plain Atomic DB; re-run
   `install.sh` (idempotent) — it refuses to proceed past a non-Replicated DB,
   matching the standalone installer's guard.
+
+## Performance / resource usage
+
+- **No CPU/RAM caps.** The stack sets **no** `deploy.resources.limits` — every
+  service may use the full node CPU and memory (intentionally *unlike* the
+  standalone systemd units, which cap each service with `MemoryMax`/`CPUQuota`).
+  Add limits yourself only if you want to partition a shared host.
+- **Open-files ulimit raised.** Docker's default soft `nofile` is 1024, which
+  throttles ClickHouse / Envoy / Mongo under load. The generated stack applies
+  `nofile: 1048576` + `nproc: 65535` to every service via a YAML anchor (Swarm
+  honours `ulimits:` at runtime).
+- **Host-level sysctls (set these on each Docker host for best performance at
+  scale).** These are kernel-wide (not namespaced), so a Swarm container can't
+  set them — the node must. The standalone installer sets them on bare metal;
+  for Docker, tune the host:
+  ```bash
+  # /etc/sysctl.d/99-elchi.conf  (then: sysctl --system)
+  vm.max_map_count = 1966080      # MongoDB / ClickHouse mmap
+  vm.swappiness = 1
+  fs.file-max = 2097152
+  net.core.somaxconn = 65535
+  ```
+  Also disable Transparent Huge Pages on the host for MongoDB (it only warns
+  otherwise). On Docker Desktop these are managed by the VM and rarely need
+  touching for small setups.
 
 ## Notes / gotchas
 

@@ -1580,7 +1580,9 @@
                     Each variant gets its own control-plane service + Envoy cluster. The embedded envoy
                     version must be unique per variant:
                 </p>
-                <div class="stdl-cmd">sudo deploy/docker/install.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- \
                     --main-address=elchi.example.com \
                     --backend-version=v1.4.9-v0.14.0-envoy1.36.2,v1.4.9-v0.14.0-envoy1.35.3 \
                     --ui-version=v1.4.6</div>
@@ -1591,8 +1593,15 @@
                     plaintext unless TLS is forced. <code>--dry-run</code> renders config + the stack file
                     into the state dir <em>without</em> deploying — inspect <code>~/.elchi-docker/gen/</code>:
                 </p>
-                <div class="stdl-cmd">sudo deploy/docker/install.sh --main-address=10.0.0.5 --port=8443
-                    sudo deploy/docker/install.sh --main-address=10.0.0.5 --dry-run</div>
+                <div class="stdl-cmd"># custom edge port (TLS stays on)
+                    curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- --main-address=10.0.0.5 --port=8443
+
+                    # render only, no deploy (inspect ~/.elchi-docker/gen/)
+                    curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- --main-address=10.0.0.5 --dry-run</div>
 
                 <h4>2. install.sh — full flag reference</h4>
                 <p style="font-size: 13px; color: #656d76; margin: 6px 0 10px 0;">
@@ -1714,8 +1723,14 @@
                 </details>
 
                 <details>
-                    <summary>High availability (multi-node)</summary>
+                    <summary>Multi-node topology &amp; high availability</summary>
                     <div class="flag-table">
+                        <code>--nodes=&lt;csv&gt;</code>
+                        <div class="desc">Swarm node hostnames, one per elchi node. <strong>Standalone
+                            parity:</strong> every node runs 1 controller + one control-plane PER variant +
+                            UI, individually addressable as <code>node&lt;i&gt;-*</code> in the Envoy config
+                            (so the registry can pin a client's xDS stream to a specific instance).
+                            <span class="default">Default: single node (the manager).</span></div>
                         <code>--ha</code>
                         <div class="desc">3-member MongoDB replica set + 3-node ClickHouse Keeper cluster
                             (= <code>--storage-replicas=3</code>).</div>
@@ -1768,14 +1783,16 @@
                     <code>elchi-registry</code>
                     <div class="desc"><code>elchi-backend</code> · <em>global</em> — xDS routing / ext_proc
                         target (leader-elected via Mongo).</div>
-                    <code>elchi-controller</code>
-                    <div class="desc"><code>elchi-backend</code> — REST + gRPC API singleton.</div>
-                    <code>elchi-cp-&lt;envoy&gt;</code>
-                    <div class="desc"><code>elchi-backend</code> — one control-plane (xDS) per backend
-                        variant.</div>
+                    <code>elchi-controller-node&lt;i&gt;</code>
+                    <div class="desc"><code>elchi-backend</code> — REST + gRPC API; <strong>one per
+                        node</strong> (version-agnostic singleton).</div>
+                    <code>elchi-cp-&lt;envoy&gt;-node&lt;i&gt;</code>
+                    <div class="desc"><code>elchi-backend</code> — control-plane (xDS); <strong>one per
+                        node per variant</strong>, addressable as
+                        <code>node&lt;i&gt;-controlplane-&lt;X.Y.Z&gt;</code> in the Envoy config.</div>
                     <code>elchi-ui</code>
-                    <div class="desc"><code>jhonbrownn/elchi</code> — SPA (nginx); <code>config.js</code>
-                        injected.</div>
+                    <div class="desc"><code>jhonbrownn/elchi</code> · <em>global</em> — SPA (nginx);
+                        <code>config.js</code> injected.</div>
                     <code>elchi-mongo[-1..3]</code>
                     <div class="desc"><code>mongo:8.0</code> — standalone, or a 3-member replica set with
                         <code>--ha</code>.</div>
@@ -1802,10 +1819,15 @@
                     On a machine <em>with</em> internet, save the pinned image set to a single tarball
                     (honours the same version flags so the bundle matches your install):
                 </p>
-                <div class="stdl-cmd">deploy/docker/save-images.sh --output=elchi-images.tar</div>
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- --script=save-images.sh --output=elchi-images.tar</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Copy the tarball to the air-gapped host, then install with <code>--offline</code> (runs
-                    <code>docker load</code> and deploys with <code>--resolve-image=never</code>):
+                    Copy <strong>both</strong> the image tarball and the installer (a
+                    <code>git clone</code> of this repo, or its <code>main</code> tarball) to the air-gapped
+                    host — it has no internet, so it can't bootstrap via <code>curl</code>. Run the
+                    transferred installer with <code>--offline</code> (it <code>docker load</code>s the
+                    images and deploys with <code>--resolve-image=never</code>):
                 </p>
                 <div class="stdl-cmd">sudo deploy/docker/install.sh --main-address=10.0.0.5 --offline=elchi-images.tar</div>
                 <p class="note" style="margin: 8px 0;">
@@ -1820,7 +1842,9 @@
                     token from <code>docker swarm join-token worker</code>), then deploy with
                     <code>--ha</code>, pinning the storage members and the M1 singletons by node label:
                 </p>
-                <div class="stdl-cmd">sudo deploy/docker/install.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- \
                     --main-address=elchi.example.com \
                     --ha \
                     --m1-node=&lt;manager-node&gt; \
@@ -1842,7 +1866,9 @@
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     Point the stack at managed/external datastores instead of running them in-cluster:
                 </p>
-                <div class="stdl-cmd">sudo deploy/docker/install.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- \
                     --main-address=elchi.example.com \
                     --mongo=external --mongo-uri='mongodb://u:p@m1:27017,m2:27017/?replicaSet=rs0' \
                     --mongo-hosts=m1:27017,m2:27017 --mongo-username=u --mongo-password=p --mongo-replicaset=rs0 \
@@ -1855,18 +1881,23 @@
                     content-hashed, so a re-render → new name → Swarm rolling update). <code>upgrade.sh</code>
                     is the same flow re-run with new <code>--*-version</code> flags:
                 </p>
-                <div class="stdl-cmd">deploy/docker/upgrade.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
                     --ui-version=v1.4.6 \
                     --backend-version=v1.4.9-v0.14.0-envoy1.36.2</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
                 <div class="stdl-cmd"># remove the stack, keep data volumes
-                    deploy/docker/uninstall.sh
-                    # also delete the data volumes only
-                    deploy/docker/uninstall.sh --purge-data
+                    curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- --uninstall
+
                     # delete volumes + configs + secrets + state dir
-                    deploy/docker/uninstall.sh --purge</div>
+                    curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- --uninstall --purge</div>
 
                 <h4>9. Port atlas</h4>
                 <div class="flag-table">

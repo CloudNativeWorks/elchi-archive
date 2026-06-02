@@ -79,6 +79,12 @@ Features / external services:
   --enable-demo               Enable UI demo mode.
   --log-level=<level>         (default: info)
 
+Multi-node topology (standalone parity — every node runs the full tier):
+  --nodes=<csv>               Swarm node hostnames (one per elchi node). Each
+                              node runs 1 controller + one control-plane PER
+                              variant + UI, addressable as node<i>-* in the
+                              Envoy config. Default: single node (the manager).
+
 High availability (Stage 2, multi-node):
   --ha                        3-member MongoDB replica set + 3-node ClickHouse
                               Keeper cluster (= --storage-replicas=3).
@@ -119,6 +125,7 @@ for arg in "$@"; do
     --gslb-forwarders=*)   export ELCHI_GSLB_FORWARDERS=${arg#*=} ;;
     --gslb-regions=*)      export ELCHI_GSLB_REGIONS=${arg#*=} ;;
     --no-collector)        export ELCHI_INSTALL_COLLECTOR=0 ;;
+    --nodes=*)             export ELCHI_NODES=${arg#*=} ;;
     --ha)                  export ELCHI_STORAGE_REPLICAS=3 ;;
     --storage-replicas=*)  export ELCHI_STORAGE_REPLICAS=${arg#*=} ;;
     --m1-node=*)           export ELCHI_M1_NODE=${arg#*=} ;;

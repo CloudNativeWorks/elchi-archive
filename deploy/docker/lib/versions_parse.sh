@@ -36,17 +36,7 @@ ver::envoy_full() {
   printf '%s' "${match#envoy}"
 }
 
-# ver::cp_service <tag> — Swarm-safe control-plane service name for a variant.
-# Uses ONLY the embedded envoy version (matching the standalone control-plane
-# cluster naming `<host>-controlplane-<X.Y.Z>`), sanitized for DNS:
-#   "v1.4.9-v0.14.0-envoy1.36.2" → "elchi-cp-1-36-2"
-ver::cp_service() {
-  local full
-  full=$(ver::envoy_full "$1")
-  printf 'elchi-cp-%s' "${full//./-}"
-}
-
-# ver::cp_id <tag> — the CONTROL_PLANE_ID we pin in config-prod.yaml so the
-# backend registers under a deterministic, DNS-safe name that matches the
-# Swarm service + the Envoy cluster. Equal to ver::cp_service.
-ver::cp_id() { ver::cp_service "$1"; }
+# Per-node control-plane service naming now lives in lib/render.sh
+# (render::_cp_svc / render::_ctrl_svc) + lib/stackgen.sh, because identity is
+# per (node, variant): node<i>-controlplane-<X.Y.Z>, auto-derived from the
+# container hostname (not a per-variant-only name).
