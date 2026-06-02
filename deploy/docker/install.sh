@@ -33,6 +33,8 @@ export GEN_DIR CONFIG_DIR SECRETS_DIR TLS_DIR ELCHI_DASHBOARDS_DIR
 # shellcheck source=/dev/null
 . "${ELCHI_DOCKER_DIR}/lib/versions_parse.sh"
 # shellcheck source=/dev/null
+. "${ELCHI_DOCKER_DIR}/lib/ssh.sh"
+# shellcheck source=/dev/null
 . "${ELCHI_DOCKER_DIR}/lib/secrets.sh"
 # shellcheck source=/dev/null
 . "${ELCHI_DOCKER_DIR}/lib/render.sh"
@@ -79,11 +81,23 @@ Features / external services:
   --enable-demo               Enable UI demo mode.
   --log-level=<level>         (default: info)
 
-Multi-node topology (standalone parity — every node runs the full tier):
-  --nodes=<csv>               Swarm node hostnames (one per elchi node). Each
-                              node runs 1 controller + one control-plane PER
-                              variant + UI, addressable as node<i>-* in the
-                              Envoy config. Default: single node (the manager).
+Multi-node (standalone parity — run ONCE on M1; it fans out over SSH):
+  --nodes=<csv>               Node IPs or hostnames (the FIRST is M1, where you
+                              run this). M1 SSHes into the others, installs
+                              Docker + joins them to the Swarm, then deploys.
+                              Every node runs 1 controller + one control-plane
+                              PER variant + UI (addressable as node<i>-* in the
+                              Envoy config). Default: single node (this host).
+  --ssh-user=<user>           SSH user for the other nodes (default: root).
+  --ssh-port=<port>           (default: 22)
+  --ssh-key=<path>            Use this existing private key (skips key bootstrap).
+  --ssh-password=<pwd>        Password for the one-time key copy (else prompted
+                              interactively, once per node).
+  --no-ssh                    Don't auto-join; join the workers yourself first.
+
+  With NO --ssh-key, M1 mints an ed25519 key, prompts once for each node's SSH
+  password, distributes the key (ssh-copy-id), then uses the key for
+  everything after — exactly like the standalone --ssh-bootstrap.
 
   MongoDB / ClickHouse clustering is FULLY AUTOMATIC from the --nodes count —
   there are NO storage flags, exactly like the standalone installer:
@@ -124,6 +138,11 @@ for arg in "$@"; do
     --gslb-regions=*)      export ELCHI_GSLB_REGIONS=${arg#*=} ;;
     --no-collector)        export ELCHI_INSTALL_COLLECTOR=0 ;;
     --nodes=*)             export ELCHI_NODES=${arg#*=} ;;
+    --ssh-user=*)          export ELCHI_SSH_USER=${arg#*=}; _SSH_USER_GIVEN=1 ;;
+    --ssh-port=*)          export ELCHI_SSH_PORT=${arg#*=} ;;
+    --ssh-key=*)           export ELCHI_SSH_KEY=${arg#*=}; _SSH_KEY_GIVEN=1 ;;
+    --ssh-password=*)      export ELCHI_SSH_PASSWORD=${arg#*=} ;;
+    --no-ssh)              export ELCHI_NO_SSH=1 ;;
     --mongo=*)             export ELCHI_MONGO_MODE=${arg#*=} ;;
     --mongo-uri=*)         export ELCHI_MONGO_URI=${arg#*=} ;;
     --mongo-hosts=*)       export ELCHI_MONGO_HOSTS=${arg#*=} ;;
@@ -199,18 +218,93 @@ preflight() {
   state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo inactive)
   if [ "$state" != "active" ]; then
     log::info "Swarm not active — initializing"
+    # Advertise on the M1 IP (first --nodes host, else --main-address) so the
+    # workers can reach this manager on :2377 when they join.
+    local m1ip=${ELCHI_MAIN_ADDRESS}
+    [ -n "${ELCHI_NODES:-}" ] && m1ip=$(csv_split "$ELCHI_NODES" | sed -n 1p)
     local adv=""
-    if [[ "$ELCHI_MAIN_ADDRESS" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then adv="--advertise-addr=${ELCHI_MAIN_ADDRESS}"; fi
+    [[ "$m1ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && adv="--advertise-addr=${m1ip}"
     # shellcheck disable=SC2086
     docker swarm init $adv >/dev/null 2>&1 \
       || docker swarm init >/dev/null 2>&1 \
       || die "docker swarm init failed — initialize Swarm manually and re-run"
-    log::ok "Swarm initialized"
+    log::ok "Swarm initialized${adv:+ (${adv#--advertise-addr=})}"
   else
     log::ok "Swarm active"
   fi
   log::info "stack=${STACK_NAME} main=${ELCHI_MAIN_ADDRESS} port=${ELCHI_PORT} tls=${ELCHI_TLS_ENABLED}"
   log::info "backend variants: ${ELCHI_BACKEND_VARIANTS}"
+}
+
+# ----- orchestrate: from M1, SSH into the other nodes and join the Swarm ---
+# Standalone-style fan-out: run the installer once on M1 (first --nodes host);
+# it installs Docker + joins each remaining node to the Swarm over SSH, with
+# per-node logging. Idempotent: nodes already in the swarm are skipped. Opt out
+# with --no-ssh (then join the workers yourself).
+orchestrate_swarm() {
+  [ -n "${ELCHI_NODES:-}" ] || return 0
+  local -a nodes; mapfile -t nodes < <(csv_split "$ELCHI_NODES")
+  [ "${#nodes[@]}" -gt 1 ] || return 0
+  [ "${ELCHI_NO_SSH:-0}" = "1" ] && { log::info "--no-ssh: skipping SSH auto-join (join workers manually)"; return 0; }
+
+  # Snapshot current swarm members (hostname / addr) to skip already-joined.
+  local snap; snap=$(
+    for id in $(docker node ls -q 2>/dev/null); do
+      docker node inspect "$id" --format \
+        '{{.Description.Hostname}}	{{with .Status.Addr}}{{.}}{{end}}	{{with .ManagerStatus}}{{.Addr}}{{end}}' 2>/dev/null
+    done)
+  _in_swarm() {
+    printf '%s\n' "$snap" | awk -F'\t' -v e="$1" '
+      $1==e{f=1;exit}
+      {split($2,a,":"); if(a[1]!=""&&a[1]==e){f=1;exit}}
+      {split($3,b,":"); if(b[1]!=""&&b[1]==e){f=1;exit}}
+      END{exit !f}'
+  }
+
+  local -a todo=(); local i node
+  for i in "${!nodes[@]}"; do
+    [ "$i" = "0" ] && continue
+    node=${nodes[$i]}
+    if _in_swarm "$node"; then log::node "$node" "already in the Swarm — skip"; else todo+=("$node"); fi
+  done
+  unset -f _in_swarm
+  [ "${#todo[@]}" -eq 0 ] && { log::ok "all worker nodes already in the Swarm"; return 0; }
+
+  log::step "Joining ${#todo[@]} node(s) to the Swarm over SSH (M1=${nodes[0]})"
+  # Ask for the SSH user ONCE (applies to every node); default root. The
+  # per-node PASSWORD is prompted separately inside ssh::bootstrap.
+  if [ "${_SSH_USER_GIVEN:-0}" != "1" ] && [ "${ELCHI_NON_INTERACTIVE:-0}" != "1" ] && { true </dev/tty; } 2>/dev/null; then
+    printf 'SSH user for the other nodes [root]: ' >/dev/tty
+    local _u=""; IFS= read -r _u </dev/tty || true
+    [ -n "$_u" ] && export ELCHI_SSH_USER="$_u"
+  fi
+  ssh::configure
+  # Generate + distribute an SSH key (prompting for each node's password once,
+  # unless --ssh-key / --ssh-password given), then use the key for everything.
+  ssh::bootstrap "${ELCHI_SSH_USER:-root}" "${ELCHI_SSH_PORT:-22}" "${todo[@]}"
+  local tok mgr
+  tok=$(docker swarm join-token -q worker 2>/dev/null) || die "could not read swarm worker join-token (is M1 a manager?)"
+  mgr=$(docker node inspect self --format '{{with .ManagerStatus}}{{.Addr}}{{end}}' 2>/dev/null)
+  [ -n "$mgr" ] || mgr="${nodes[0]}:2377"
+
+  for node in "${todo[@]}"; do
+    log::node "$node" "connecting (ssh ${ELCHI_SSH_USER:-root}@${node})"
+    if ! ssh::test "$node"; then
+      log::err "cannot SSH to ${node} as ${ELCHI_SSH_USER:-root}."
+      log::err "  pass --ssh-key=<path> / --ssh-password=<pwd> / --ssh-user=<user>, or"
+      log::err "  join it manually and re-run with --no-ssh:"
+      log::err "    docker swarm join --token ${tok} ${mgr}"
+      die "SSH to ${node} failed"
+    fi
+    log::node "$node" "ensuring Docker Engine"
+    ssh::run_root "$node" 'if ! command -v curl >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl; elif command -v dnf >/dev/null 2>&1; then dnf install -y curl; elif command -v yum >/dev/null 2>&1; then yum install -y curl; elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install curl; fi; fi; if ! command -v docker >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; fi; command -v systemctl >/dev/null 2>&1 && systemctl enable --now docker >/dev/null 2>&1 || true; docker version >/dev/null 2>&1' \
+      || die "Docker install/start failed on ${node}"
+    log::node "$node" "joining Swarm → ${mgr}"
+    ssh::run_root "$node" "docker swarm join --token ${tok} ${mgr}" \
+      || die "swarm join failed on ${node} — open ports 2377/tcp, 7946/tcp+udp, 4789/udp between the nodes"
+    log::node "$node" "joined ✓"
+  done
+  log::ok "all worker nodes joined the Swarm"
 }
 
 # ----- resolve --nodes (IPs or hostnames) to Swarm node IDs ---------------
@@ -409,6 +503,7 @@ main() {
   fi
 
   preflight
+  orchestrate_swarm
   resolve_nodes
   load_offline
   copy_assets

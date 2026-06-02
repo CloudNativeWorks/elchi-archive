@@ -1726,14 +1726,24 @@
                 </details>
 
                 <details>
-                    <summary>Multi-node topology (single flag, auto clustering)</summary>
+                    <summary>Multi-node — run once on M1, SSH auto-join (standalone parity)</summary>
                     <div class="flag-table">
                         <code>--nodes=&lt;csv&gt;</code>
-                        <div class="desc">Swarm node hostnames, one per elchi node. <strong>Standalone
-                            parity:</strong> every node runs 1 controller + one control-plane PER variant +
-                            UI, individually addressable as <code>node&lt;i&gt;-*</code> in the Envoy config
-                            (so the registry can pin a client's xDS stream to a specific instance).
-                            <span class="default">Default: single node (the manager).</span></div>
+                        <div class="desc">Node <strong>IPs or hostnames</strong> (the FIRST is M1, where you
+                            run the installer). M1 SSHes into the others, installs Docker + joins them to the
+                            Swarm (per-node logging), then deploys. Every node runs 1 controller + one
+                            control-plane PER variant + UI, addressable as <code>node&lt;i&gt;-*</code> in the
+                            Envoy config. <span class="default">Default: single node (this host).</span></div>
+                        <code>--ssh-user=&lt;user&gt;</code>
+                        <div class="desc">SSH user for the other nodes. <span class="default">Default:
+                            <code>root</code></span> (non-root needs passwordless sudo).</div>
+                        <code>--ssh-key=&lt;path&gt;</code>
+                        <div class="desc">SSH private key for the other nodes.</div>
+                        <code>--ssh-password=&lt;pwd&gt;</code>
+                        <div class="desc">SSH password (via <code>sshpass</code>).</div>
+                        <code>--no-ssh</code>
+                        <div class="desc">Skip auto-join; join the workers yourself (M1 prints the
+                            <code>docker swarm join</code> command).</div>
                     </div>
                     <p style="font-size: 13px; color: #24292f; margin: 8px 0; line-height: 1.7;">
                         <strong>There are NO storage / HA flags.</strong> MongoDB / ClickHouse clustering
@@ -1843,16 +1853,22 @@
 
                 <h4>5. High availability (multi-node)</h4>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Join the worker machines to the Swarm first (<code>docker swarm join …</code> using the
-                    token from <code>docker swarm join-token worker</code>), then just pass the elchi node
-                    list with <code>--nodes</code> — clustering is automatic (no HA flags). At 3+ nodes the
+                    Run it <strong>once on M1</strong> (the first <code>--nodes</code> host). Like the
+                    standalone installer, M1 SSHes into the other nodes, installs Docker, joins them to the
+                    Swarm (logging each step), then deploys — no manual join, no HA flags. At 3+ nodes the
                     first 3 form the storage cluster; the first node is M1:
                 </p>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- \
-                    --main-address=elchi.example.com \
-                    --nodes=host-a,host-b,host-c</div>
+                    --main-address=45.13.226.177 \
+                    --nodes=45.13.226.177,45.13.226.226,198.105.112.107 \
+                    --ssh-key=/root/.ssh/id_rsa</div>
+                <p class="note" style="margin: 8px 0;">
+                    Open the Swarm ports between nodes (<code>2377/tcp</code>, <code>7946/tcp+udp</code>,
+                    <code>4789/udp</code>). SSH auto-join is idempotent; use <code>--no-ssh</code> to join the
+                    workers yourself.
+                </p>
                 <p class="note" style="margin: 8px 0;">
                     With 3+ nodes the stateful tier automatically becomes:
                     a <strong>MongoDB replica set</strong> (3 pinned services <code>elchi-mongo-1..3</code>

@@ -144,21 +144,31 @@ deploy/docker/uninstall.sh --purge          # also drop volumes, configs, secret
 
 ## High availability (multi-node)
 
+Run the installer **once on M1** (the first `--nodes` host). Exactly like the
+standalone installer, M1 fans out over **SSH** — it installs Docker on each
+other node, joins them to the Swarm (with per-node logging), then deploys:
+
 ```bash
-# join the workers to the swarm first (docker swarm join …), then:
-sudo deploy/docker/install.sh \
-  --main-address=elchi.example.com \
-  --nodes=host-a,host-b,host-c
+curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+  | sudo bash -s -- \
+      --main-address=45.13.226.177 \
+      --nodes=45.13.226.177,45.13.226.226,198.105.112.107 \
+      --ssh-key=/root/.ssh/id_rsa        # or --ssh-password=… (default: root's identity)
 ```
 
-`--nodes` is the single list of elchi nodes (swarm hostnames) — **there are no
-storage/HA flags**. Exactly like the standalone installer, clustering is
-derived from the node count: the **first node is M1** (VictoriaMetrics +
-Grafana), and at **3 or more nodes the first 3 nodes** automatically form the
-MongoDB replica set + ClickHouse Keeper cluster (1-2 nodes → a single
-mongo/clickhouse on the first node; a 4th/5th node runs the elchi tier and
-connects to the cluster over the network — it does not run mongo/clickhouse).
-With 3+ nodes the stateful tier becomes:
+`--nodes` accepts **IPs or hostnames** (the first is M1, where you run this) —
+**there are no storage/HA flags**. Clustering is derived from the node count:
+the **first node is M1** (VictoriaMetrics + Grafana), and at **3+ nodes the
+first 3** automatically form the MongoDB replica set + ClickHouse Keeper
+cluster (1-2 nodes → a single mongo/clickhouse on the first node; a 4th/5th
+node runs the elchi tier and connects to the cluster over the network — it
+does not run mongo/clickhouse).
+
+SSH auto-join is idempotent (already-joined nodes are skipped) and can be
+turned off with `--no-ssh` (then join the workers yourself with the
+`docker swarm join …` command M1 prints). Either way, open the Swarm ports
+between nodes: **2377/tcp, 7946/tcp+udp, 4789/udp**. With 3+ nodes the stateful
+tier becomes:
 
 - **MongoDB replica set**: 3 single-replica services `elchi-mongo-1..3`, each
   on its own volume, with keyfile internal auth. Member-1 runs a bootstrap

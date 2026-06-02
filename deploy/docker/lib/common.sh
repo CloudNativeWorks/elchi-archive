@@ -29,6 +29,13 @@ log::step() {
   printf '\n%b[%s]%b %b==>%b %b%s%b\n' \
     "$C_DIM" "$(log::_now)" "$C_RESET" "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"
 }
+# log::node <node> <msg...> — annotate which remote node a step ran on, so a
+# multi-node fan-out transcript shows what happened where (standalone parity).
+log::node() {
+  local node=$1; shift
+  printf '%b[%s]%b %b[%s]%b %s\n' \
+    "$C_DIM" "$(log::_now)" "$C_RESET" "$C_CYAN" "$node" "$C_RESET" "$*"
+}
 
 die() { log::err "$*"; exit 1; }
 
