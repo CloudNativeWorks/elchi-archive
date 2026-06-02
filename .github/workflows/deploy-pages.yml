@@ -1,0 +1,57 @@
+name: Deploy Pages
+
+# The download portal (index.html) + manifest (index.json) are served from
+# the repo root via GitHub Pages (GitHub Actions deployment). The build-*
+# workflows already redeploy Pages after they update index.json, but NOTHING
+# watched index.html — so a hand-edit to the portal never went live. This
+# workflow closes that gap: any push that touches index.html / index.json on
+# main republishes the Pages site (and it can be run manually too).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'index.html'
+      - 'index.json'
+    branches:
+      - main
+
+env:
+  # Pin JS actions to Node 24 (matches the other workflows in this repo).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+# Read-only on contents (we publish, we don't commit); Pages deploy needs
+# pages:write + id-token:write for OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages publishes; never cancel an in-flight deploy.
+concurrency:
+  group: "pages-deploy"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
