@@ -85,13 +85,12 @@ Multi-node topology (standalone parity — every node runs the full tier):
                               variant + UI, addressable as node<i>-* in the
                               Envoy config. Default: single node (the manager).
 
-High availability (Stage 2, multi-node):
-  --ha                        3-member MongoDB replica set + 3-node ClickHouse
-                              Keeper cluster (= --storage-replicas=3).
-  --storage-replicas=<n>      Stateful-tier replica count (default 1). Like the
-                              standalone installer, the storage members run on
-                              the FIRST <n> --nodes; the first node is M1
-                              (VictoriaMetrics + Grafana). No extra flags.
+  MongoDB / ClickHouse clustering is FULLY AUTOMATIC from the --nodes count —
+  there are NO storage flags, exactly like the standalone installer:
+    1-2 nodes → single mongo/clickhouse on the first node
+    3+  nodes → a 3-member replica set + ClickHouse Keeper cluster on the
+                FIRST 3 nodes only (extra nodes connect over the network)
+  The first --nodes host is always M1 (VictoriaMetrics + Grafana).
 
 Operational:
   --offline=<tarball>         docker load images from a save-images.sh bundle
@@ -125,8 +124,6 @@ for arg in "$@"; do
     --gslb-regions=*)      export ELCHI_GSLB_REGIONS=${arg#*=} ;;
     --no-collector)        export ELCHI_INSTALL_COLLECTOR=0 ;;
     --nodes=*)             export ELCHI_NODES=${arg#*=} ;;
-    --ha)                  export ELCHI_STORAGE_REPLICAS=3 ;;
-    --storage-replicas=*)  export ELCHI_STORAGE_REPLICAS=${arg#*=} ;;
     --mongo=*)             export ELCHI_MONGO_MODE=${arg#*=} ;;
     --mongo-uri=*)         export ELCHI_MONGO_URI=${arg#*=} ;;
     --mongo-hosts=*)       export ELCHI_MONGO_HOSTS=${arg#*=} ;;
@@ -169,11 +166,20 @@ export ELCHI_TLS_MODE=${ELCHI_TLS_MODE:-self-signed}
 export ELCHI_INSTALL_GSLB=${ELCHI_INSTALL_GSLB:-1}
 export ELCHI_INSTALL_COLLECTOR=${ELCHI_INSTALL_COLLECTOR:-1}
 export ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-elchi.local}
-export ELCHI_STORAGE_REPLICAS=${ELCHI_STORAGE_REPLICAS:-1}
+# Storage tier (MongoDB / ClickHouse) is FULLY AUTOMATIC from the --nodes
+# count — no flags, exactly like the standalone installer:
+#   1-2 nodes → single instance on the first node (no quorum possible)
+#   3+  nodes → a 3-member replica set + ClickHouse Keeper cluster on the
+#               FIRST 3 nodes ONLY. Extra nodes (4th, 5th, …) run the elchi
+#               tier and connect to that cluster over the overlay — they do
+#               NOT run mongo/clickhouse. The cluster is always exactly 3.
+_nc=1; [ -n "${ELCHI_NODES:-}" ] && _nc=$(csv_split "$ELCHI_NODES" | grep -c .)
+if [ "${_nc:-1}" -ge 3 ] 2>/dev/null; then export ELCHI_STORAGE_REPLICAS=3
+else export ELCHI_STORAGE_REPLICAS=1; fi
 # M1 singletons (VictoriaMetrics + Grafana) and storage members are pinned by
-# --nodes hostname (the first node = M1, first <storage-replicas> nodes = the
-# replica-set / Keeper members), exactly like the standalone installer — no
-# separate node-label flags. stackgen derives all placement from --nodes.
+# --nodes hostname (the first node = M1; the first 3 nodes = the replica-set /
+# Keeper members when there are 3+ nodes), exactly like the standalone
+# installer. stackgen derives all placement from --nodes — no node-label flags.
 # TLS on unless the operator picked plaintext via --port=80 with no override.
 if [ -z "${ELCHI_TLS_ENABLED:-}" ]; then
   if [ "$ELCHI_PORT" = "80" ]; then export ELCHI_TLS_ENABLED=false; else export ELCHI_TLS_ENABLED=true; fi
@@ -247,15 +253,6 @@ tls_setup() {
     || die "openssl self-signed certificate generation failed"
   chmod 0600 "${TLS_DIR}/server.key"; chmod 0644 "${TLS_DIR}/server.crt"
   log::ok "self-signed certificate generated (${TLS_DIR})"
-}
-
-# ----- preflight: --nodes sanity for HA -----------------------------------
-check_nodes() {
-  [ "$ELCHI_STORAGE_REPLICAS" -gt 1 ] 2>/dev/null || return 0
-  [ -n "${ELCHI_NODES:-}" ] || { log::warn "--storage-replicas/--ha without --nodes: all storage members land on this single node (fine for a dev/test box, not real HA)"; return 0; }
-  local n; n=$(csv_split "$ELCHI_NODES" | grep -c .)
-  [ "$n" -ge "$ELCHI_STORAGE_REPLICAS" ] \
-    || die "--storage-replicas=${ELCHI_STORAGE_REPLICAS} needs at least that many --nodes (got ${n})"
 }
 
 # ----- ClickHouse HA: create the Replicated database on each member --------
@@ -362,7 +359,6 @@ main() {
   fi
 
   preflight
-  check_nodes
   load_offline
   copy_assets
   secrets::mint

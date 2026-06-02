@@ -1548,8 +1548,11 @@
                     <code>deploy/docker/versions.env</code>.
                 </p>
                 <p class="info" style="margin-bottom: 12px;">
-                    <strong>Prerequisites:</strong> Docker Engine + <code>openssl</code>. The install command
-                    runs on a <strong>single machine</strong> (the Swarm manager) and initializes Swarm
+                    <strong>Prerequisites: none beyond a Linux host.</strong> <code>get.sh</code>
+                    auto-installs whatever's missing — Docker Engine (via the official
+                    <code>get.docker.com</code>), plus <code>curl</code>/<code>tar</code>/<code>gzip</code>/<code>openssl</code>
+                    (needs root, i.e. <code>sudo</code>). The install command runs on a
+                    <strong>single machine</strong> (the Swarm manager) and initializes Swarm
                     automatically. For multi-node HA, join the other machines with
                     <code>docker swarm join</code> first — Swarm then distributes the containers itself
                     (no SSH fan-out, unlike the bare-metal installer).
@@ -1723,7 +1726,7 @@
                 </details>
 
                 <details>
-                    <summary>Multi-node topology &amp; high availability</summary>
+                    <summary>Multi-node topology (single flag, auto clustering)</summary>
                     <div class="flag-table">
                         <code>--nodes=&lt;csv&gt;</code>
                         <div class="desc">Swarm node hostnames, one per elchi node. <strong>Standalone
@@ -1731,17 +1734,21 @@
                             UI, individually addressable as <code>node&lt;i&gt;-*</code> in the Envoy config
                             (so the registry can pin a client's xDS stream to a specific instance).
                             <span class="default">Default: single node (the manager).</span></div>
-                        <code>--ha</code>
-                        <div class="desc">3-member MongoDB replica set + 3-node ClickHouse Keeper cluster
-                            (= <code>--storage-replicas=3</code>).</div>
-                        <code>--storage-replicas=&lt;n&gt;</code>
-                        <div class="desc">Stateful-tier replica count. <span class="default">Default:
-                                <code>1</code></span> (standalone). Like the bare-metal installer, the
-                            <strong>first <code>n</code> of <code>--nodes</code></strong> run the
-                            MongoDB / ClickHouse members and the <strong>first node is M1</strong>
-                            (VictoriaMetrics + Grafana) — no separate storage/M1 flags; placement is
-                            derived from <code>--nodes</code> via <code>node.hostname</code>.</div>
                     </div>
+                    <p style="font-size: 13px; color: #24292f; margin: 8px 0; line-height: 1.7;">
+                        <strong>There are NO storage / HA flags.</strong> MongoDB / ClickHouse clustering
+                        is derived purely from the node count, exactly like the bare-metal installer:
+                    </p>
+                    <ul style="font-size: 13px; color: #24292f; line-height: 1.7; margin: 0 0 8px 18px;">
+                        <li><strong>1-2 nodes</strong> → a single mongo / clickhouse on the first node
+                            (no quorum possible).</li>
+                        <li><strong>3+ nodes</strong> → a 3-member MongoDB replica set + ClickHouse Keeper
+                            cluster on the <strong>first 3 nodes only</strong>. A 4th / 5th node runs the
+                            elchi tier and connects to that cluster over the overlay — it does not run
+                            mongo / clickhouse.</li>
+                        <li>The <strong>first <code>--nodes</code> host is always M1</strong>
+                            (VictoriaMetrics + Grafana).</li>
+                    </ul>
                 </details>
 
                 <details>
@@ -1792,11 +1799,11 @@
                     <div class="desc"><code>jhonbrownn/elchi</code> · <em>global</em> — SPA (nginx);
                         <code>config.js</code> injected.</div>
                     <code>elchi-mongo[-1..3]</code>
-                    <div class="desc"><code>mongo:8.0</code> — standalone, or a 3-member replica set with
-                        <code>--ha</code>.</div>
+                    <div class="desc"><code>mongo:8.0</code> — single instance, or a 3-member replica set
+                        automatically at 3+ nodes.</div>
                     <code>elchi-clickhouse[-1..3]</code>
-                    <div class="desc"><code>clickhouse-server</code> — event store; Keeper cluster with
-                        <code>--ha</code>.</div>
+                    <div class="desc"><code>clickhouse-server</code> — event store; single instance, or a
+                        Keeper cluster automatically at 3+ nodes.</div>
                     <code>elchi-victoriametrics</code>
                     <div class="desc"><code>victoria-metrics</code> — metrics TSDB (M1).</div>
                     <code>elchi-grafana</code>
@@ -1837,18 +1844,17 @@
                 <h4>5. High availability (multi-node)</h4>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     Join the worker machines to the Swarm first (<code>docker swarm join …</code> using the
-                    token from <code>docker swarm join-token worker</code>), then pass the elchi node list
-                    with <code>--nodes</code> and turn on <code>--ha</code>. Like the standalone installer,
-                    the first node is M1 and the first 3 run the storage members — no extra flags:
+                    token from <code>docker swarm join-token worker</code>), then just pass the elchi node
+                    list with <code>--nodes</code> — clustering is automatic (no HA flags). At 3+ nodes the
+                    first 3 form the storage cluster; the first node is M1:
                 </p>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
-                    --nodes=host-a,host-b,host-c \
-                    --ha</div>
+                    --nodes=host-a,host-b,host-c</div>
                 <p class="note" style="margin: 8px 0;">
-                    <code>--ha</code> switches the stateful tier from standalone to:
+                    With 3+ nodes the stateful tier automatically becomes:
                     a <strong>MongoDB replica set</strong> (3 pinned services <code>elchi-mongo-1..3</code>
                     with keyfile auth; member-1 retries <code>rs.initiate</code> until all members are up,
                     then creates the scoped app user), and a <strong>ClickHouse Keeper cluster</strong>

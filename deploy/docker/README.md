@@ -23,6 +23,11 @@ or from a checkout:
 sudo deploy/docker/install.sh --main-address=10.0.0.5
 ```
 
+**No prerequisites beyond a Linux host + root.** `get.sh` auto-installs
+anything missing — Docker Engine (via the official `get.docker.com`) plus
+`curl`/`tar`/`gzip`/`openssl` — then runs the installer. (Running `install.sh`
+directly from a checkout assumes Docker + openssl are already present.)
+
 This initializes Swarm (if needed), mints secrets, generates a self-signed
 cert, renders every config, and `docker stack deploy`s the `elchi` stack.
 When it finishes it prints the UI / Grafana URLs and the Grafana password.
@@ -94,9 +99,9 @@ and `elchi-cp-<envoy>-node<i>`, each pinned via `node.hostname` with container
 `node<i>-controlplane-<X.Y.Z>` (exactly the standalone `<hostname>-…` scheme),
 and the Envoy bootstrap carries a matching cluster + `x-target-cluster` route
 for **each (node, variant)** — so the registry can pin a client's xDS stream to
-a specific instance, not just round-robin. The first `--storage-replicas`
-`--nodes` run mongo/clickhouse *in addition to* this full tier — they are not
-DB-only. Without `--nodes` it's a single node (`node1`) on the manager.
+a specific instance, not just round-robin. At 3+ nodes the first 3 `--nodes`
+run mongo/clickhouse *in addition to* this full tier — they are not DB-only.
+Without `--nodes` it's a single node (`node1`) on the manager.
 
 ## How it's wired (vs the standalone installer)
 
@@ -137,20 +142,23 @@ deploy/docker/uninstall.sh                  # remove stack, keep data volumes
 deploy/docker/uninstall.sh --purge          # also drop volumes, configs, secrets, state
 ```
 
-## High availability (`--ha`, multi-node)
+## High availability (multi-node)
 
 ```bash
 # join the workers to the swarm first (docker swarm join …), then:
 sudo deploy/docker/install.sh \
   --main-address=elchi.example.com \
-  --nodes=host-a,host-b,host-c \
-  --ha
+  --nodes=host-a,host-b,host-c
 ```
 
-`--nodes` is the single list of elchi nodes (swarm hostnames). Like the
-standalone installer, the **first node is M1** (VictoriaMetrics + Grafana) and
-the **first `--storage-replicas` nodes** run the MongoDB / ClickHouse members.
-`--ha` (= `--storage-replicas=3`) switches the stateful tier from standalone to HA:
+`--nodes` is the single list of elchi nodes (swarm hostnames) — **there are no
+storage/HA flags**. Exactly like the standalone installer, clustering is
+derived from the node count: the **first node is M1** (VictoriaMetrics +
+Grafana), and at **3 or more nodes the first 3 nodes** automatically form the
+MongoDB replica set + ClickHouse Keeper cluster (1-2 nodes → a single
+mongo/clickhouse on the first node; a 4th/5th node runs the elchi tier and
+connects to the cluster over the network — it does not run mongo/clickhouse).
+With 3+ nodes the stateful tier becomes:
 
 - **MongoDB replica set**: 3 single-replica services `elchi-mongo-1..3`, each
   on its own volume, with keyfile internal auth. Member-1 runs a bootstrap

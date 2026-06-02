@@ -85,7 +85,8 @@ sec() {
 render::_variants() { csv_split "${ELCHI_BACKEND_VARIANTS:?ELCHI_BACKEND_VARIANTS not set}"; }
 
 # Stateful tier replica count. 1 = standalone (Stage 1); >=3 = HA
-# (mongo replica set + ClickHouse Keeper cluster). Driven by --ha / --storage-replicas.
+# (mongo replica set + ClickHouse Keeper cluster). Auto-derived from --nodes
+# count by install.sh: 1-2 nodes → 1, 3+ nodes → 3 (first 3 nodes only).
 render::_storage_replicas() { printf '%s' "${ELCHI_STORAGE_REPLICAS:-1}"; }
 render::_ha() { [ "$(render::_storage_replicas)" -gt 1 ] 2>/dev/null; }
 

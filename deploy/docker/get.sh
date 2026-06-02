@@ -34,11 +34,6 @@ for arg in "$@"; do
   esac
 done
 
-if ! command -v docker >/dev/null 2>&1; then
-  printf '[ERR] docker is required but not installed. Install Docker Engine first: https://docs.docker.com/engine/install/\n' >&2
-  exit 1
-fi
-
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -47,24 +42,57 @@ if [[ "$ELCHI_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
   URL="https://codeload.github.com/${ELCHI_REPO}/tar.gz/${ELCHI_REF}"
 fi
 
-_ensure_extract_tools() {
-  local need=()
-  command -v tar  >/dev/null 2>&1 || need+=(tar)
-  command -v gzip >/dev/null 2>&1 || need+=(gzip)
-  [ "${#need[@]}" -eq 0 ] && return 0
-  printf '[INFO] installing bootstrap tools: %s\n' "${need[*]}"
-  if   command -v dnf     >/dev/null 2>&1; then dnf install -y "${need[@]}"
-  elif command -v yum     >/dev/null 2>&1; then yum install -y "${need[@]}"
-  elif command -v apt-get >/dev/null 2>&1; then
+# _pkg_install <pkgs...> — best-effort package install across distros.
+_pkg_install() {
+  if   command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}"
-  elif command -v zypper  >/dev/null 2>&1; then zypper --non-interactive install "${need[@]}"
-  elif command -v brew    >/dev/null 2>&1; then brew install "${need[@]}"
-  else printf '[ERR] need %s to unpack the installer\n' "${need[*]}" >&2; exit 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+  elif command -v dnf     >/dev/null 2>&1; then dnf install -y "$@"
+  elif command -v yum     >/dev/null 2>&1; then yum install -y "$@"
+  elif command -v zypper  >/dev/null 2>&1; then zypper --non-interactive install "$@"
+  elif command -v brew    >/dev/null 2>&1; then brew install "$@"
+  else return 1
   fi
 }
 
-_ensure_extract_tools
+# _ensure_tools — make sure the bootstrap + installer's basic deps exist.
+# tar/gzip unpack the payload; curl fetches it; openssl mints TLS + secrets.
+_ensure_tools() {
+  local need=() t
+  for t in tar gzip curl openssl; do command -v "$t" >/dev/null 2>&1 || need+=("$t"); done
+  [ "${#need[@]}" -eq 0 ] && return 0
+  printf '[INFO] installing required tools: %s\n' "${need[*]}"
+  _pkg_install "${need[@]}" \
+    || { printf '[ERR] could not install %s — install them manually and re-run\n' "${need[*]}" >&2; exit 1; }
+  for t in "${need[@]}"; do
+    command -v "$t" >/dev/null 2>&1 || { printf '[ERR] %s still missing after install\n' "$t" >&2; exit 1; }
+  done
+}
+
+# _ensure_docker — auto-install Docker Engine via the official convenience
+# script if it's missing (needs root), then start the daemon. Skipped for
+# --dry-run (renders config only, no daemon needed).
+_ensure_docker() {
+  command -v docker >/dev/null 2>&1 && return 0
+  case " ${fwd[*]} " in *" --dry-run "*) return 0 ;; esac
+  if [ "$(id -u)" -ne 0 ]; then
+    printf '[ERR] Docker is not installed and auto-install needs root.\n' >&2
+    printf '      Re-run with sudo, or install Docker Engine: https://docs.docker.com/engine/install/\n' >&2
+    exit 1
+  fi
+  printf '[INFO] Docker not found — installing via https://get.docker.com (may take a minute)\n'
+  curl -fsSL https://get.docker.com | sh \
+    || { printf '[ERR] Docker installation failed — install it manually and re-run\n' >&2; exit 1; }
+  command -v systemctl >/dev/null 2>&1 && systemctl enable --now docker >/dev/null 2>&1 || true
+  command -v docker >/dev/null 2>&1 \
+    || { printf '[ERR] docker still missing after install\n' >&2; exit 1; }
+  docker info >/dev/null 2>&1 \
+    || printf '[WARN] Docker installed but the daemon is not reachable yet — install.sh will retry\n'
+  printf '[INFO] Docker ready\n'
+}
+
+_ensure_tools
+_ensure_docker
 
 printf '[INFO] downloading installer payload (%s @ %s)\n' "$ELCHI_REPO" "$ELCHI_REF"
 curl -fL --retry 3 --retry-delay 2 -o "${WORKDIR}/repo.tar.gz" "$URL" \
