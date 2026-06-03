@@ -247,6 +247,16 @@ orchestrate_swarm() {
   [ "${#nodes[@]}" -gt 1 ] || return 0
   [ "${ELCHI_NO_SSH:-0}" = "1" ] && { log::info "--no-ssh: skipping SSH auto-join (join workers manually)"; return 0; }
 
+  # A node that left the Swarm (e.g. `uninstall --leave-swarm`) lingers in the
+  # manager's list as 'Down'. Swarm never schedules tasks onto a Down node, but
+  # our snapshot below would treat it as "already joined" and skip re-joining —
+  # so its services hang Pending forever (the "Keeper quorum forming" symptom).
+  # Prune Down nodes first so they get cleanly re-joined.
+  for _id in $(docker node ls -q 2>/dev/null); do
+    [ "$(docker node inspect "$_id" --format '{{.Status.State}}' 2>/dev/null)" = "down" ] \
+      && { docker node rm --force "$_id" >/dev/null 2>&1 && log::info "pruned stale Down node ${_id}"; } || true
+  done
+
   # Snapshot current swarm members (hostname / addr) to skip already-joined.
   local snap; snap=$(
     for id in $(docker node ls -q 2>/dev/null); do
@@ -320,10 +330,12 @@ resolve_nodes() {
   # Snapshot the swarm: "id<TAB>hostname<TAB>statusAddr<TAB>managerAddr" per
   # node. Status.Addr and ManagerStatus.Addr are kept as SEPARATE fields —
   # on a manager BOTH are populated and must not be concatenated.
+  # 5th field = node State; only 'ready' nodes are eligible (a stale 'down'
+  # entry for a node that left must not be matched — Swarm won't schedule there).
   local snap; snap=$(
     for id in $(docker node ls -q 2>/dev/null); do
       docker node inspect "$id" --format \
-        '{{.ID}}	{{.Description.Hostname}}	{{with .Status.Addr}}{{.}}{{end}}	{{with .ManagerStatus}}{{.Addr}}{{end}}' 2>/dev/null
+        '{{.ID}}	{{.Description.Hostname}}	{{with .Status.Addr}}{{.}}{{end}}	{{with .ManagerStatus}}{{.Addr}}{{end}}	{{.Status.State}}' 2>/dev/null
     done
   )
 
@@ -331,8 +343,9 @@ resolve_nodes() {
   local e nid
   while IFS= read -r e; do
     [ -z "$e" ] && continue
-    # match by hostname, or by either address (strip :port).
+    # match by hostname, or by either address (strip :port) — ready nodes only.
     nid=$(printf '%s\n' "$snap" | awk -F'\t' -v e="$e" '
+      $5!="ready" { next }
       $2==e { print $1; exit }
       { split($3,a,":"); if (a[1]!="" && a[1]==e) { print $1; exit } }
       { split($4,b,":"); if (b[1]!="" && b[1]==e) { print $1; exit } }')
@@ -413,17 +426,38 @@ clickhouse_ha_init() {
   local pwd db net i
   pwd=$(secrets::value ELCHI_CLICKHOUSE_PASSWORD); db=${ELCHI_CLICKHOUSE_DATABASE:-elchi}
   net="${STACK_NAME}_elchi-net"
+
+  # On a fresh multi-node deploy the worker ClickHouse tasks are still PULLING
+  # their image while we get here, so Keeper has no quorum yet. Wait for the
+  # cluster to actually answer (up to ~4 min) BEFORE issuing the DDL — issuing
+  # too early is what produced the "Keeper quorum forming?" warning loop.
+  local up=0 a
+  for a in $(seq 1 30); do
+    if docker run --rm --network "$net" "$img" clickhouse-client \
+         --host elchi-clickhouse-1 --user elchi --password "$pwd" \
+         --query "SELECT count() FROM system.clusters WHERE cluster='elchi_cluster'" 2>/dev/null \
+         | grep -qx "$ELCHI_STORAGE_REPLICAS"; then up=1; break; fi
+    [ "$a" = 1 ] && log::info "waiting for the ClickHouse Keeper cluster to converge (workers may still be pulling)…"
+    sleep 8
+  done
+  if [ "$up" != 1 ]; then
+    log::warn "ClickHouse cluster not fully up yet — the Replicated DB will be created on the next install.sh run (safe to re-run)"
+    return 0
+  fi
+
+  # Cluster is reachable: the Replicated DDL on ONE member propagates to the
+  # rest via Keeper, but we issue IF NOT EXISTS on each to confirm convergence.
   for ((i=1;i<=ELCHI_STORAGE_REPLICAS;i++)); do
-    local ok=0 a
+    local ok=0
     for a in 1 2 3 4 5 6 7 8; do
       if docker run --rm --network "$net" "$img" clickhouse-client \
            --host "elchi-clickhouse-${i}" --user elchi --password "$pwd" \
            --query "CREATE DATABASE IF NOT EXISTS \`${db}\` ENGINE = Replicated('/clickhouse/databases/${db}', '{shard}', '{replica}')" \
            >/dev/null 2>&1; then ok=1; break; fi
-      sleep 8
+      sleep 6
     done
     [ "$ok" = "1" ] && log::info "Replicated DB ready on elchi-clickhouse-${i}" \
-      || log::warn "could not create Replicated DB on elchi-clickhouse-${i} yet (Keeper quorum forming?) — retry: re-run install.sh"
+      || log::warn "could not create Replicated DB on elchi-clickhouse-${i} yet — re-run install.sh"
   done
 }
 

@@ -95,11 +95,14 @@ fi
 
 if [ "$PURGE" = "1" ]; then
   log::step "Removing configs, secrets and state"
-  docker config ls --format '{{.Name}}' 2>/dev/null | grep '^elchi_' \
+  # NB: '|| true' on the grep — when the stack rm already removed the configs,
+  # grep matches nothing and exits 1, which under 'set -o pipefail' would abort
+  # the whole script BEFORE the swarm-leave step below.
+  docker config ls --format '{{.Name}}' 2>/dev/null | { grep '^elchi_' || true; } \
     | while read -r c; do docker config rm "$c" >/dev/null 2>&1 || true; done
-  docker secret ls --format '{{.Name}}' 2>/dev/null | grep '^elchi_' \
+  docker secret ls --format '{{.Name}}' 2>/dev/null | { grep '^elchi_' || true; } \
     | while read -r s; do docker secret rm "$s" >/dev/null 2>&1 || true; done
-  [ -d "$ELCHI_STATE_DIR" ] && rm -rf "$ELCHI_STATE_DIR" && log::info "removed state dir ${ELCHI_STATE_DIR}"
+  [ -d "$ELCHI_STATE_DIR" ] && rm -rf "$ELCHI_STATE_DIR" && log::info "removed state dir ${ELCHI_STATE_DIR}" || true
 fi
 
 if [ "$LEAVE_SWARM" = "1" ]; then

@@ -1914,10 +1914,25 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --uninstall
 
-                    # delete volumes + configs + secrets + state dir
+                    # also delete volumes + configs + secrets + state (this node)
                     curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --uninstall --purge</div>
+                <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
+                    <strong>Full multi-node wipe</strong> — pass the same <code>--nodes</code> so M1 SSHes
+                    into the workers (reusing the bootstrap key) to delete THEIR data volumes and make every
+                    node leave the Swarm:
+                </p>
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
+                    | sudo bash -s -- \
+                    --uninstall --purge --leave-swarm \
+                    --nodes=45.13.226.177,45.13.226.226,198.105.112.107</div>
+                <p class="note" style="margin: 8px 0;">
+                    Worker data volumes are node-local — without <code>--nodes</code> the teardown only
+                    cleans this node (the stack itself is removed everywhere by <code>docker stack rm</code>).
+                    <code>--leave-swarm</code> dissolves the Swarm (every node leaves).
+                </p>
 
                 <h4>9. Port atlas</h4>
                 <div class="flag-table">
