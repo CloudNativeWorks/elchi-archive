@@ -228,7 +228,13 @@ jobs:
           git config --local user.name "GitHub Action"
           git add index.json
           git commit -m "Add Elchi Backend ${{ github.event.inputs.version }}" || exit 0
-          git push
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
+            echo "Push rejected (attempt $i/5), retrying after rebase..."
+            sleep $((RANDOM % 5 + 1))
+          done
+          echo "Failed to push after 5 attempts" >&2
+          exit 1
 
   deploy:
     needs: update-index
