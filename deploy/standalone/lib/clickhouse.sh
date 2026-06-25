@@ -269,6 +269,18 @@ clickhouse::render_server() {
     <logger>
         <level>warning</level>
     </logger>
+    <!-- Disk-full safeguard: refuse inserts/merges that would leave the data
+         disk with less than this much free space, so the event volume (collector
+         api_events + shield audit) can't fill it to 100% and wedge the server.
+         Inserts fail cleanly (clients drop + alert) instead of corrupting CH.
+         Tunable via ELCHI_CLICKHOUSE_KEEP_FREE_BYTES (default 2 GiB). -->
+    <storage_configuration>
+        <disks>
+            <default>
+                <keep_free_space_bytes>${ELCHI_CLICKHOUSE_KEEP_FREE_BYTES:-2147483648}</keep_free_space_bytes>
+            </default>
+        </disks>
+    </storage_configuration>
 </clickhouse>
 EOF
 }

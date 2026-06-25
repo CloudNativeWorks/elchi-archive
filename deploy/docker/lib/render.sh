@@ -986,6 +986,19 @@ EOF
     <logger>
         <level>warning</level>
     </logger>
+    <!-- Disk-full safeguard: refuse inserts/merges that would leave the data
+         disk with less than this much free space, so a runaway event volume
+         (collector api_events + shield audit) can't fill the disk to 100% and
+         wedge the server. Inserts then fail cleanly (clients drop + alert on
+         their export-error metric) instead of corrupting/locking ClickHouse.
+         Tunable via ELCHI_CLICKHOUSE_KEEP_FREE_BYTES (default 2 GiB). -->
+    <storage_configuration>
+        <disks>
+            <default>
+                <keep_free_space_bytes>${ELCHI_CLICKHOUSE_KEEP_FREE_BYTES:-2147483648}</keep_free_space_bytes>
+            </default>
+        </disks>
+    </storage_configuration>
 </clickhouse>
 EOF
 
