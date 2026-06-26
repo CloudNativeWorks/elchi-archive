@@ -41,6 +41,32 @@
   ],
   "elchi_client_releases": [
     {
+      "version": "v1.3.0",
+      "date": "2026-06-26T03:19:37Z",
+      "shield_version": "v0.4.0",
+      "files": [
+        {
+          "name": "elchi-client-linux-amd64",
+          "type": "binary",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.3.0/elchi-client-linux-amd64",
+          "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+        },
+        {
+          "name": "elchi-install.sh",
+          "type": "script",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.3.0/elchi-install.sh",
+          "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+        },
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield v0.4.0 (Envoy ext_proc WAF sidecar) bundled with this client release",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.3.0/elchi-shield-linux-amd64",
+          "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+        }
+      ]
+    },
+    {
       "version": "v1.1.0",
       "date": "2026-02-06T07:36:27Z",
       "files": [
@@ -134,7 +160,21 @@
       ]
     }
   ],
-  "elchi_shield_releases": [],
+  "elchi_shield_releases": [
+    {
+      "version": "v0.4.0",
+      "date": "2026-06-26T03:19:37Z",
+      "files": [
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.3.0",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.3.0/elchi-shield-linux-amd64",
+          "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+        }
+      ]
+    }
+  ],
   "coroza_releases": [
     {
       "version": "v0.6.0",
