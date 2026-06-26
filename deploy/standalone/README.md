@@ -117,11 +117,11 @@ default:
 
 | Component        | Variable                         | Default |
 |------------------|----------------------------------|---------|
-| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.4.8-v0.14.0-envoy1.36.2` |
-| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.4.4` |
+| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.0-v0.14.0-envoy1.38.3` |
+| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.1` |
 | Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.37.0` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
-| elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.10` |
+| elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.11` |
 | VictoriaMetrics  | `ELCHI_DEFAULT_VM_VERSION`       | `v1.93.5` |
 | OTel Collector   | `ELCHI_DEFAULT_OTEL_VERSION`     | `0.89.0` |
 
