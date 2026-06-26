@@ -7,6 +7,11 @@ on:
         description: 'Elchi Client version to download (e.g., v1.0.0)'
         required: true
         type: string
+      shield_version:
+        description: 'elchi-shield version to bundle + pin into the installer (e.g., v0.2.0; blank = installer fetches latest at install time)'
+        required: false
+        type: string
+        default: ''
 
 env:
   # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
@@ -50,6 +55,24 @@ jobs:
           echo "Downloading elchi-install.sh..."
           curl -L -o elchi-install.sh "${BASE_URL}/elchi-install.sh"
 
+          # --- elchi-shield: pin the version into the installer + bundle the binary ---
+          # The installer installs shield in the same run; pinning the version here
+          # makes the release reproducible. Must run BEFORE the install-script
+          # checksum below so the published sha256 matches the pinned script.
+          SHIELD_VERSION="${{ github.event.inputs.shield_version }}"
+          if [[ -n "$SHIELD_VERSION" ]]; then
+            echo "Pinning elchi-shield ${SHIELD_VERSION} into elchi-install.sh"
+            sed -i "s|^SHIELD_VERSION=\"__SHIELD_VERSION__\"|SHIELD_VERSION=\"${SHIELD_VERSION}\"|" elchi-install.sh
+            SHIELD_BASE="https://github.com/CloudNativeWorks/elchi-shield/releases/download/${SHIELD_VERSION}"
+            echo "Downloading elchi-shield-linux-amd64..."
+            curl -L -o elchi-shield-linux-amd64 "${SHIELD_BASE}/elchi-shield-linux-amd64"
+            curl -L -o elchi-shield-linux-amd64.sha256.original "${SHIELD_BASE}/elchi-shield-linux-amd64.sha256" || true
+            sha256sum elchi-shield-linux-amd64 > elchi-shield-linux-amd64.sha256
+            chmod +x elchi-shield-linux-amd64
+          else
+            echo "No shield_version → elchi-install.sh will fetch the latest elchi-shield at install time"
+          fi
+
           # Download original checksums if available
           curl -L -o elchi-client-linux-amd64.sha256.original "${BASE_URL}/elchi-client-linux-amd64.sha256" || true
 
@@ -85,32 +108,75 @@ jobs:
       - name: Update index.json
         run: |
           VERSION="${{ github.event.inputs.version }}"
+          SHIELD_VERSION="${{ github.event.inputs.shield_version }}"
+          RELDIR="releases/elchi-client-${VERSION}"
+          REPO="${{ github.repository }}"
+          TAG="elchi-client-${VERSION}"
 
           # Read checksums
-          BINARY_SHA256=$(cat releases/elchi-client-${VERSION}/elchi-client-linux-amd64.sha256 | cut -d' ' -f1)
-          SCRIPT_SHA256=$(cat releases/elchi-client-${VERSION}/elchi-install.sh.sha256 | cut -d' ' -f1)
+          BINARY_SHA256=$(cut -d' ' -f1 "$RELDIR/elchi-client-linux-amd64.sha256")
+          SCRIPT_SHA256=$(cut -d' ' -f1 "$RELDIR/elchi-install.sh.sha256")
 
-          # Create new Elchi Client release entry
-          cat > temp_elchi_release.json << EOF
-          {
-            "version": "${{ github.event.inputs.version }}",
-            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "files": [
+          # Base files: client binary + installer (which now also installs shield).
+          FILES=$(cat <<EOF
               {
                 "name": "elchi-client-linux-amd64",
                 "type": "binary",
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-client-linux-amd64",
+                "download_url": "https://github.com/${REPO}/releases/download/${TAG}/elchi-client-linux-amd64",
                 "sha256": "$BINARY_SHA256"
               },
               {
                 "name": "elchi-install.sh",
                 "type": "script",
-                "download_url": "https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-install.sh",
+                "download_url": "https://github.com/${REPO}/releases/download/${TAG}/elchi-install.sh",
                 "sha256": "$SCRIPT_SHA256"
+              }
+          EOF
+          )
+          # Append the bundled shield binary when a shield_version was given.
+          if [[ -f "$RELDIR/elchi-shield-linux-amd64" ]]; then
+            SHIELD_SHA256=$(cut -d' ' -f1 "$RELDIR/elchi-shield-linux-amd64.sha256")
+            FILES="${FILES},
+              {
+                \"name\": \"elchi-shield-linux-amd64\",
+                \"type\": \"binary\",
+                \"description\": \"elchi-shield ${SHIELD_VERSION} (Envoy ext_proc WAF sidecar) bundled with this client release\",
+                \"download_url\": \"https://github.com/${REPO}/releases/download/${TAG}/elchi-shield-linux-amd64\",
+                \"sha256\": \"$SHIELD_SHA256\"
+              }"
+          fi
+
+          # Create new Elchi Client release entry
+          cat > temp_elchi_release.json << EOF
+          {
+            "version": "${VERSION}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "shield_version": "${SHIELD_VERSION}",
+            "files": [
+          ${FILES}
+            ]
+          }
+          EOF
+
+          # Separate elchi-shield entry for its own download card (the binary is
+          # bundled in this client release; the card just links to it).
+          if [[ -f "$RELDIR/elchi-shield-linux-amd64" ]]; then
+            cat > temp_shield_release.json << EOF
+          {
+            "version": "${SHIELD_VERSION}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "files": [
+              {
+                "name": "elchi-shield-linux-amd64",
+                "type": "binary",
+                "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client ${VERSION}",
+                "download_url": "https://github.com/${REPO}/releases/download/${TAG}/elchi-shield-linux-amd64",
+                "sha256": "$SHIELD_SHA256"
               }
             ]
           }
           EOF
+          fi
 
           # Update index.json with separate Elchi Client releases section
           python3 << 'EOF'
@@ -145,6 +211,24 @@ jobs:
           # Sort by version (newest to oldest)
           index['elchi_client_releases'].sort(key=lambda x: x['version'], reverse=True)
 
+          # Elchi Shield release (separate download card) — only when one was bundled.
+          import os
+          if os.path.exists('temp_shield_release.json'):
+              if 'elchi_shield_releases' not in index:
+                  index['elchi_shield_releases'] = []
+              with open('temp_shield_release.json', 'r') as f:
+                  shield_release = json.load(f)
+              if shield_release.get('version'):
+                  sh_existing = False
+                  for i, release in enumerate(index['elchi_shield_releases']):
+                      if release['version'] == shield_release['version']:
+                          index['elchi_shield_releases'][i] = shield_release
+                          sh_existing = True
+                          break
+                  if not sh_existing:
+                      index['elchi_shield_releases'].append(shield_release)
+                  index['elchi_shield_releases'].sort(key=lambda x: x['version'], reverse=True)
+
           # Save
           with open('index.json', 'w') as f:
               json.dump(index, f, indent=2)
@@ -160,13 +244,18 @@ jobs:
 
             Downloaded from: https://github.com/CloudNativeWorks/elchi-client/releases/tag/${{ github.event.inputs.version }}
 
+            This installer ALSO installs the **elchi-shield** sidecar (Envoy ext_proc
+            API-security / WAF) in the same run — bundled shield version:
+            `${{ github.event.inputs.shield_version }}` (blank = latest at install time).
+            Use `--no-shield` to skip it.
+
             ## Quick Install
 
             ```bash
             # Download installer
             wget https://github.com/${{ github.repository }}/releases/download/elchi-client-${{ github.event.inputs.version }}/elchi-install.sh
 
-            # Run with your configuration
+            # Run with your configuration (installs elchi-client + elchi-shield)
             sudo bash elchi-install.sh \
               --name=web-server-01 \
               --host=backend.elchi.io \
@@ -185,6 +274,7 @@ jobs:
           files: |
             releases/elchi-client-${{ github.event.inputs.version }}/elchi-client-linux-amd64
             releases/elchi-client-${{ github.event.inputs.version }}/elchi-install.sh
+            releases/elchi-client-${{ github.event.inputs.version }}/elchi-shield-linux-amd64
             releases/elchi-client-${{ github.event.inputs.version }}/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
