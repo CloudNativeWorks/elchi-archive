@@ -31,58 +31,85 @@ concurrency:
 jobs:
   download-files:
     runs-on: ubuntu-latest
+    outputs:
+      # The resolved shield version (input, or the latest tag when blank).
+      # Downstream jobs use this for index.json + the release notes.
+      shield_version: ${{ steps.fetch.outputs.shield_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Download Elchi Client Files
+      - name: Download Elchi Client + Shield from the private source repos
+        id: fetch
+        env:
+          # The default GITHUB_TOKEN is scoped to elchi-archive only and cannot
+          # read the private elchi-client / elchi-shield repos — a cross-repo PAT
+          # is required. gh authenticates with GH_TOKEN. Everything we pull here
+          # is re-published into the PUBLIC elchi-archive release below so the
+          # installer's unauthenticated, install-time downloads work.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          set -euo pipefail
           VERSION="${{ github.event.inputs.version }}"
-          REPO="CloudNativeWorks/elchi-client"
-          BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+          CLIENT_REPO="CloudNativeWorks/elchi-client"
+          SHIELD_REPO="CloudNativeWorks/elchi-shield"
+          ARCHIVE_TAG="elchi-client-${VERSION}"
+          # The installer downloads its binaries from this elchi-archive release
+          # (public, unauthenticated) at install time — never from a source repo.
+          MIRROR_BASE_URL="https://github.com/${{ github.repository }}/releases/download/${ARCHIVE_TAG}"
 
-          # Create release directory
-          mkdir -p releases/elchi-client-${VERSION}
-          cd releases/elchi-client-${VERSION}
+          mkdir -p "releases/${ARCHIVE_TAG}"
+          cd "releases/${ARCHIVE_TAG}"
 
-          # Download binary
-          echo "Downloading elchi-client-linux-amd64..."
-          curl -L -o elchi-client-linux-amd64 "${BASE_URL}/elchi-client-linux-amd64"
-
-          # Download install script
-          echo "Downloading elchi-install.sh..."
-          curl -L -o elchi-install.sh "${BASE_URL}/elchi-install.sh"
-
-          # --- elchi-shield: pin the version into the installer + bundle the binary ---
-          # The installer installs shield in the same run; pinning the version here
-          # makes the release reproducible. Must run BEFORE the install-script
-          # checksum below so the published sha256 matches the pinned script.
-          SHIELD_VERSION="${{ github.event.inputs.shield_version }}"
-          if [[ -n "$SHIELD_VERSION" ]]; then
-            echo "Pinning elchi-shield ${SHIELD_VERSION} into elchi-install.sh"
-            sed -i "s|^SHIELD_VERSION=\"__SHIELD_VERSION__\"|SHIELD_VERSION=\"${SHIELD_VERSION}\"|" elchi-install.sh
-            SHIELD_BASE="https://github.com/CloudNativeWorks/elchi-shield/releases/download/${SHIELD_VERSION}"
-            echo "Downloading elchi-shield-linux-amd64..."
-            curl -L -o elchi-shield-linux-amd64 "${SHIELD_BASE}/elchi-shield-linux-amd64"
-            curl -L -o elchi-shield-linux-amd64.sha256.original "${SHIELD_BASE}/elchi-shield-linux-amd64.sha256" || true
-            sha256sum elchi-shield-linux-amd64 > elchi-shield-linux-amd64.sha256
-            chmod +x elchi-shield-linux-amd64
-          else
-            echo "No shield_version → elchi-install.sh will fetch the latest elchi-shield at install time"
+          # --- elchi-client binary + installer (private client repo) ----------
+          echo "Downloading elchi-client ${VERSION} from ${CLIENT_REPO}..."
+          gh release download "${VERSION}" --repo "${CLIENT_REPO}" \
+            --pattern "elchi-client-linux-amd64" \
+            --pattern "elchi-install.sh"
+          # Verify against the upstream checksum when one is published.
+          if gh release download "${VERSION}" --repo "${CLIENT_REPO}" \
+               --pattern "elchi-client-linux-amd64.sha256" 2>/dev/null; then
+            sha256sum -c elchi-client-linux-amd64.sha256
+            rm -f elchi-client-linux-amd64.sha256
           fi
 
-          # Download original checksums if available
-          curl -L -o elchi-client-linux-amd64.sha256.original "${BASE_URL}/elchi-client-linux-amd64.sha256" || true
+          # --- elchi-shield: resolve version (latest when blank) + fetch -------
+          # Shield is ALWAYS bundled so the public mirror is always populated and
+          # default installs get a working sidecar (no private fetch at install).
+          SHIELD_VERSION="${{ github.event.inputs.shield_version }}"
+          if [[ -z "$SHIELD_VERSION" ]]; then
+            SHIELD_VERSION=$(gh release view --repo "${SHIELD_REPO}" --json tagName -q .tagName)
+            echo "Resolved latest elchi-shield: ${SHIELD_VERSION}"
+          fi
+          # shield's create-release.yml builds elchi-shield-v<X.Y.Z>-linux-amd64.
+          SHIELD_ASSET="elchi-shield-${SHIELD_VERSION}-linux-amd64"
+          echo "Downloading ${SHIELD_ASSET} from ${SHIELD_REPO}@${SHIELD_VERSION}..."
+          gh release download "${SHIELD_VERSION}" --repo "${SHIELD_REPO}" \
+            --pattern "${SHIELD_ASSET}" \
+            --pattern "${SHIELD_ASSET}.sha256"
+          sha256sum -c "${SHIELD_ASSET}.sha256"
+          # Re-name to the version-less asset the installer expects
+          # (elchi-shield-linux-amd64), then regenerate the checksum for it.
+          mv "${SHIELD_ASSET}" elchi-shield-linux-amd64
+          rm -f "${SHIELD_ASSET}.sha256"
 
-          # Generate our own checksums
+          # --- pin the version + the public mirror base into the installer -----
+          echo "Pinning shield ${SHIELD_VERSION} + mirror base into elchi-install.sh"
+          sed -i "s|^SHIELD_VERSION=\"__SHIELD_VERSION__\"|SHIELD_VERSION=\"${SHIELD_VERSION}\"|" elchi-install.sh
+          sed -i "s|^MIRROR_BASE_URL=\"__MIRROR_BASE_URL__\"|MIRROR_BASE_URL=\"${MIRROR_BASE_URL}\"|" elchi-install.sh
+          grep -q "^SHIELD_VERSION=\"${SHIELD_VERSION}\"" elchi-install.sh || { echo "::error::shield version pin failed"; exit 1; }
+          grep -q "^MIRROR_BASE_URL=" elchi-install.sh && ! grep -q "__MIRROR_BASE_URL__" elchi-install.sh || { echo "::error::mirror base pin failed"; exit 1; }
+
+          # --- regenerate our own checksums (after substitution) + perms ------
           sha256sum elchi-client-linux-amd64 > elchi-client-linux-amd64.sha256
-          sha256sum elchi-install.sh > elchi-install.sh.sha256
+          sha256sum elchi-shield-linux-amd64 > elchi-shield-linux-amd64.sha256
+          sha256sum elchi-install.sh        > elchi-install.sh.sha256
+          chmod +x elchi-client-linux-amd64 elchi-shield-linux-amd64 elchi-install.sh
 
-          # Make files executable
-          chmod +x elchi-client-linux-amd64
-          chmod +x elchi-install.sh
+          # Expose the resolved shield version to downstream jobs.
+          echo "shield_version=${SHIELD_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -108,7 +135,7 @@ jobs:
       - name: Update index.json
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          SHIELD_VERSION="${{ github.event.inputs.shield_version }}"
+          SHIELD_VERSION="${{ needs.download-files.outputs.shield_version }}"
           RELDIR="releases/elchi-client-${VERSION}"
           REPO="${{ github.repository }}"
           TAG="elchi-client-${VERSION}"
@@ -246,8 +273,8 @@ jobs:
 
             This installer ALSO installs the **elchi-shield** sidecar (Envoy ext_proc
             API-security / WAF) in the same run — bundled shield version:
-            `${{ github.event.inputs.shield_version }}` (blank = latest at install time).
-            Use `--no-shield` to skip it.
+            `${{ needs.download-files.outputs.shield_version }}` (fetched from this
+            same release at install time). Use `--no-shield` to skip it.
 
             ## Quick Install
 

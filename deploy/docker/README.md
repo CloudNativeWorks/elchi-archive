@@ -89,6 +89,15 @@ All services share the `elchi-net` overlay network; Envoy and the backend
 address each other by **Swarm service DNS** (`tasks.<service>`), replacing the
 standalone installer's `/etc/hosts` aliases.
 
+> **No data-plane components here.** Like the standalone installer this is a
+> **control-plane-only** stack — it does not run the elchi-client agent or the
+> `elchi-shield` sidecar (those live on the edge/data-plane hosts, installed by
+> `elchi-client/elchi-install.sh`). If shield's audit sink is pointed at this
+> ClickHouse (`--shield-audit-dsn=…` on the edge), make `9000` reachable from
+> the edge hosts and grant the DSN user `CREATE`/`INSERT` — shield auto-creates
+> its `elchi_shield_audit` table (this is the "shield audit" the ClickHouse
+> `keep_free_space_bytes` disk guard accounts for).
+
 **Per-node topology (standalone parity).** Like the bare-metal installer,
 **every elchi node runs the full control-plane tier**: 1 controller + one
 control-plane *per backend variant* + the global services (envoy / registry /

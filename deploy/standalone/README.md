@@ -211,6 +211,21 @@ and have no knob: **mongodb** (canonical major `8.0`), **clickhouse**
   any network-level ACLs / security groups remain the operator's
   responsibility.
 
+  > **elchi-shield audit → ClickHouse.** The `elchi-shield` sidecar runs on
+  > the **data-plane / edge hosts** (next to the client, never here on the
+  > control plane), but when its audit sink is enabled
+  > (`elchi-install.sh --shield-audit-dsn=…`) it writes audit events into this
+  > same ClickHouse, alongside the collector's `api_events` (this is why the
+  > `keep_free_space_bytes` disk guard mentions "shield audit"). Edge hosts are
+  > **not** part of this installer's `--nodes` topology, so the standalone
+  > firewall does **not** open `9000` to them. If you use shield audit you must,
+  > on your own: (1) make ClickHouse `9000` reachable from the edge hosts
+  > (firewall / security-group rule), and (2) ensure the DSN's ClickHouse user
+  > has `CREATE DATABASE` / `CREATE TABLE` / `INSERT` — shield auto-creates its
+  > `elchi_shield_audit` table on first connect. Shield's metrics push (OTLP)
+  > likewise targets an OTel Collector endpoint you provide via
+  > `--shield-metrics-otlp=`; it is not auto-wired from the control plane.
+
 ### Optional, every node
 
 - CoreDNS with the elchi GSLB plugin (`--gslb`)
