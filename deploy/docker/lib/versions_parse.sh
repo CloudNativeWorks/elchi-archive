@@ -13,7 +13,7 @@
 # Envoy cluster names, x-target-cluster routing, and the UI's
 # AVAILABLE_VERSIONS list, all of which must match what the registry emits.
 
-# topology::sanitize_version <tag> — "v1.4.9-...-envoy1.36.2" → "v1-4-9-...-envoy1-36-2"
+# topology::sanitize_version <tag> — "v1.6.0-...-envoy1.38.3" → "v1-6-0-...-envoy1-38-3"
 ver::sanitize() {
   local tag=$1
   tag=${tag%-arm64}; tag=${tag%-amd64}

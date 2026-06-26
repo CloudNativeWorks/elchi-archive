@@ -6,8 +6,8 @@
 # `docker stack deploy` performs a rolling update of every changed service.
 # So an upgrade is just install.sh re-run with the new --*-version flags.
 #
-#   upgrade.sh --main-address=elchi.example.com --ui-version=v1.4.6 \
-#              --backend-version=v1.4.9-v0.14.0-envoy1.36.2
+#   upgrade.sh --main-address=elchi.example.com --ui-version=v1.5.0 \
+#              --backend-version=v1.6.0-v0.14.0-envoy1.38.3
 #
 set -Eeuo pipefail
 ELCHI_DOCKER_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)

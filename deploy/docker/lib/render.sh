@@ -48,8 +48,11 @@ SVC_CONTROLLER=elchi-controller
 SVC_UI=elchi-ui
 SVC_ENVOY=elchi-envoy
 SVC_COREDNS=elchi-coredns
-# UI nginx image listens on :80 (verified from jhonbrownn/elchi image config).
-UI_PORT=${ELCHI_UI_PORT:-80}
+# UI port: the jhonbrownn/elchi image (unprivileged nginx) listens on :8080.
+# Do NOT freeze it here — this file is sourced before install.sh parses CLI
+# args, so a value captured now would ignore --ui-port / ELCHI_UI_PORT. It is
+# read at render time instead (see the elchi-cluster endpoint below). Override
+# with --ui-port=80 for an older UI image that still binds :80.
 
 # ----- elchi runtime nodes (standalone parity) -----------------------------
 # Every elchi node runs the FULL control-plane tier: 1 controller + one
@@ -661,7 +664,7 @@ EOF
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: {address: tasks.${SVC_UI}, port_value: ${UI_PORT}}
+              socket_address: {address: tasks.${SVC_UI}, port_value: ${ELCHI_UI_PORT:-8080}}
 EOF
 
   # otel cluster (gRPC h2).

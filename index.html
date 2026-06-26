@@ -345,7 +345,7 @@
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.4.4</code>,
                     backend <code>elchi-v1.4.8-v0.14.0-envoy1.36.2</code>, envoy <code>v1.36.2</code>,
-                    coredns <code>v0.1.4</code>, collector <code>v0.1.8</code>. Override any with the matching
+                    coredns <code>v0.1.4</code>, collector <code>v0.1.9</code>. Override any with the matching
                     <code>--ui-version=</code> / <code>--backend-version=</code> / <code>--envoy-version=</code> /
                     <code>--coredns-version=</code> / <code>--collector-version=</code> flag.
                 </p>
@@ -514,7 +514,7 @@
                         </div>
                         <code>--collector-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">elchi-collector binary version (ALS gRPC sink → ClickHouse / Mongo).
-                            <span class="default">Default: <code>v0.1.8</code>.</span> Mirrored to the public
+                            <span class="default">Default: <code>v0.1.9</code>.</span> Mirrored to the public
                             elchi-archive releases by the build-elchi-collector workflow.
                         </div>
                         <code>--no-collector</code>
@@ -1571,9 +1571,9 @@
                     | sudo bash -s -- \
                     --main-address=&lt;your-dns-or-ip&gt;</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Image tags default from <code>versions.env</code>: UI <code>v1.4.6</code>, backend
-                    <code>v1.4.9-v0.14.0-envoy1.36.2</code>, coredns <code>v0.1.4</code>, collector
-                    <code>v0.1.8</code>, plus official <code>mongo:8.0</code> /
+                    Image tags default from <code>versions.env</code>: UI <code>v1.5.0</code>, backend
+                    <code>v1.6.0-v0.14.0-envoy1.38.3</code>, coredns <code>v0.1.4</code>, collector
+                    <code>v0.1.9</code>, plus official <code>mongo:8.0</code> /
                     <code>clickhouse/clickhouse-server</code> / <code>victoriametrics</code> /
                     <code>grafana</code> / <code>otel-collector-contrib</code> / <code>envoyproxy/envoy</code>.
                 </p>
@@ -1587,8 +1587,8 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
-                    --backend-version=v1.4.9-v0.14.0-envoy1.36.2,v1.4.9-v0.14.0-envoy1.35.3 \
-                    --ui-version=v1.4.6</div>
+                    --backend-version=v1.6.0-v0.14.0-envoy1.38.3,v1.6.0-v0.14.0-envoy1.35.3 \
+                    --ui-version=v1.5.0</div>
 
                 <h5>Custom port / plaintext</h5>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
@@ -1635,16 +1635,16 @@
                         <div class="desc">One or more <code>jhonbrownn/elchi-backend</code> tags, comma-separated.
                             One control-plane service + Envoy cluster per variant; the embedded envoy version
                             must be unique. <span class="default">Default:
-                                <code>v1.4.9-v0.14.0-envoy1.36.2</code> (from <code>versions.env</code>).</span></div>
+                                <code>v1.6.0-v0.14.0-envoy1.38.3</code> (from <code>versions.env</code>).</span></div>
                         <code>--ui-version=&lt;tag&gt;</code>
                         <div class="desc">UI image (<code>jhonbrownn/elchi</code>) tag.
-                            <span class="default">Default: <code>v1.4.6</code>.</span></div>
+                            <span class="default">Default: <code>v1.5.0</code>.</span></div>
                         <code>--coredns-version=&lt;tag&gt;</code>
                         <div class="desc">CoreDNS GSLB image (<code>jhonbrownn/elchi-coredns</code>) tag.
                             <span class="default">Default: <code>v0.1.4</code>.</span></div>
                         <code>--collector-version=&lt;tag&gt;</code>
                         <div class="desc">elchi-collector image (<code>jhonbrownn/elchi-collector</code>) tag.
-                            <span class="default">Default: <code>v0.1.8</code>.</span></div>
+                            <span class="default">Default: <code>v0.1.9</code>.</span></div>
                         <code>--image-repo=&lt;repo&gt;</code>
                         <div class="desc">Docker Hub namespace / registry for the elchi images.
                             <span class="default">Default: <code>jhonbrownn</code>.</span> Point at a private
@@ -1905,8 +1905,8 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
-                    --ui-version=v1.4.6 \
-                    --backend-version=v1.4.9-v0.14.0-envoy1.36.2</div>
+                    --ui-version=v1.5.0 \
+                    --backend-version=v1.6.0-v0.14.0-envoy1.38.3</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
                 <div class="stdl-cmd"># remove the stack, keep data volumes
