@@ -57,6 +57,32 @@
   ],
   "elchi_client_releases": [
     {
+      "version": "v1.5.0",
+      "date": "2026-06-26T16:15:55Z",
+      "shield_version": "v0.4.0",
+      "files": [
+        {
+          "name": "elchi-client-linux-amd64",
+          "type": "binary",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.0/elchi-client-linux-amd64",
+          "sha256": "f93ab939e92b0412c66f15ccdfc305ac6532414320345b0ed7245d51ddbe4284"
+        },
+        {
+          "name": "elchi-install.sh",
+          "type": "script",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.0/elchi-install.sh",
+          "sha256": "97b06b7b0e35737ee346734a4f4e39c83961c5135a2a166d0dff4a2c585eba05"
+        },
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield v0.4.0 (Envoy ext_proc WAF sidecar) bundled with this client release",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.0/elchi-shield-linux-amd64",
+          "sha256": "d8da0d0c23b031a3cc1b77752f127a7405571be75395d91fccf1462f454fdee3"
+        }
+      ]
+    },
+    {
       "version": "v1.3.0",
       "date": "2026-06-26T03:19:37Z",
       "shield_version": "v0.4.0",
@@ -165,14 +191,14 @@
   "elchi_shield_releases": [
     {
       "version": "v0.4.0",
-      "date": "2026-06-26T03:19:37Z",
+      "date": "2026-06-26T16:15:55Z",
       "files": [
         {
           "name": "elchi-shield-linux-amd64",
           "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.3.0",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.3.0/elchi-shield-linux-amd64",
-          "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.5.0",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.0/elchi-shield-linux-amd64",
+          "sha256": "d8da0d0c23b031a3cc1b77752f127a7405571be75395d91fccf1462f454fdee3"
         }
       ]
     }
