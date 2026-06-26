@@ -33,13 +33,13 @@ name: Download Elchi Collector
 #     that repo's "Create Release" workflow, THEN run this one.
 #
 # Trigger: Actions tab → "Download Elchi Collector" → Run workflow →
-#          enter the version (e.g. v0.1.9).
+#          enter the version (e.g. v0.1.10).
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'elchi-collector version to mirror (e.g., v0.1.9)'
+        description: 'elchi-collector version to mirror (e.g., v0.1.10)'
         required: true
         type: string
 
