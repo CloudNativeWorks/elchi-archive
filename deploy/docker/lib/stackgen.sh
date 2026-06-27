@@ -3,40 +3,29 @@
 # ${GEN_DIR}/stack.yml from the rendered config (lib/render.sh) + minted
 # secrets (lib/secrets.sh).
 #
-# Why fully generated (vs a static stack.yml + fragment): the per-variant
-# control-plane services are variable-cardinality, AND every rendered config
-# is mounted as a CONTENT-HASHED docker config/secret so a re-render →
-# new name → clean Swarm rolling update (docker configs are immutable, so a
-# stable name + changed content can't be updated in place). Threading hashed
-# names through a hand-maintained static file is error-prone; generating the
-# whole thing keeps the name↔content coupling correct. The output is plain,
-# reviewable compose v3.8 — read ${GEN_DIR}/stack.yml after a --dry-run.
+# Config/secret delivery model: every rendered file is BIND-MOUNTED from the
+# editable host tree under ${ELCHI_ETC} (default /etc/elchi) into the container
+# — NOT shipped as an immutable Docker Swarm config/secret. This lets operators
+# edit a file on disk and apply it with `docker service update --force <svc>`,
+# without re-running the installer. (Grafana already used this bind-mount pattern.)
 #
-# Paths inside the emitted file are RELATIVE TO ${GEN_DIR} (the compose
-# file's directory), so `docker stack deploy -c gen/stack.yml` resolves
-# `./config/...` correctly.
+# Because a bind-mount content change is invisible to Swarm (the service spec is
+# unchanged → no rolling update), each service that mounts config carries a
+# container-level label `elchi.cfghash=<hash>` over the contents of its mounted
+# files. A re-render that changes a file changes the label → Swarm rolling-updates
+# exactly the affected services (manual single-file edits use --force instead).
+#
+# Multi-node: install.sh SSH-copies ${ELCHI_ETC} to every node before deploy
+# (Swarm no longer distributes these files for us). Bind sources are ABSOLUTE
+# host paths, identical on every node.
 
-# ----- hashed config / secret registry ------------------------------------
-declare -A _CFG_NAME _CFG_PATH _SEC_NAME _SEC_PATH
-
-_hash8() { sha256sum "$1" | awk '{print substr($1,1,8)}'; }
-
-# stackgen::_cfg <key> <path-relative-to-GEN_DIR>
-stackgen::_cfg() {
-  local key=$1 rel=$2
-  local abs="${GEN_DIR}/${rel}"
-  [ -f "$abs" ] || return 1
-  _CFG_NAME[$key]="elchi_${key}_$(_hash8 "$abs")"
-  _CFG_PATH[$key]="$rel"
-}
-
-# stackgen::_sec <key> <path-relative-to-GEN_DIR>
-stackgen::_sec() {
-  local key=$1 rel=$2
-  local abs="${GEN_DIR}/${rel}"
-  [ -f "$abs" ] || return 1
-  _SEC_NAME[$key]="elchi_${key}_$(_hash8 "$abs")"
-  _SEC_PATH[$key]="$rel"
+# ----- helpers -------------------------------------------------------------
+# stackgen::_cfghash <file...> — 8-hex digest over the (existing) files'
+# contents, stable for a fixed argument order. Drives the per-service rolling
+# update label. Missing files are skipped (optional configs).
+stackgen::_cfghash() {
+  { for f in "$@"; do [ -f "$f" ] && { printf '%s\n' "$f"; cat "$f"; }; done; } \
+    | sha256sum | awk '{print substr($1,1,8)}'
 }
 
 # ----- image helpers -------------------------------------------------------
@@ -96,46 +85,18 @@ stackgen::generate() {
   local first_variant=${variants[0]}
   local mi  # member index reused in HA loops
 
-  # ----- register configs (only those that exist) -----
-  stackgen::_cfg envoy            "config/envoy.yaml" || true
-  stackgen::_cfg otel             "config/otel-config.yaml" || true
-  stackgen::_cfg ui_config        "config/ui-config.js" || true
-  if [ "$ch_local" = "1" ]; then
-    stackgen::_cfg ch_users "config/clickhouse-users.xml"
-    stackgen::_cfg ch_server "config/clickhouse-server.xml"
-    if [ "$ha" = "1" ]; then
-      for ((mi=1;mi<=sr;mi++)); do
-        stackgen::_cfg "ch_keeper_${mi}"  "config/clickhouse-keeper-${mi}.xml"
-        stackgen::_cfg "ch_cluster_${mi}" "config/clickhouse-cluster-${mi}.xml"
-      done
-    else
-      stackgen::_cfg ch_init "config/clickhouse-init.sql"
-    fi
-  fi
-  if [ "$mongo_local" = "1" ]; then
-    if [ "$ha" = "1" ]; then stackgen::_cfg mongo_bootstrap "config/mongo-bootstrap.sh"
-    else stackgen::_cfg mongo_init "config/mongo-init.js"; fi
-  fi
-  [ "$install_gslb" = "1" ] && { stackgen::_cfg corefile "config/Corefile"; stackgen::_cfg corezone "config/coredns-zones/${ELCHI_GSLB_ZONE:-elchi.local}.db"; }
-  local v key
-  for v in "${variants[@]}"; do
-    key="cp_$(ver::sanitize "$v")"
-    stackgen::_cfg "$key" "config/config-prod-${v}.yaml" || true
-  done
-
-  # ----- register secrets -----
-  [ "$tls" = "true" ] && { stackgen::_sec tls_crt "tls/server.crt"; stackgen::_sec tls_key "tls/server.key"; }
-  if [ "$mongo_local" = "1" ]; then
-    stackgen::_sec mongo_root_user "secrets/ELCHI_MONGO_ROOT_USERNAME"
-    stackgen::_sec mongo_root_pwd "secrets/ELCHI_MONGO_ROOT_PASSWORD"
-    [ "$ha" = "1" ] && stackgen::_sec mongo_keyfile "secrets/ELCHI_MONGO_KEYFILE"
-  fi
-  stackgen::_sec grafana_pwd "secrets/ELCHI_GRAFANA_PASSWORD" || true
+  # Absolute bind-mount sources (identical on every node). Secrets are mounted
+  # under /run/secrets/<stable-name> in-container so render.sh / entrypoints
+  # (which reference /run/secrets/MONGO_KEYFILE) need no changes.
+  local C="$CONFIG_DIR" S="$SECRETS_DIR" T="$TLS_DIR"
+  local zone=${ELCHI_GSLB_ZONE:-elchi.local}
+  local v key cfgh
 
   local out="${GEN_DIR}/stack.yml"
   {
-    printf '%s\n' "# Generated by the elchi Docker Swarm installer — DO NOT EDIT."
-    printf '%s\n' "# Re-generate via: deploy/docker/install.sh (or upgrade.sh)."
+    printf '%s\n' "# Generated by the elchi Docker Swarm installer — DO NOT EDIT this file."
+    printf '%s\n' "# Edit the bind-mounted configs under ${ELCHI_ETC} instead, then:"
+    printf '%s\n' "#   docker service update --force <stack>_<service>"
     printf '%s\n' "version: \"3.8\""
     printf '\n'
     # No deploy.resources limits anywhere — every service may use the FULL
@@ -159,21 +120,21 @@ stackgen::generate() {
     # ---- mongo ----
     local rs=${ELCHI_MONGO_REPLICASET:-elchi-rs}
     if [ "$mongo_local" = "1" ] && [ "$ha" = "0" ]; then
+      cfgh=$(stackgen::_cfghash "$C/mongo-init.js" "$S/ELCHI_MONGO_ROOT_USERNAME" "$S/ELCHI_MONGO_ROOT_PASSWORD")
       cat <<EOF
   elchi-mongo:
     image: ${mongo_image}
     command: ["mongod", "--bind_ip_all"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/${_SEC_NAME[mongo_root_user]}
-      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/${_SEC_NAME[mongo_root_pwd]}
-    secrets:
-      - ${_SEC_NAME[mongo_root_user]}
-      - ${_SEC_NAME[mongo_root_pwd]}
-    configs:
-      - source: ${_CFG_NAME[mongo_init]}
-        target: /docker-entrypoint-initdb.d/init.js
+      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/mongo_root_user
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_pwd
+    labels:
+      elchi.cfghash: "${cfgh}"
     volumes:
       - elchi-mongo-data:/data/db
+      - {type: bind, source: ${C}/mongo-init.js, target: /docker-entrypoint-initdb.d/init.js, read_only: true}
+      - {type: bind, source: ${S}/ELCHI_MONGO_ROOT_USERNAME, target: /run/secrets/mongo_root_user, read_only: true}
+      - {type: bind, source: ${S}/ELCHI_MONGO_ROOT_PASSWORD, target: /run/secrets/mongo_root_pwd, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -188,6 +149,7 @@ EOF
       # installer), or the manager when --nodes is unset (single-node testing).
       # Member 1 runs the validated bootstrap script.
       local sc
+      cfgh=$(stackgen::_cfghash "$S/ELCHI_MONGO_KEYFILE")
       for ((mi=1;mi<=sr;mi++)); do
         sc=$(stackgen::_node_constraint "$mi")
         if [ "$mi" = "1" ]; then
@@ -195,14 +157,12 @@ EOF
   elchi-mongo-1:
     image: ${mongo_image}
     entrypoint: ["bash", "/bootstrap.sh"]
-    configs:
-      - source: ${_CFG_NAME[mongo_bootstrap]}
-        target: /bootstrap.sh
-    secrets:
-      - source: ${_SEC_NAME[mongo_keyfile]}
-        target: MONGO_KEYFILE
+    labels:
+      elchi.cfghash: "$(stackgen::_cfghash "$C/mongo-bootstrap.sh" "$S/ELCHI_MONGO_KEYFILE")"
     volumes:
       - elchi-mongo-1-data:/data/db
+      - {type: bind, source: ${C}/mongo-bootstrap.sh, target: /bootstrap.sh, read_only: true}
+      - {type: bind, source: ${S}/ELCHI_MONGO_KEYFILE, target: /run/secrets/MONGO_KEYFILE, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -216,11 +176,11 @@ EOF
   elchi-mongo-${mi}:
     image: ${mongo_image}
     entrypoint: ["bash", "-c", "cp /run/secrets/MONGO_KEYFILE /tmp/k; chmod 400 /tmp/k; exec mongod --replSet ${rs} --keyFile /tmp/k --bind_ip_all"]
-    secrets:
-      - source: ${_SEC_NAME[mongo_keyfile]}
-        target: MONGO_KEYFILE
+    labels:
+      elchi.cfghash: "${cfgh}"
     volumes:
       - elchi-mongo-${mi}-data:/data/db
+      - {type: bind, source: ${S}/ELCHI_MONGO_KEYFILE, target: /run/secrets/MONGO_KEYFILE, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -235,18 +195,17 @@ EOF
 
     # ---- clickhouse ----
     if [ "$ch_local" = "1" ] && [ "$ha" = "0" ]; then
+      cfgh=$(stackgen::_cfghash "$C/clickhouse-users.xml" "$C/clickhouse-server.xml" "$C/clickhouse-init.sql")
       cat <<EOF
   elchi-clickhouse:
     image: ${clickhouse_image}
-    configs:
-      - source: ${_CFG_NAME[ch_users]}
-        target: /etc/clickhouse-server/users.d/elchi.xml
-      - source: ${_CFG_NAME[ch_server]}
-        target: /etc/clickhouse-server/config.d/elchi.xml
-      - source: ${_CFG_NAME[ch_init]}
-        target: /docker-entrypoint-initdb.d/init.sql
+    labels:
+      elchi.cfghash: "${cfgh}"
     volumes:
       - elchi-clickhouse-data:/var/lib/clickhouse
+      - {type: bind, source: ${C}/clickhouse-users.xml, target: /etc/clickhouse-server/users.d/elchi.xml, read_only: true}
+      - {type: bind, source: ${C}/clickhouse-server.xml, target: /etc/clickhouse-server/config.d/elchi.xml, read_only: true}
+      - {type: bind, source: ${C}/clickhouse-init.sql, target: /docker-entrypoint-initdb.d/init.sql, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -262,20 +221,18 @@ EOF
       local sc
       for ((mi=1;mi<=sr;mi++)); do
         sc=$(stackgen::_node_constraint "$mi")
+        cfgh=$(stackgen::_cfghash "$C/clickhouse-users.xml" "$C/clickhouse-server.xml" "$C/clickhouse-keeper-${mi}.xml" "$C/clickhouse-cluster-${mi}.xml")
         cat <<EOF
   elchi-clickhouse-${mi}:
     image: ${clickhouse_image}
-    configs:
-      - source: ${_CFG_NAME[ch_users]}
-        target: /etc/clickhouse-server/users.d/elchi.xml
-      - source: ${_CFG_NAME[ch_server]}
-        target: /etc/clickhouse-server/config.d/elchi.xml
-      - source: ${_CFG_NAME[ch_keeper_${mi}]}
-        target: /etc/clickhouse-server/config.d/keeper.xml
-      - source: ${_CFG_NAME[ch_cluster_${mi}]}
-        target: /etc/clickhouse-server/config.d/cluster.xml
+    labels:
+      elchi.cfghash: "${cfgh}"
     volumes:
       - elchi-clickhouse-${mi}-data:/var/lib/clickhouse
+      - {type: bind, source: ${C}/clickhouse-users.xml, target: /etc/clickhouse-server/users.d/elchi.xml, read_only: true}
+      - {type: bind, source: ${C}/clickhouse-server.xml, target: /etc/clickhouse-server/config.d/elchi.xml, read_only: true}
+      - {type: bind, source: ${C}/clickhouse-keeper-${mi}.xml, target: /etc/clickhouse-server/config.d/keeper.xml, read_only: true}
+      - {type: bind, source: ${C}/clickhouse-cluster-${mi}.xml, target: /etc/clickhouse-server/config.d/cluster.xml, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -309,13 +266,15 @@ EOF
     fi
 
     # ---- otel collector (global) ----
+    cfgh=$(stackgen::_cfghash "$C/otel-config.yaml")
     cat <<EOF
   elchi-otel:
     image: ${otel_image}
     command: ["--config=/etc/otel/config.yaml"]
-    configs:
-      - source: ${_CFG_NAME[otel]}
-        target: /etc/otel/config.yaml
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/otel-config.yaml, target: /etc/otel/config.yaml, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -328,6 +287,7 @@ EOF
     local root_host="${main}"
     [ "$port" != "443" ] && [ "$port" != "80" ] && root_host="${main}:${port}"
     local root_url="${proto}://${root_host}/grafana/"
+    cfgh=$(stackgen::_cfghash "$C/grafana/datasources/datasources.yaml" "$C/grafana/dashboards/elchi.yaml" "$S/ELCHI_GRAFANA_PASSWORD")
     cat <<EOF
   elchi-grafana:
     image: ${grafana_image}
@@ -337,22 +297,23 @@ EOF
       GF_SERVER_HTTP_ADDR: "0.0.0.0"
       GF_SERVER_HTTP_PORT: "3000"
       GF_SECURITY_ADMIN_USER: "$(secrets::value ELCHI_GRAFANA_USER 2>/dev/null || echo admin)"
-      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/${_SEC_NAME[grafana_pwd]}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_pwd
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
       GF_PLUGINS_PREINSTALL_DISABLED: "true"
-    secrets:
-      - ${_SEC_NAME[grafana_pwd]}
+    labels:
+      elchi.cfghash: "${cfgh}"
     volumes:
       - elchi-grafana-data:/var/lib/grafana
+      - {type: bind, source: ${S}/ELCHI_GRAFANA_PASSWORD, target: /run/secrets/grafana_pwd, read_only: true}
       - type: bind
-        source: ${GEN_DIR}/config/grafana/datasources/datasources.yaml
+        source: ${C}/grafana/datasources/datasources.yaml
         target: /etc/grafana/provisioning/datasources/datasources.yaml
         read_only: true
       - type: bind
-        source: ${GEN_DIR}/config/grafana/dashboards/elchi.yaml
+        source: ${C}/grafana/dashboards/elchi.yaml
         target: /etc/grafana/provisioning/dashboards/elchi.yaml
         read_only: true
       - type: bind
@@ -369,15 +330,17 @@ EOF
 EOF
 
     # ---- registry (global HA) ----
+    cfgh=$(stackgen::_cfghash "$C/config-prod-${first_variant}.yaml")
     cat <<EOF
   elchi-registry:
     image: $(stackgen::_backend_image "$first_variant")
     command: ["elchi-registry", "--config", "/config/config-prod.yaml", "--port=${PORT_REGISTRY_GRPC:-1870}"]
     environment:
       REGISTRY_LISTEN_ADDR: "0.0.0.0:${PORT_REGISTRY_GRPC:-1870}"
-    configs:
-      - source: ${_CFG_NAME[cp_$(ver::sanitize "$first_variant")]}
-        target: /config/config-prod.yaml
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/config-prod-${first_variant}.yaml, target: /config/config-prod.yaml, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -389,6 +352,7 @@ EOF
     # hostname=node<i> so the backend auto-derives CONTROLLER_ID=node<i>-controller,
     # matching the Envoy cluster/route (standalone <hostname>-controller model).
     local nc ni; nc=$(stackgen::_node_count)
+    cfgh=$(stackgen::_cfghash "$C/config-prod-${first_variant}.yaml")
     for ((ni=1;ni<=nc;ni++)); do
       cat <<EOF
   elchi-controller-node${ni}:
@@ -401,9 +365,10 @@ EOF
       CONTROLLER_GRPC_PORT: "${PORT_CONTROLLER_GRPC:-1960}"
       CONTROLLER_REST_LISTEN: "0.0.0.0:${PORT_CONTROLLER_REST:-1980}"
       CONTROLLER_GRPC_LISTEN: "0.0.0.0:${PORT_CONTROLLER_GRPC:-1960}"
-    configs:
-      - source: ${_CFG_NAME[cp_$(ver::sanitize "$first_variant")]}
-        target: /config/config-prod.yaml
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/config-prod-${first_variant}.yaml, target: /config/config-prod.yaml, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -424,7 +389,7 @@ EOF
         full=$(ver::envoy_full "$v")
         cpsvc="elchi-cp-${full//./-}-node${ni}"
         cpport=$(( ${PORT_CONTROL_PLANE_BASE:-1990} + slot ))
-        key="cp_$(ver::sanitize "$v")"
+        cfgh=$(stackgen::_cfghash "$C/config-prod-${v}.yaml")
         cat <<EOF
   ${cpsvc}:
     image: $(stackgen::_backend_image "$v")
@@ -434,9 +399,10 @@ EOF
       ELCHI_NODE_HOST: "node${ni}"
       CONTROL_PLANE_PORT: "${cpport}"
       CONTROL_PLANE_LISTEN: "0.0.0.0:${cpport}"
-    configs:
-      - source: ${_CFG_NAME[$key]}
-        target: /config/config-prod.yaml
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/config-prod-${v}.yaml, target: /config/config-prod.yaml, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -450,22 +416,25 @@ EOF
     done
 
     # ---- envoy (global edge) ----
+    if [ "$tls" = "true" ]; then
+      cfgh=$(stackgen::_cfghash "$C/envoy.yaml" "$T/server.crt" "$T/server.key")
+    else
+      cfgh=$(stackgen::_cfghash "$C/envoy.yaml")
+    fi
     cat <<EOF
   elchi-envoy:
     image: ${envoy_image}
     command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--service-cluster", "elchi-envoy", "--log-level", "info"]
     cap_add: ["NET_BIND_SERVICE"]
-    configs:
-      - source: ${_CFG_NAME[envoy]}
-        target: /etc/envoy/envoy.yaml
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/envoy.yaml, target: /etc/envoy/envoy.yaml, read_only: true}
 EOF
     if [ "$tls" = "true" ]; then
       cat <<EOF
-    secrets:
-      - source: ${_SEC_NAME[tls_crt]}
-        target: /etc/envoy/tls/server.crt
-      - source: ${_SEC_NAME[tls_key]}
-        target: /etc/envoy/tls/server.key
+      - {type: bind, source: ${T}/server.crt, target: /etc/envoy/tls/server.crt, read_only: true}
+      - {type: bind, source: ${T}/server.key, target: /etc/envoy/tls/server.key, read_only: true}
 EOF
     fi
     cat <<EOF
@@ -482,12 +451,14 @@ EOF
 EOF
 
     # ---- UI ----
+    cfgh=$(stackgen::_cfghash "$C/ui-config.js")
     cat <<EOF
   elchi-ui:
     image: ${ui_image}
-    configs:
-      - source: ${_CFG_NAME[ui_config]}
-        target: /usr/share/nginx/html/config.js
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/ui-config.js, target: /usr/share/nginx/html/config.js, read_only: true}
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -496,12 +467,15 @@ EOF
 EOF
 
     # ---- collector (global) ----
+    # collector.env stays an env_file: its values are read at deploy time and
+    # baked into the service spec, so a re-render already triggers a Swarm
+    # update (no bind-mount / cfghash needed). Editing it live needs a redeploy.
     if [ "$install_collector" = "1" ]; then
       cat <<EOF
   elchi-collector:
     image: ${collector_image}
     env_file:
-      - ./config/collector.env
+      - ${C}/collector.env
     ulimits: *elchi-ulimits
     networks: [elchi-net]
     deploy:
@@ -512,6 +486,7 @@ EOF
 
     # ---- coredns GSLB (global) ----
     if [ "$install_gslb" = "1" ]; then
+      cfgh=$(stackgen::_cfghash "$C/Corefile" "$C/coredns-zones/${zone}.db")
       cat <<EOF
   elchi-coredns:
     image: ${coredns_image}
@@ -520,11 +495,11 @@ EOF
     # NET_BIND_SERVICE file capability and Docker's default cap set includes
     # it, so a non-root bind of :53 works. cap_add keeps it explicit/robust.
     cap_add: ["NET_BIND_SERVICE"]
-    configs:
-      - source: ${_CFG_NAME[corefile]}
-        target: /etc/coredns/Corefile
-      - source: ${_CFG_NAME[corezone]}
-        target: /etc/coredns/zones/${ELCHI_GSLB_ZONE:-elchi.local}.db
+    labels:
+      elchi.cfghash: "${cfgh}"
+    volumes:
+      - {type: bind, source: ${C}/Corefile, target: /etc/coredns/Corefile, read_only: true}
+      - {type: bind, source: ${C}/coredns-zones/${zone}.db, target: /etc/coredns/zones/${zone}.db, read_only: true}
 EOF
       if [ "${ELCHI_GSLB_PUBLISH:-0}" = "1" ]; then
         cat <<EOF
@@ -543,24 +518,6 @@ EOF
       # on-failure leaves a global service silently at 0/0 on a clean exit.
       restart_policy: {condition: any, delay: 5s}
 EOF
-    fi
-
-    # ----- top-level configs -----
-    printf '\nconfigs:\n'
-    for key in "${!_CFG_NAME[@]}"; do
-      printf '  %s:\n' "${_CFG_NAME[$key]}"
-      printf '    name: %s\n' "${_CFG_NAME[$key]}"
-      printf '    file: ./%s\n' "${_CFG_PATH[$key]}"
-    done
-
-    # ----- top-level secrets -----
-    if [ "${#_SEC_NAME[@]}" -gt 0 ]; then
-      printf '\nsecrets:\n'
-      for key in "${!_SEC_NAME[@]}"; do
-        printf '  %s:\n' "${_SEC_NAME[$key]}"
-        printf '    name: %s\n' "${_SEC_NAME[$key]}"
-        printf '    file: ./%s\n' "${_SEC_PATH[$key]}"
-      done
     fi
   } > "$out"
 
@@ -584,10 +541,7 @@ stackgen::_emit_volumes() {
   printf '\n'
 }
 
-# stackgen::active_object_names — print the docker config/secret names this
-# generation references (for prune of orphans by uninstall/upgrade).
-stackgen::active_object_names() {
-  local k
-  for k in "${!_CFG_NAME[@]}"; do printf 'config %s\n' "${_CFG_NAME[$k]}"; done
-  for k in "${!_SEC_NAME[@]}"; do printf 'secret %s\n' "${_SEC_NAME[$k]}"; done
-}
+# stackgen::active_object_names — kept for back-compat. The stack no longer
+# creates docker config/secret objects (everything is a host bind-mount), so
+# there are none to enumerate for orphan pruning.
+stackgen::active_object_names() { :; }

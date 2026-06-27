@@ -131,13 +131,32 @@ grafana,ui}.sh`, but with these deliberate Docker divergences:
   container. (`REGISTRY_TLS_ENABLED: false`.)
 - **MongoDB** runs standalone with a scoped `elchi` app user created via a
   first-init script (mirroring the standalone app user); no replica set.
-- **Secrets**: TLS material, mongo root creds, and the Grafana password are
-  Docker **secrets**; everything else is baked into rendered **configs**
-  (acceptable Stage-1 trade-off — configs share the same Raft store).
-- The **stack file is generated** (`stackgen.sh` → `gen/stack.yml`) rather
-  than hand-maintained, because every config/secret is referenced by a
-  **content-hashed name** so a re-render produces a clean Swarm rolling
-  update (docker configs are immutable).
+- **Configs & secrets are host bind-mounts**, not Swarm `configs:`/`secrets:`.
+  Every rendered file lives under **`/etc/elchi`** (`config/`, `secrets/`,
+  `tls/`) and is bind-mounted into the container, so operators can edit it in
+  place (see *Editing configs* below). Secrets (TLS key, mongo creds/keyfile,
+  Grafana password) are files under `/etc/elchi/secrets` exposed at
+  `/run/secrets/<name>` in-container.
+- The **stack file is generated** (`stackgen.sh` → `gen/stack.yml`). Because a
+  bind-mount content change is invisible to Swarm, each service carries a
+  container label **`elchi.cfghash`** over its mounted files — a re-render that
+  changes a file changes the label, so `docker stack deploy` rolling-updates
+  exactly the affected services.
+
+### Editing configs (without re-running the installer)
+
+The bind-mounted files under `/etc/elchi` are the live source of truth:
+
+```bash
+sudo vi /etc/elchi/config/Corefile           # or envoy.yaml, config-prod-*.yaml, …
+docker service update --force elchi_elchi-coredns   # restart to pick it up
+```
+
+Re-running `install.sh` still works and auto-applies changes (via `elchi.cfghash`).
+**Multi-node:** the installer SSH-copies `/etc/elchi` to every node before deploy;
+for a manual live edit on a multi-node cluster, edit the file on **every** node
+that runs the service (or re-run the installer). One exception: `collector.env`
+is an `env_file:` (read at deploy), so editing it needs a redeploy/`--force`.
 
 Pure helpers (`rand_hex`/`rand_alnum`, version parsing) are **copied** from
 the standalone `lib/` into `lib/common.sh` + `lib/versions_parse.sh` (not

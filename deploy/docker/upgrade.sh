@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # upgrade.sh — in-place upgrade of the elchi Docker Swarm stack.
 #
-# install.sh is fully idempotent: secrets are preserved, configs are
-# content-hashed (changed config → new name → Swarm rolling update), and
-# `docker stack deploy` performs a rolling update of every changed service.
-# So an upgrade is just install.sh re-run with the new --*-version flags.
+# install.sh is fully idempotent: secrets are preserved, configs are bind-mounted
+# from /etc/elchi and carry a per-service `elchi.cfghash` label (changed file →
+# new label → Swarm rolling update), and `docker stack deploy` rolling-updates
+# every changed service. So an upgrade is just install.sh re-run with the new
+# --*-version flags.
 #
 #   upgrade.sh --main-address=elchi.example.com --ui-version=v1.5.1 \
 #              --backend-version=v1.6.0-v0.14.0-envoy1.38.3

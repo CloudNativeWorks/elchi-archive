@@ -67,6 +67,22 @@ ssh::run_root() {
   fi
 }
 
+# ssh::copy_tree <host> <local-dir> <remote-dir> — replicate a directory tree to
+# a remote node, preserving modes (tar -p). Used to ship the bind-mounted
+# /etc/elchi tree to every node, since Swarm no longer distributes it for us.
+# Streams tar over the SSH transport (no scp needed; works with key OR password
+# auth via ssh::_wrap). Callers skip M1 (ssh::is_local).
+ssh::copy_tree() {
+  local host=$1 src=$2 dst=$3 sudo=""
+  [ -d "$src" ] || return 0
+  [ "${ELCHI_SSH_USER:-root}" = "root" ] || sudo="sudo -n "
+  ssh::run_root "$host" "mkdir -p $(printf '%q' "$dst")" || return 1
+  # NB: plain ssh (not ssh::run, which passes -n) so the tar stream reaches stdin.
+  tar -C "$src" -cf - . \
+    | ssh::_wrap ssh "${_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" \
+        "${sudo}tar -C $(printf '%q' "$dst") -xpf -"
+}
+
 # ssh::test <host> — reachable AND can run as root? (0 ok / non-zero why)
 ssh::test() {
   local host=$1

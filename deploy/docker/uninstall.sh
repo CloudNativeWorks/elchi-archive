@@ -20,12 +20,14 @@ ELCHI_DOCKER_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && 
 
 STACK_NAME=${ELCHI_STACK_NAME:-elchi}
 ELCHI_STATE_DIR=${ELCHI_STATE_DIR:-${HOME:-/root}/.elchi-docker}
+ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
 PURGE=0; PURGE_DATA=0; LEAVE_SWARM=0
 
 for arg in "$@"; do
   case "$arg" in
     --stack-name=*) STACK_NAME=${arg#*=} ;;
     --state-dir=*)  ELCHI_STATE_DIR=${arg#*=} ;;
+    --etc-dir=*)    ELCHI_ETC=${arg#*=} ;;
     --nodes=*)      export ELCHI_NODES=${arg#*=} ;;
     --ssh-user=*)   export ELCHI_SSH_USER=${arg#*=} ;;
     --ssh-port=*)   export ELCHI_SSH_PORT=${arg#*=} ;;
@@ -76,6 +78,10 @@ worker_cleanup() {
       log::node "$node" "removing data volumes"
       ssh::run_root "$node" "docker volume ls -q --filter name=${STACK_NAME}_ | xargs -r docker volume rm >/dev/null 2>&1 || true"
     fi
+    if [ "$PURGE" = "1" ]; then
+      log::node "$node" "removing ${ELCHI_ETC}"
+      ssh::run_root "$node" "rm -rf ${ELCHI_ETC} >/dev/null 2>&1 || true"
+    fi
     if [ "$LEAVE_SWARM" = "1" ]; then
       log::node "$node" "leaving the Swarm"
       ssh::run_root "$node" "docker swarm leave --force >/dev/null 2>&1 || true"
@@ -95,13 +101,15 @@ fi
 
 if [ "$PURGE" = "1" ]; then
   log::step "Removing configs, secrets and state"
-  # NB: '|| true' on the grep — when the stack rm already removed the configs,
-  # grep matches nothing and exits 1, which under 'set -o pipefail' would abort
-  # the whole script BEFORE the swarm-leave step below.
+  # Configs/secrets are bind-mounted from ${ELCHI_ETC} now (not Swarm objects),
+  # but sweep any LEGACY elchi_* docker config/secret objects left by older
+  # installs. '|| true' on the grep — when none match it exits 1, which under
+  # 'set -o pipefail' would abort the script before the swarm-leave step.
   docker config ls --format '{{.Name}}' 2>/dev/null | { grep '^elchi_' || true; } \
     | while read -r c; do docker config rm "$c" >/dev/null 2>&1 || true; done
   docker secret ls --format '{{.Name}}' 2>/dev/null | { grep '^elchi_' || true; } \
     | while read -r s; do docker secret rm "$s" >/dev/null 2>&1 || true; done
+  [ -d "$ELCHI_ETC" ] && rm -rf "$ELCHI_ETC" && log::info "removed ${ELCHI_ETC}" || true
   [ -d "$ELCHI_STATE_DIR" ] && rm -rf "$ELCHI_STATE_DIR" && log::info "removed state dir ${ELCHI_STATE_DIR}" || true
 fi
 

@@ -20,11 +20,18 @@ export ELCHI_DOCKER_DIR
 ELCHI_STATE_DIR=${ELCHI_STATE_DIR:-${HOME:-/root}/.elchi-docker}
 export ELCHI_STATE_DIR
 GEN_DIR="${ELCHI_STATE_DIR}/gen"
-CONFIG_DIR="${GEN_DIR}/config"
-SECRETS_DIR="${GEN_DIR}/secrets"
-TLS_DIR="${GEN_DIR}/tls"
-ELCHI_DASHBOARDS_DIR="${ELCHI_STATE_DIR}/grafana-dashboards"
-export GEN_DIR CONFIG_DIR SECRETS_DIR TLS_DIR ELCHI_DASHBOARDS_DIR
+# The config/secret/TLS tree is BIND-MOUNTED into the containers (not shipped as
+# immutable Swarm configs), so it lives in a stable, conventional, operator-
+# editable location — /etc/elchi, mirroring the standalone installer. Operators
+# edit a file here and apply with `docker service update --force <svc>`; a re-run
+# of the installer still rolling-updates changed services (per-service cfghash
+# label in stackgen). GEN_DIR keeps only the generated stack.yml.
+ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
+CONFIG_DIR="${ELCHI_ETC}/config"
+SECRETS_DIR="${ELCHI_ETC}/secrets"
+TLS_DIR="${ELCHI_ETC}/tls"
+ELCHI_DASHBOARDS_DIR="${ELCHI_ETC}/grafana-dashboards"
+export ELCHI_ETC GEN_DIR CONFIG_DIR SECRETS_DIR TLS_DIR ELCHI_DASHBOARDS_DIR
 
 # shellcheck source=/dev/null
 . "${ELCHI_DOCKER_DIR}/versions.env"
@@ -162,10 +169,13 @@ for arg in "$@"; do
     --offline=*)           OFFLINE_BUNDLE=${arg#*=} ;;
     --stack-name=*)        STACK_NAME=${arg#*=} ;;
     --state-dir=*)         ELCHI_STATE_DIR=${arg#*=}; export ELCHI_STATE_DIR
-                           GEN_DIR="${ELCHI_STATE_DIR}/gen"; CONFIG_DIR="${GEN_DIR}/config"
-                           SECRETS_DIR="${GEN_DIR}/secrets"; TLS_DIR="${GEN_DIR}/tls"
-                           ELCHI_DASHBOARDS_DIR="${ELCHI_STATE_DIR}/grafana-dashboards"
-                           export GEN_DIR CONFIG_DIR SECRETS_DIR TLS_DIR ELCHI_DASHBOARDS_DIR ;;
+                           # Only the generated stack.yml lives under STATE; the
+                           # editable config tree stays at ELCHI_ETC (--etc-dir).
+                           GEN_DIR="${ELCHI_STATE_DIR}/gen"; export GEN_DIR ;;
+    --etc-dir=*)           ELCHI_ETC=${arg#*=}; export ELCHI_ETC
+                           CONFIG_DIR="${ELCHI_ETC}/config"; SECRETS_DIR="${ELCHI_ETC}/secrets"
+                           TLS_DIR="${ELCHI_ETC}/tls"; ELCHI_DASHBOARDS_DIR="${ELCHI_ETC}/grafana-dashboards"
+                           export CONFIG_DIR SECRETS_DIR TLS_DIR ELCHI_DASHBOARDS_DIR ;;
     --placement-m1=*)      export ELCHI_PLACEMENT_M1=${arg#*=} ;;
     --dry-run)             ELCHI_DRY_RUN=1 ;;
     --non-interactive)     export ELCHI_NON_INTERACTIVE=1 ;;
@@ -536,16 +546,102 @@ copy_assets() {
   fi
 }
 
+# ----- /etc/elchi editable tree (bind-mount source on this node) ------------
+etc_prepare() {
+  install -d -m 0755 "$ELCHI_ETC"            2>/dev/null || mkdir -p "$ELCHI_ETC"
+  # config/ is 0750: container reads via bind (resolved by root dockerd, not
+  # gated by this mode), so a restrictive dir still works while keeping the
+  # secrets embedded in rendered configs unreadable to non-root HOST users.
+  install -d -m 0750 "$CONFIG_DIR"           2>/dev/null || mkdir -p "$CONFIG_DIR"
+  install -d -m 0700 "$SECRETS_DIR"          2>/dev/null || mkdir -p "$SECRETS_DIR"
+  install -d -m 0750 "$TLS_DIR"              2>/dev/null || mkdir -p "$TLS_DIR"
+  install -d -m 0755 "$ELCHI_DASHBOARDS_DIR" 2>/dev/null || mkdir -p "$ELCHI_DASHBOARDS_DIR"
+  install -d -m 0755 "$GEN_DIR"              2>/dev/null || mkdir -p "$GEN_DIR"
+}
+
+# Bind-mounts expose the host file's OWN mode to the container, so a 0600 file is
+# unreadable by a non-root container uid (Swarm configs/secrets defaulted to
+# 0444). Make configs world-readable (they already embed secrets and were 0444
+# in-container before — no posture change vs the old gen/config); keep real
+# secrets root-readable except the few a non-root process reads directly.
+etc_harden() {
+  # dirs 0750 (host-side protection), files 0644 (readable by non-root container
+  # uids — bind access is not gated by the dir mode, see etc_prepare).
+  find "$CONFIG_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+  find "$CONFIG_DIR" -type f -exec chmod 0644 {} + 2>/dev/null || true
+  find "$ELCHI_DASHBOARDS_DIR" -type f -exec chmod 0644 {} + 2>/dev/null || true
+  if [ -d "$SECRETS_DIR" ]; then
+    find "$SECRETS_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+    # grafana reads its admin-password file as a non-root uid (472).
+    [ -f "$SECRETS_DIR/ELCHI_GRAFANA_PASSWORD" ] && chmod 0644 "$SECRETS_DIR/ELCHI_GRAFANA_PASSWORD" || true
+  fi
+  [ -f "$TLS_DIR/server.crt" ] && chmod 0644 "$TLS_DIR/server.crt" || true
+  [ -f "$TLS_DIR/server.key" ] && chmod 0640 "$TLS_DIR/server.key" || true
+}
+
+# ----- multi-node: push the editable /etc/elchi tree to every other node ----
+# Swarm no longer distributes these files for us (they are bind-mounts now), so
+# each node that can run a task needs them on local disk. Copy the whole tree to
+# every non-M1 node before deploy (re-copied each run so edits/re-renders land).
+distribute_etc() {
+  [ -n "${ELCHI_NODES:-}" ] || return 0
+  local -a nodes; mapfile -t nodes < <(csv_split "$ELCHI_NODES")
+  [ "${#nodes[@]}" -gt 1 ] || return 0
+  # With --no-ssh the installer can't reach the workers, so it can't push the
+  # bind-mount tree. Warn loudly — the operator MUST place it on every node, or
+  # those nodes' tasks will start against empty (Docker-auto-created) dirs.
+  if [ "${ELCHI_NO_SSH:-0}" = "1" ]; then
+    log::warn "--no-ssh: NOT distributing ${ELCHI_ETC} to the other nodes."
+    log::warn "  Bind-mounts need these files on EVERY node. Copy them yourself, e.g.:"
+    log::warn "    tar -C ${ELCHI_ETC} -cf - . | ssh root@<node> 'mkdir -p ${ELCHI_ETC} && tar -C ${ELCHI_ETC} -xpf -'"
+    return 0
+  fi
+  ssh::configure
+  local i node
+  for i in "${!nodes[@]}"; do
+    [ "$i" = "0" ] && continue          # M1 already has the files locally
+    node=${nodes[$i]}
+    ssh::is_local "$node" && continue
+    log::node "$node" "syncing ${ELCHI_ETC}"
+    ssh::copy_tree "$node" "$ELCHI_ETC" "$ELCHI_ETC" \
+      || die "failed to copy ${ELCHI_ETC} to ${node}"
+  done
+  log::ok "config tree distributed to all nodes"
+}
+
+# Guard against Docker's bind-mount footgun: if a `source:` path doesn't exist
+# at deploy time, Docker silently creates an empty DIRECTORY there and mounts
+# it — the container then sees a dir where it expects a file and fails in
+# confusing ways. Verify every bind source the generated stack references
+# exists on THIS node before deploying (workers get the same tree via
+# distribute_etc). Catches any render/stackgen condition mismatch early.
+verify_bind_sources() {
+  local st="${GEN_DIR}/stack.yml" missing=0 src
+  [ -f "$st" ] || return 0
+  while IFS= read -r src; do
+    [ -n "$src" ] || continue
+    [ -e "$src" ] || { log::err "bind-mount source missing: ${src}"; missing=1; }
+  done < <(grep -oE 'source: [^,}]+' "$st" | sed -E 's/^source: +//; s/ +$//' | sort -u)
+  [ "$missing" = "0" ] || die "rendered config/secret files are missing — aborting before deploy (Docker would mount empty dirs). Re-run render or report this."
+}
+
 # ----- main ----------------------------------------------------------------
 main() {
-  # Dry-run is a pure render: no docker daemon, no swarm init, no deploy.
+  # Dry-run is a pure render: no docker daemon, no swarm init, no deploy. Keep
+  # everything under GEN_DIR so it needs no root and doesn't touch /etc/elchi.
   if [ "$ELCHI_DRY_RUN" = "1" ]; then
     require_cmd openssl
+    ELCHI_ETC="${GEN_DIR}"; CONFIG_DIR="${GEN_DIR}/config"; SECRETS_DIR="${GEN_DIR}/secrets"
+    TLS_DIR="${GEN_DIR}/tls"; ELCHI_DASHBOARDS_DIR="${GEN_DIR}/grafana-dashboards"
+    export ELCHI_ETC CONFIG_DIR SECRETS_DIR TLS_DIR ELCHI_DASHBOARDS_DIR
+    etc_prepare
     copy_assets
     secrets::mint
     tls_setup
     render::all
+    etc_harden
     stackgen::generate
+    verify_bind_sources
     log::ok "dry-run complete — inspect rendered config + stack at ${GEN_DIR}"
     find "$GEN_DIR" -type f | sort | sed 's/^/    /'
     return 0
@@ -555,11 +651,15 @@ main() {
   orchestrate_swarm
   resolve_nodes
   load_offline
+  etc_prepare
   copy_assets
   secrets::mint
   tls_setup
   render::all
   stackgen::generate
+  etc_harden
+  verify_bind_sources
+  distribute_etc
   deploy
   clickhouse_ha_init
   health_wait
