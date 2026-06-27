@@ -559,24 +559,25 @@ etc_prepare() {
   install -d -m 0755 "$GEN_DIR"              2>/dev/null || mkdir -p "$GEN_DIR"
 }
 
-# Bind-mounts expose the host file's OWN mode to the container, so a 0600 file is
-# unreadable by a non-root container uid (Swarm configs/secrets defaulted to
-# 0444). Make configs world-readable (they already embed secrets and were 0444
-# in-container before — no posture change vs the old gen/config); keep real
-# secrets root-readable except the few a non-root process reads directly.
+# Bind-mounts expose the host file's OWN mode to the container, and the official
+# images run their processes as NON-root (mongodb, envoy, clickhouse, grafana,
+# coredns, otel, nginx). Swarm configs/secrets were world-readable IN-container
+# (mode 0444) — replicate that: every mounted FILE is 0644 so any container uid
+# can read it. Host-side exposure of the secrets they contain is contained by
+# the restrictive parent DIRS (config 0750, secrets/tls 0700) — bind access is
+# resolved by root dockerd, so a tight dir doesn't block the container.
 etc_harden() {
-  # dirs 0750 (host-side protection), files 0644 (readable by non-root container
-  # uids — bind access is not gated by the dir mode, see etc_prepare).
-  find "$CONFIG_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
-  find "$CONFIG_DIR" -type f -exec chmod 0644 {} + 2>/dev/null || true
+  find "$CONFIG_DIR"           -type d -exec chmod 0750 {} + 2>/dev/null || true
+  find "$CONFIG_DIR"           -type f -exec chmod 0644 {} + 2>/dev/null || true
   find "$ELCHI_DASHBOARDS_DIR" -type f -exec chmod 0644 {} + 2>/dev/null || true
   if [ -d "$SECRETS_DIR" ]; then
-    find "$SECRETS_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
-    # grafana reads its admin-password file as a non-root uid (472).
-    [ -f "$SECRETS_DIR/ELCHI_GRAFANA_PASSWORD" ] && chmod 0644 "$SECRETS_DIR/ELCHI_GRAFANA_PASSWORD" || true
+    chmod 0700 "$SECRETS_DIR" 2>/dev/null || true
+    find "$SECRETS_DIR" -type f -exec chmod 0644 {} + 2>/dev/null || true
   fi
-  [ -f "$TLS_DIR/server.crt" ] && chmod 0644 "$TLS_DIR/server.crt" || true
-  [ -f "$TLS_DIR/server.key" ] && chmod 0640 "$TLS_DIR/server.key" || true
+  if [ -d "$TLS_DIR" ]; then
+    chmod 0700 "$TLS_DIR" 2>/dev/null || true
+    find "$TLS_DIR" -type f -exec chmod 0644 {} + 2>/dev/null || true
+  fi
 }
 
 # ----- multi-node: push the editable /etc/elchi tree to every other node ----
