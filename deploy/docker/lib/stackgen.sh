@@ -495,6 +495,14 @@ EOF
     # NET_BIND_SERVICE file capability and Docker's default cap set includes
     # it, so a non-root bind of :53 works. cap_add keeps it explicit/robust.
     cap_add: ["NET_BIND_SERVICE"]
+    # Disable the image healthcheck: it reports ready only once the GSLB zone is
+    # configured in the backend (a deliberate POST-install step). Left enabled,
+    # Swarm would keep replacing the "unhealthy" task forever, so the service
+    # never converges and the installer's health-wait times out. coredns runs
+    # fine meanwhile and the elchi plugin fetches the zone snapshot in the
+    # background once the operator creates the zone — no restart needed.
+    healthcheck:
+      disable: true
     labels:
       elchi.cfghash: "${cfgh}"
     volumes:
