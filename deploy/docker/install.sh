@@ -245,6 +245,22 @@ preflight() {
     log::ok "Swarm initialized${adv:+ (${adv#--advertise-addr=})}"
   else
     log::ok "Swarm active"
+    # Guard against a LEFTOVER swarm from an earlier run that advertises the
+    # wrong address. For a multi-node topology the manager must advertise M1's
+    # own IP (= first --nodes); if a stale swarm advertises something else
+    # (e.g. an earlier single-node run that used --main-address), every worker
+    # join dials the wrong host on :2377 → "connection refused". Fail early with
+    # a clear fix instead of that confusing downstream error.
+    if [ -n "${ELCHI_NODES:-}" ]; then
+      local _m1ip _advaddr
+      _m1ip=$(csv_split "$ELCHI_NODES" | sed -n 1p)
+      _advaddr=$(docker node inspect self --format '{{with .ManagerStatus}}{{.Addr}}{{end}}' 2>/dev/null | sed 's/:[0-9]*$//')
+      if [[ "$_advaddr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$_m1ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$_advaddr" != "$_m1ip" ]; then
+        log::err "this host's Swarm advertises ${_advaddr}, but M1 (first --nodes) is ${_m1ip}."
+        log::err "A leftover Swarm from an earlier run will make workers fail to join (:2377)."
+        die "reset it and retry: run 'docker swarm leave --force' on EVERY node, then re-run this installer on ${_m1ip}."
+      fi
+    fi
   fi
   log::info "stack=${STACK_NAME} main=${ELCHI_MAIN_ADDRESS} port=${ELCHI_PORT} tls=${ELCHI_TLS_ENABLED}"
   log::info "backend variants: ${ELCHI_BACKEND_VARIANTS}"
