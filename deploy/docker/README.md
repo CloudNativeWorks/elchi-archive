@@ -245,20 +245,27 @@ Keeper quorum.
   throttles ClickHouse / Envoy / Mongo under load. The generated stack applies
   `nofile: 1048576` + `nproc: 65535` to every service via a YAML anchor (Swarm
   honours `ulimits:` at runtime).
-- **Host-level sysctls (set these on each Docker host for best performance at
-  scale).** These are kernel-wide (not namespaced), so a Swarm container can't
-  set them — the node must. The standalone installer sets them on bare metal;
-  for Docker, tune the host:
-  ```bash
-  # /etc/sysctl.d/99-elchi.conf  (then: sysctl --system)
-  vm.max_map_count = 1966080      # MongoDB / ClickHouse mmap
-  vm.swappiness = 1
-  fs.file-max = 2097152
-  net.core.somaxconn = 65535
-  ```
-  Also disable Transparent Huge Pages on the host for MongoDB (it only warns
-  otherwise). On Docker Desktop these are managed by the VM and rarely need
-  touching for small setups.
+- **Host tuning — applied by default on every node** (kernel-wide knobs aren't
+  namespaced, so a container can't set them — the node must). `install.sh` does,
+  on M1 and over SSH on each other node:
+  - **sysctl** → `/etc/sysctl.d/99-elchi.conf` + `sysctl --system`: mirrors the
+    standalone set (`vm.max_map_count=262144`, `vm.swappiness=1`,
+    `net.core.somaxconn=65535`, ephemeral port range, TCP reuse/keepalive, FD
+    ceilings, inotify) plus `net.netfilter.nf_conntrack_max=1048576` (Envoy +
+    Docker NAT under load).
+  - **Transparent Huge Pages OFF** → a `elchi-thp.service` oneshot unit
+    (ordered `Before=docker.service`, persists across reboot) — **MongoDB and
+    ClickHouse require this**.
+  - **Docker log rotation + `live-restore`** → writes `/etc/docker/daemon.json`
+    (json-file `max-size=50m`, `max-file=5`) **only if absent**, then restarts
+    docker once (pre-deploy, so nothing is bounced). Prevents the classic
+    unbounded-log disk-fill.
+
+  Pass **`--no-tune-host`** to skip ALL of the above on a shared / externally-
+  managed host. All steps are best-effort (never abort the install) and
+  idempotent. `uninstall.sh --purge` removes the sysctl drop-in + THP unit
+  (daemon.json is left in place). On Docker Desktop the VM manages these and the
+  systemd/`daemon.json` steps are skipped automatically.
 
 ## Notes / gotchas
 

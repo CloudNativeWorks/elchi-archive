@@ -81,6 +81,9 @@ Features / external services:
   --gslb-zone=<domain>        GSLB authoritative zone (default: elchi.local).
   --gslb-publish              Publish CoreDNS :53 on the host (ingress).
   --no-collector              Disable elchi-collector + ClickHouse.
+  --no-tune-host              Don't apply kernel sysctl tuning to the host(s)
+                              (default: tune). Use on a shared / externally-
+                              managed Docker host.
   --mongo=local|external      (default: local) ; --mongo-uri=<uri> for external.
   --clickhouse=local|external ; --clickhouse-uri=<uri> for external.
   --vm=local|external         ; --vm-endpoint=<url|host:port> for external.
@@ -144,6 +147,7 @@ for arg in "$@"; do
     --gslb-forwarders=*)   export ELCHI_GSLB_FORWARDERS=${arg#*=} ;;
     --gslb-regions=*)      export ELCHI_GSLB_REGIONS=${arg#*=} ;;
     --no-collector)        export ELCHI_INSTALL_COLLECTOR=0 ;;
+    --no-tune-host)        export ELCHI_TUNE_HOST=0 ;;
     --nodes=*)             export ELCHI_NODES=${arg#*=} ;;
     --ssh-user=*)          export ELCHI_SSH_USER=${arg#*=}; _SSH_USER_GIVEN=1 ;;
     --ssh-port=*)          export ELCHI_SSH_PORT=${arg#*=} ;;
@@ -580,6 +584,116 @@ etc_harden() {
   fi
 }
 
+# tune::on_all_nodes <root-shell-script> — run a root snippet on M1 (local) and
+# on every other --nodes host (best-effort over SSH). Used for host tuning that
+# must hit each node (sysctl/THP/docker are host-global, not per-container).
+tune::on_all_nodes() {
+  local script=$1
+  bash -c "$script" || log::warn "host-tune step had non-fatal errors on this node"
+  [ -n "${ELCHI_NODES:-}" ] || return 0
+  local -a nodes; mapfile -t nodes < <(csv_split "$ELCHI_NODES")
+  [ "${#nodes[@]}" -gt 1 ] || return 0
+  if [ "${ELCHI_NO_SSH:-0}" = "1" ]; then
+    log::warn "--no-ssh: host tuning applied to THIS node only; apply it on the others yourself"
+    return 0
+  fi
+  ssh::configure
+  local i node
+  for i in "${!nodes[@]}"; do
+    [ "$i" = "0" ] && continue
+    node=${nodes[$i]}
+    ssh::is_local "$node" && continue
+    log::node "$node" "applying host tuning"
+    ssh::run_root "$node" "$script" || log::warn "host tuning failed on ${node} — apply it manually"
+  done
+}
+
+# ----- host tuning (sysctl + THP + docker log rotation) --------------------
+# Default ON; --no-tune-host skips it (shared / externally-managed host). The
+# Docker stack sets no resource limits and raises container ulimits, but the
+# things the DBs/proxy actually need under load are HOST-global, not settable
+# per-container, so they must be applied on every node:
+#   * sysctl (mirrors deploy/standalone/lib/sysctl.sh) + nf_conntrack_max
+#   * Transparent Huge Pages OFF  — MongoDB + ClickHouse require this
+#   * docker daemon log rotation + live-restore (only if not already configured)
+# All best-effort: a tuning failure never aborts the install.
+tune_host() {
+  if [ "${ELCHI_TUNE_HOST:-1}" != "1" ]; then
+    log::info "host tuning skipped (--no-tune-host) — see README for the recommended values"
+    return 0
+  fi
+  log::step "Applying host tuning (sysctl + THP + docker log rotation)"
+  local script
+  script=$(cat <<'TUNE'
+set -u
+# ---------- sysctl ----------
+modprobe nf_conntrack 2>/dev/null || true
+install -d -m 0755 /etc/sysctl.d 2>/dev/null || true
+cat > /etc/sysctl.d/99-elchi.conf <<'EOF'
+# Managed by the elchi Docker installer. Re-applied each run; --no-tune-host skips.
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 10000
+net.ipv4.ip_local_port_range = 10240 65535
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_keepalive_time = 120
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 5
+net.ipv4.tcp_syncookies = 1
+net.netfilter.nf_conntrack_max = 1048576
+fs.file-max = 2097152
+fs.nr_open = 2097152
+vm.swappiness = 1
+vm.max_map_count = 262144
+fs.inotify.max_queued_events = 65536
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches = 524288
+EOF
+sysctl --system >/dev/null 2>&1 || true
+
+# ---------- Transparent Huge Pages OFF (MongoDB/ClickHouse) ----------
+# Persistent via a oneshot unit (the /sys knobs reset on reboot). Ordered
+# Before=docker.service so the DB containers always start with THP disabled.
+if command -v systemctl >/dev/null 2>&1; then
+  cat > /etc/systemd/system/elchi-thp.service <<'UNIT'
+[Unit]
+Description=Disable Transparent Huge Pages (elchi: MongoDB/ClickHouse)
+DefaultDependencies=no
+After=local-fs.target
+Before=docker.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true; echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true'
+[Install]
+WantedBy=basic.target
+UNIT
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now elchi-thp.service >/dev/null 2>&1 || true
+fi
+
+# ---------- Docker log rotation + live-restore ----------
+# Unbounded json-file logs are the classic Swarm disk-fill footgun. Only write
+# daemon.json if absent (respect an operator's existing config), and restart
+# docker only then. Done pre-deploy, so no elchi services are bounced.
+if command -v systemctl >/dev/null 2>&1 && [ ! -e /etc/docker/daemon.json ]; then
+  install -d -m 0755 /etc/docker 2>/dev/null || true
+  cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "50m", "max-file": "5" },
+  "live-restore": true
+}
+JSON
+  systemctl restart docker >/dev/null 2>&1 || true
+  for _i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+fi
+TUNE
+)
+  tune::on_all_nodes "$script"
+  log::ok "host tuning applied"
+}
+
 # ----- multi-node: push the editable /etc/elchi tree to every other node ----
 # Swarm no longer distributes these files for us (they are bind-mounts now), so
 # each node that can run a task needs them on local disk. Copy the whole tree to
@@ -651,6 +765,7 @@ main() {
   preflight
   orchestrate_swarm
   resolve_nodes
+  tune_host
   load_offline
   etc_prepare
   copy_assets

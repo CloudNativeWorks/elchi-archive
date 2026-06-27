@@ -79,8 +79,8 @@ worker_cleanup() {
       ssh::run_root "$node" "docker volume ls -q --filter name=${STACK_NAME}_ | xargs -r docker volume rm >/dev/null 2>&1 || true"
     fi
     if [ "$PURGE" = "1" ]; then
-      log::node "$node" "removing ${ELCHI_ETC}"
-      ssh::run_root "$node" "rm -rf ${ELCHI_ETC} >/dev/null 2>&1 || true"
+      log::node "$node" "removing ${ELCHI_ETC} + host tuning"
+      ssh::run_root "$node" "rm -rf ${ELCHI_ETC} >/dev/null 2>&1 || true; rm -f /etc/sysctl.d/99-elchi.conf >/dev/null 2>&1 && sysctl --system >/dev/null 2>&1 || true; systemctl disable --now elchi-thp.service >/dev/null 2>&1 || true; rm -f /etc/systemd/system/elchi-thp.service >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true"
     fi
     if [ "$LEAVE_SWARM" = "1" ]; then
       log::node "$node" "leaving the Swarm"
@@ -111,6 +111,19 @@ if [ "$PURGE" = "1" ]; then
     | while read -r s; do docker secret rm "$s" >/dev/null 2>&1 || true; done
   [ -d "$ELCHI_ETC" ] && rm -rf "$ELCHI_ETC" && log::info "removed ${ELCHI_ETC}" || true
   [ -d "$ELCHI_STATE_DIR" ] && rm -rf "$ELCHI_STATE_DIR" && log::info "removed state dir ${ELCHI_STATE_DIR}" || true
+  # host tuning installed by default (skip with install --no-tune-host).
+  if [ -f /etc/sysctl.d/99-elchi.conf ]; then
+    rm -f /etc/sysctl.d/99-elchi.conf && sysctl --system >/dev/null 2>&1 || true
+    log::info "removed /etc/sysctl.d/99-elchi.conf"
+  fi
+  if [ -f /etc/systemd/system/elchi-thp.service ]; then
+    systemctl disable --now elchi-thp.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/elchi-thp.service && systemctl daemon-reload >/dev/null 2>&1 || true
+    log::info "removed elchi-thp.service"
+  fi
+  # NB: /etc/docker/daemon.json is left in place — it may carry settings other
+  # workloads rely on; removing it would need a docker restart. Remove by hand
+  # if you want elchi's log-rotation defaults gone.
 fi
 
 if [ "$LEAVE_SWARM" = "1" ]; then
