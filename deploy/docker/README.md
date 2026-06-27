@@ -53,13 +53,16 @@ on every node, or push the images to a local `registry:2`.)
 
 ## Common flags
 
-`--main-address=` (required) · `--port=` (443) · `--backend-version=<csv>` ·
-`--ui-version=` · `--coredns-version=` · `--collector-version=` ·
-`--image-repo=` · `--tls=self-signed|provided` (`--cert= --key=`) ·
-`--no-gslb` / `--gslb-zone=` / `--gslb-publish` · `--no-collector` ·
-`--mongo=local|external` (`--mongo-uri=`) · `--clickhouse=…` · `--vm=…` ·
-`--grafana-user= --grafana-password=` · `--enable-demo` · `--offline=<tar>` ·
-`--stack-name=` · `--placement-m1="<expr>"` · `--state-dir=` · `--dry-run`.
+`--main-address=` (required) · `--port=` (443) · `--ui-port=` (8080) ·
+`--backend-version=<csv>` · `--ui-version=` · `--coredns-version=` ·
+`--collector-version=` · `--image-repo=` · `--tls=self-signed|provided`
+(`--cert= --key=`) · `--no-gslb` / `--gslb-zone=` / `--gslb-publish` ·
+`--no-collector` · `--mongo=local|external` (`--mongo-uri=`) · `--clickhouse=…` ·
+`--vm=…` · `--grafana-user= --grafana-password=` · `--enable-demo` ·
+`--no-tune-host` · `--offline=<tar>` · `--stack-name=` ·
+`--placement-m1="<expr>"` · `--state-dir=` · `--etc-dir=` · `--dry-run`.
+Multi-node: `--nodes=<csv>` · `--ssh-user= --ssh-key= --ssh-password=` ·
+`--no-ssh` (see *High availability* below).
 
 Run `install.sh --help` for the full list. Defaults for component image tags
 live in **`versions.env`** (the single source of truth, parallel to the
@@ -269,14 +272,21 @@ Keeper quorum.
 
 ## Notes / gotchas
 
-- State (secrets, TLS, rendered config, dashboards) lives in
-  **`~/.elchi-docker`** (override with `--state-dir=`). It must persist —
-  Grafana bind-mounts its dashboards from there. Pinned to the Swarm manager.
+- Editable config, secrets, TLS and dashboards live under **`/etc/elchi`**
+  (override with `--etc-dir=`) and are **bind-mounted** into the containers — on
+  every node (the installer SSH-copies the tree). Only the generated
+  `stack.yml` lives in **`~/.elchi-docker/gen`** (override with `--state-dir=`).
+  Grafana bind-mounts its dashboards from `/etc/elchi/grafana-dashboards`.
 - ACME (Let's Encrypt) is enabled in `config-prod.yaml`; it only works when
   `--main-address` is a real public DNS name with a reachable `:443`.
   Self-signed (the default) is the safe choice otherwise.
 - `--gslb-publish` publishes CoreDNS `:53` on the host (off by default to
   avoid clashing with the host resolver).
 - Grafana's full dashboard JSON (~850 KB) exceeds the Docker config size
-  limit, so dashboards are **bind-mounted** from the state dir instead of
-  shipped as configs.
+  limit — another reason everything is bind-mounted from `/etc/elchi` rather
+  than shipped as Swarm configs.
+- **coredns stays running but unhealthy-by-design until GSLB is configured.**
+  Its image healthcheck only passes once the GSLB zone exists in the backend (a
+  post-install step), so the installer disables that healthcheck — coredns
+  converges and serves, and picks up the zone snapshot in the background once you
+  create it in the UI.

@@ -1551,11 +1551,11 @@
                     <strong>Prerequisites: none beyond a Linux host.</strong> <code>get.sh</code>
                     auto-installs whatever's missing — Docker Engine (via the official
                     <code>get.docker.com</code>), plus <code>curl</code>/<code>tar</code>/<code>gzip</code>/<code>openssl</code>
-                    (needs root, i.e. <code>sudo</code>). The install command runs on a
-                    <strong>single machine</strong> (the Swarm manager) and initializes Swarm
-                    automatically. For multi-node HA, join the other machines with
-                    <code>docker swarm join</code> first — Swarm then distributes the containers itself
-                    (no SSH fan-out, unlike the bare-metal installer).
+                    (needs root, i.e. <code>sudo</code>). You run the install command on a
+                    <strong>single machine</strong> (M1, the Swarm manager) and it initializes Swarm
+                    automatically. For multi-node HA, pass <code>--nodes=</code> — M1 fans out over
+                    <strong>SSH</strong> (installs Docker, joins each node to the Swarm, then deploys),
+                    exactly like the bare-metal installer (see §5).
                 </p>
 
                 <h4>1. Quick start</h4>
@@ -1624,7 +1624,9 @@
                             plaintext unless TLS is set explicitly.</div>
                         <code>--ui-port=&lt;n&gt;</code>
                         <div class="desc">Internal port the UI nginx image listens on (Envoy upstream).
-                            <span class="default">Default: <code>80</code>.</span></div>
+                            <span class="default">Default: <code>8080</code></span> — the
+                            <code>jhonbrownn/elchi</code> image runs unprivileged nginx on
+                            <code>8080</code>. Only set this for an older image that binds <code>80</code>.</div>
                     </div>
                 </details>
 
@@ -1658,7 +1660,8 @@
                         <code>--tls=self-signed|provided</code>
                         <div class="desc"><span class="default">Default: <code>self-signed</code></span> — a
                             10-year ECDSA-P256 cert with <code>--main-address</code> + <code>elchi-envoy</code>
-                            + loopback as SANs, mounted into Envoy as a Docker secret.</div>
+                            + loopback as SANs, bind-mounted into Envoy from
+                            <code>/etc/elchi/tls/</code>.</div>
                         <code>--cert=&lt;path&gt; --key=&lt;path&gt;</code>
                         <div class="desc">For <code>--tls=provided</code> — your own cert/key files.</div>
                     </div>
@@ -1714,7 +1717,7 @@
                         <div class="desc"><span class="default">Default: <code>admin</code></span> (set at
                             first DB init).</div>
                         <code>--grafana-password=&lt;p&gt;</code>
-                        <div class="desc">Admin password (Docker secret via <code>__FILE</code>).
+                        <div class="desc">Admin password (bind-mounted file via <code>__FILE</code>).
                             <span class="default">Default: random <code>elchi-&lt;hex&gt;</code></span>,
                             printed in the install summary.</div>
                         <code>--enable-demo</code>
@@ -1775,12 +1778,21 @@
                             <span class="default">Default: the first <code>--nodes</code> host
                             (<code>node.hostname == …</code>), or <code>node.role == manager</code> for a
                             single host.</span></div>
+                        <code>--no-tune-host</code>
+                        <div class="desc">Skip host kernel/docker tuning (sysctl + Transparent Huge Pages
+                            off + docker log rotation), applied on every node by default. Use on a shared /
+                            externally-managed host. <span class="default">Default: tune.</span></div>
+                        <code>--etc-dir=&lt;path&gt;</code>
+                        <div class="desc">Where the editable, bind-mounted config / secrets / TLS / dashboards
+                            live. <span class="default">Default: <code>/etc/elchi</code>.</span> Must exist on
+                            every node (the installer SSH-copies it).</div>
                         <code>--state-dir=&lt;path&gt;</code>
-                        <div class="desc">Where secrets / TLS / rendered config / dashboards live.
-                            <span class="default">Default: <code>~/.elchi-docker</code>.</span> Must persist
-                            (Grafana bind-mounts dashboards from here).</div>
+                        <div class="desc">Where the generated <code>stack.yml</code> is written.
+                            <span class="default">Default: <code>~/.elchi-docker</code>.</span> (Editable
+                            config lives under <code>--etc-dir</code>, not here.)</div>
                         <code>--dry-run</code>
-                        <div class="desc">Render config + the stack file only — no Swarm init, no deploy.</div>
+                        <div class="desc">Render config + the stack file only — no Swarm init, no deploy
+                            (everything under the state dir; the host is not touched).</div>
                         <code>--non-interactive</code>
                         <div class="desc">Never prompt.</div>
                     </div>
@@ -1898,7 +1910,8 @@
                 <h4>7. upgrade.sh — rolling update</h4>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     <code>install.sh</code> is fully idempotent (secrets preserved; configs are
-                    content-hashed, so a re-render → new name → Swarm rolling update). <code>upgrade.sh</code>
+                    bind-mounted and carry an <code>elchi.cfghash</code> label, so a re-render that changes
+                    a file rolling-updates just that service). <code>upgrade.sh</code>
                     is the same flow re-run with new <code>--*-version</code> flags:
                 </p>
                 <div class="stdl-cmd">curl -fsSL
@@ -1914,7 +1927,7 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --uninstall
 
-                    # also delete volumes + configs + secrets + state (this node)
+                    # also delete volumes + /etc/elchi (config/secrets/tls) + host tuning + state
                     curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --uninstall --purge</div>
@@ -1975,18 +1988,33 @@
                     <li><strong>Registry client path</strong> uses the Envoy internal <em>plaintext</em>
                         listener (<code>elchi-envoy:8080</code>) — keeps traffic on the overlay, avoids
                         shipping the self-signed CA into every backend container.</li>
-                    <li><strong>Secrets</strong>: TLS, mongo root creds and the Grafana password are Docker
-                        secrets; other rendered config ships as Docker configs (content-hashed for clean
-                        rolling updates).</li>
-                    <li><strong>No SSH</strong>: Swarm distributes containers across joined nodes; the
-                        bare-metal installer SSHes from M1 and ships an encrypted bundle.</li>
+                    <li><strong>Config &amp; secrets are host bind-mounts</strong> from
+                        <code>/etc/elchi</code> (not Swarm <code>configs:</code>/<code>secrets:</code>), so
+                        operators can edit a file and apply it with
+                        <code>docker service update --force &lt;svc&gt;</code>. Each service carries an
+                        <code>elchi.cfghash</code> label so a re-render still rolling-updates the changed
+                        services.</li>
+                    <li><strong>SSH fan-out</strong>: like the bare-metal installer, M1 SSHes into the other
+                        nodes to join the Swarm <em>and</em> to copy the <code>/etc/elchi</code> tree to each
+                        (Swarm doesn't distribute bind-mount files). Containers themselves are scheduled by
+                        Swarm.</li>
                 </ul>
 
                 <h4>11. Notes &amp; limitations</h4>
                 <ul style="font-size: 13px; color: #24292f; line-height: 1.7; margin: 0 0 8px 18px;">
-                    <li>State (secrets / TLS / rendered config / dashboards) lives in
-                        <code>~/.elchi-docker</code> and must persist — Grafana bind-mounts its dashboards
-                        from there (pinned to the manager).</li>
+                    <li><strong>Editable config / secrets / TLS / dashboards live under
+                        <code>/etc/elchi</code></strong> (bind-mounted into the containers, on every node);
+                        only the generated <code>stack.yml</code> lives in <code>~/.elchi-docker</code>. Edit
+                        a file then <code>docker service update --force &lt;svc&gt;</code> to apply
+                        (<code>collector.env</code> is an <code>env_file</code> — needs a redeploy instead).</li>
+                    <li><strong>Host tuning is applied by default on every node</strong> (skip with
+                        <code>--no-tune-host</code>): sysctl (<code>vm.max_map_count</code>, conntrack,
+                        somaxconn, FDs, …), Transparent Huge Pages <strong>off</strong> (MongoDB/ClickHouse
+                        require it), and docker log rotation + <code>live-restore</code> (only if
+                        <code>daemon.json</code> is absent).</li>
+                    <li><strong>coredns</strong> runs but its healthcheck is disabled: it only reports ready
+                        once you create the GSLB zone in the UI (a post-install step), so it would otherwise
+                        churn forever. It serves once the zone snapshot is fetched in the background.</li>
                     <li>ACME (Let's Encrypt) is enabled in the backend config but only works when
                         <code>--main-address</code> is a real public DNS name with a reachable
                         <code>:443</code>; self-signed (the default) is the safe choice otherwise.</li>
