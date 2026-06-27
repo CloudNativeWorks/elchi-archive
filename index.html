@@ -2052,6 +2052,14 @@
                     serve traffic) — NOT on the control-plane M1.
                 </p>
                 <p class="info" style="margin-bottom: 12px;">
+                    <strong>🛡️ elchi-shield is installed alongside by default.</strong> The same run
+                    also installs the <code>elchi-shield</code> Envoy <code>ext_proc</code>
+                    API-security / WAF sidecar on this host (it lives next to the client on the data
+                    plane, fetched from the public mirror — never on the control plane). Skip it with
+                    <code>--no-shield</code>; its optional audit / metrics sinks are off by default
+                    (see the <em>elchi-shield sidecar</em> options below).
+                </p>
+                <p class="info" style="margin-bottom: 12px;">
                     <strong>Prerequisites:</strong> a running elchi-stack (Helm or Bare-Metal); the
                     control plane's <code>--main-address</code> reachable over HTTPS; a valid
                     auth token (min 8 chars) minted from the UI (Settings → Tokens).
@@ -2144,6 +2152,32 @@
                             elchi control plane). Adds the <code>frr</code> package and writes
                             <code>/etc/frr/frr.conf</code> with a baseline session config.
                         </div>
+                    </div>
+                </details>
+
+                <details>
+                    <summary>elchi-shield sidecar (installed by default)</summary>
+                    <div class="flag-table">
+                        <code>--no-shield</code>
+                        <div class="desc">Do NOT install the elchi-shield sidecar.
+                            <span class="default">Installed by default</span> next to the client.</div>
+                        <code>--shield-version=&lt;vX.Y.Z&gt;</code>
+                        <div class="desc">Pin the elchi-shield release. <span class="default">Default: the
+                            version bundled with this client release</span> (fetched from the public
+                            elchi-archive mirror, not a private repo).</div>
+                        <code>--shield-audit-dsn=&lt;DSN&gt;</code>
+                        <div class="desc">Send shield audit events to a central ClickHouse
+                            (<code>clickhouse://user:pass@host:9000/elchi</code>).
+                            <span class="default">Off by default.</span> The ClickHouse host must allow this
+                            edge node to reach <code>:9000</code> and the DSN user needs
+                            <code>CREATE</code>/<code>INSERT</code> (shield auto-creates its
+                            <code>elchi_shield_audit</code> table).</div>
+                        <code>--shield-metrics-otlp=&lt;host:port&gt;</code>
+                        <div class="desc">Push shield metrics to an OTel Collector (OTLP/gRPC).
+                            <span class="default">Off by default</span> — otherwise scrape
+                            <code>/metrics</code> on <code>127.0.0.1:9001</code>.</div>
+                        <code>--shield-metrics-insecure</code>
+                        <div class="desc">Use plaintext gRPC to the metrics collector (no TLS).</div>
                     </div>
                 </details>
 
