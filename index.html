@@ -2010,8 +2010,8 @@
                     <li><strong>Host tuning is applied by default on every node</strong> (skip with
                         <code>--no-tune-host</code>): sysctl (<code>vm.max_map_count</code>, conntrack,
                         somaxconn, FDs, …), Transparent Huge Pages <strong>off</strong> (MongoDB/ClickHouse
-                        require it), and docker log rotation + <code>live-restore</code> (only if
-                        <code>daemon.json</code> is absent).</li>
+                        require it), and docker log rotation (only if <code>daemon.json</code> is
+                        absent; restarted pre-deploy, rolled back if docker doesn't return).</li>
                     <li><strong>coredns</strong> runs but its healthcheck is disabled: it only reports ready
                         once you create the GSLB zone in the UI (a post-install step), so it would otherwise
                         churn forever. It serves once the zone snapshot is fetched in the background.</li>

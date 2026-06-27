@@ -615,7 +615,7 @@ tune::on_all_nodes() {
 # per-container, so they must be applied on every node:
 #   * sysctl (mirrors deploy/standalone/lib/sysctl.sh) + nf_conntrack_max
 #   * Transparent Huge Pages OFF  — MongoDB + ClickHouse require this
-#   * docker daemon log rotation + live-restore (only if not already configured)
+#   * docker daemon log rotation (only if not already configured)
 # All best-effort: a tuning failure never aborts the install.
 tune_host() {
   if [ "${ELCHI_TUNE_HOST:-1}" != "1" ]; then
@@ -672,21 +672,28 @@ UNIT
   systemctl enable --now elchi-thp.service >/dev/null 2>&1 || true
 fi
 
-# ---------- Docker log rotation + live-restore ----------
+# ---------- Docker log rotation ----------
 # Unbounded json-file logs are the classic Swarm disk-fill footgun. Only write
 # daemon.json if absent (respect an operator's existing config), and restart
 # docker only then. Done pre-deploy, so no elchi services are bounced.
+# NB: NO "live-restore" — it is incompatible with Swarm mode and makes dockerd
+# fail to come back on a swarm node. If our daemon.json ever stops docker from
+# restarting (any reason), roll it back so the install can still proceed.
 if command -v systemctl >/dev/null 2>&1 && [ ! -e /etc/docker/daemon.json ]; then
   install -d -m 0755 /etc/docker 2>/dev/null || true
   cat > /etc/docker/daemon.json <<'JSON'
 {
   "log-driver": "json-file",
-  "log-opts": { "max-size": "50m", "max-file": "5" },
-  "live-restore": true
+  "log-opts": { "max-size": "50m", "max-file": "5" }
 }
 JSON
   systemctl restart docker >/dev/null 2>&1 || true
-  for _i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  _ok=0; for _i in $(seq 1 60); do docker info >/dev/null 2>&1 && { _ok=1; break; }; sleep 1; done
+  if [ "$_ok" != "1" ]; then
+    rm -f /etc/docker/daemon.json
+    systemctl restart docker >/dev/null 2>&1 || true
+    for _i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  fi
 fi
 TUNE
 )

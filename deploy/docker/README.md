@@ -259,10 +259,11 @@ Keeper quorum.
   - **Transparent Huge Pages OFF** → a `elchi-thp.service` oneshot unit
     (ordered `Before=docker.service`, persists across reboot) — **MongoDB and
     ClickHouse require this**.
-  - **Docker log rotation + `live-restore`** → writes `/etc/docker/daemon.json`
-    (json-file `max-size=50m`, `max-file=5`) **only if absent**, then restarts
-    docker once (pre-deploy, so nothing is bounced). Prevents the classic
-    unbounded-log disk-fill.
+  - **Docker log rotation** → writes `/etc/docker/daemon.json` (json-file
+    `max-size=50m`, `max-file=5`) **only if absent**, then restarts docker once
+    (pre-deploy, so nothing is bounced; rolls the file back if docker doesn't
+    come up). Prevents the classic unbounded-log disk-fill. (No `live-restore` —
+    it's incompatible with Swarm mode.)
 
   Pass **`--no-tune-host`** to skip ALL of the above on a shared / externally-
   managed host. All steps are best-effort (never abort the install) and
