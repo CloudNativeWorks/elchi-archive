@@ -1841,6 +1841,48 @@
                         (optional).</div>
                 </div>
 
+                <h4>📝 Editing config after install (no reinstall)</h4>
+                <p style="font-size: 13px; color: #656d76; margin: 6px 0 8px 0;">
+                    All configs/secrets/TLS are <strong>bind-mounted</strong> from
+                    <code>/etc/elchi</code> on the host (not baked-in Swarm configs), so you edit a file
+                    and apply it with a <strong>service restart</strong> — no reinstall:
+                </p>
+                <div class="stdl-cmd">sudo vi /etc/elchi/config/Corefile          # or envoy.yaml, config-prod-*.yaml, …
+                    docker service update --force elchi_elchi-coredns   # restart that service to pick it up</div>
+                <p style="font-size: 13px; color: #656d76; margin: 6px 0 6px 0;">
+                    Which file → which service to <code>--force</code>:
+                </p>
+                <div class="flag-table">
+                    <code>config/envoy.yaml</code>
+                    <div class="desc"><code>elchi_elchi-envoy</code></div>
+                    <code>config/Corefile · coredns-zones/&lt;zone&gt;.db</code>
+                    <div class="desc"><code>elchi_elchi-coredns</code></div>
+                    <code>config/ui-config.js</code>
+                    <div class="desc"><code>elchi_elchi-ui</code></div>
+                    <code>config/otel-config.yaml</code>
+                    <div class="desc"><code>elchi_elchi-otel</code></div>
+                    <code>config/clickhouse-*.xml</code>
+                    <div class="desc"><code>elchi_elchi-clickhouse</code> (or <code>-1/-2/-3</code> in HA)</div>
+                    <code>config/config-prod-&lt;variant&gt;.yaml</code>
+                    <div class="desc"><code>elchi_elchi-registry</code> + <code>elchi_elchi-controller-node&lt;i&gt;</code>
+                        + <code>elchi_elchi-cp-&lt;envoy&gt;-node&lt;i&gt;</code> (all use it)</div>
+                    <code>tls/server.crt · tls/server.key</code>
+                    <div class="desc"><code>elchi_elchi-envoy</code></div>
+                    <code>secrets/ELCHI_GRAFANA_PASSWORD</code>
+                    <div class="desc"><code>elchi_elchi-grafana</code></div>
+                </div>
+                <p class="note" style="margin: 8px 0;">
+                    Find a service's mounts:
+                    <code>docker service inspect elchi_elchi-envoy -f '{{json .Spec.TaskTemplate.ContainerSpec.Mounts}}'</code>.
+                    <strong>Multi-node:</strong> the file is node-local — for a <em>global</em> service
+                    (envoy/ui/coredns/otel/collector/registry) edit it on <strong>every</strong> node, or
+                    re-run the installer (it SSH-copies <code>/etc/elchi</code> to all nodes and
+                    rolling-updates only the changed services via the <code>elchi.cfghash</code> label).
+                    <strong>Exception:</strong> <code>config/collector.env</code> is an
+                    <code>env_file</code> (read at deploy) — editing it needs a redeploy, not just
+                    <code>--force</code>.
+                </p>
+
                 <h4>4. Offline / air-gapped</h4>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     On a machine <em>with</em> internet, save the pinned image set to a single tarball

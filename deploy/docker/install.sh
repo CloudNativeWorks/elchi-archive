@@ -75,6 +75,8 @@ Common:
 TLS:
   --tls=self-signed|provided  (default: self-signed, 10-year ECDSA-P256)
   --cert=<path> --key=<path>  For --tls=provided.
+  --tls-san=<csv>             Extra SAN names/IPs for the self-signed cert
+                              (--main-address + all --nodes are included auto).
 
 Features / external services:
   --no-gslb                   Disable the CoreDNS GSLB service.
@@ -145,6 +147,7 @@ for arg in "$@"; do
     --tls=*)               export ELCHI_TLS_MODE=${arg#*=} ;;
     --cert=*)              export ELCHI_TLS_CERT=${arg#*=} ;;
     --key=*)               export ELCHI_TLS_KEY=${arg#*=} ;;
+    --tls-san=*)           export ELCHI_TLS_SAN=${arg#*=} ;;
     --no-gslb)             export ELCHI_INSTALL_GSLB=0 ;;
     --gslb-zone=*)         export ELCHI_GSLB_ZONE=${arg#*=} ;;
     --gslb-publish)        export ELCHI_GSLB_PUBLISH=1 ;;
@@ -432,12 +435,21 @@ tls_setup() {
     return 0
   fi
   log::step "Generating self-signed TLS certificate (10y, ECDSA-P256)"
-  # SANs: main-address (DNS or IP) + overlay service name + loopback so the
-  # backend can verify the public listener too if it ever dials over TLS.
-  local san="DNS:${ELCHI_MAIN_ADDRESS},DNS:elchi-envoy,DNS:localhost,IP:127.0.0.1"
-  if [[ "$ELCHI_MAIN_ADDRESS" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    san="IP:${ELCHI_MAIN_ADDRESS},DNS:elchi-envoy,DNS:localhost,IP:127.0.0.1"
-  fi
+  # SANs: main-address + EVERY --nodes host (so hitting any node's edge by its
+  # own IP/name doesn't trip a name mismatch) + overlay service name + loopback.
+  # Extra names via --tls-san=<csv>. IPs get IP:, everything else DNS:.
+  local -a _sans=("DNS:elchi-envoy" "DNS:localhost" "IP:127.0.0.1")
+  local _seen=" "
+  _add_san() {
+    local h=$1; [ -n "$h" ] || return 0
+    case "$_seen" in *" $h "*) return 0 ;; esac   # dedup
+    _seen="${_seen}${h} "
+    if [[ "$h" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then _sans+=("IP:$h"); else _sans+=("DNS:$h"); fi
+  }
+  _add_san "$ELCHI_MAIN_ADDRESS"
+  [ -n "${ELCHI_NODES:-}" ]   && while IFS= read -r _n; do _add_san "$_n"; done < <(csv_split "$ELCHI_NODES")
+  [ -n "${ELCHI_TLS_SAN:-}" ] && while IFS= read -r _n; do _add_san "$_n"; done < <(csv_split "$ELCHI_TLS_SAN")
+  local san; san=$(IFS=,; printf '%s' "${_sans[*]}")
   openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
     -days 3650 -subj "/CN=${ELCHI_MAIN_ADDRESS}" \
     -addext "subjectAltName=${san}" \
