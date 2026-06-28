@@ -113,6 +113,14 @@ stackgen::generate() {
     printf '%s\n' "  elchi-net:"
     printf '%s\n' "    driver: overlay"
     printf '%s\n' "    attachable: true"
+    # Lower the overlay MTU for cross-datacenter / tunnelled links where the
+    # underlay path MTU is < 1500. VXLAN adds ~50 bytes, so a too-large overlay
+    # MTU silently drops big packets → large HTTP responses hang while small
+    # ones get through. Set --overlay-mtu (e.g. 1400) = path-MTU − 50.
+    if [ -n "${ELCHI_OVERLAY_MTU:-}" ]; then
+      printf '%s\n' "    driver_opts:"
+      printf '%s\n' "      com.docker.network.driver.mtu: \"${ELCHI_OVERLAY_MTU}\""
+    fi
     printf '\n'
     stackgen::_emit_volumes "$mongo_local" "$ch_local" "$vm_local" "$ha" "$sr"
     printf 'services:\n'

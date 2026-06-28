@@ -119,6 +119,10 @@ Multi-node (standalone parity — run ONCE on M1; it fans out over SSH):
 Operational:
   --offline=<tarball>         docker load images from a save-images.sh bundle
                               before deploy (air-gapped install).
+  --overlay-mtu=<n>           Set the elchi-net overlay MTU (e.g. 1400) for
+                              cross-DC / tunnelled links where path MTU < 1500.
+                              Symptom of needing it: large HTTP responses hang
+                              while small ones load. Recreate the stack to apply.
   --stack-name=<name>         Swarm stack name (default: elchi).
   --placement-m1="<expr>"     Placement constraint for stateful services
                               (default: "node.role == manager").
@@ -148,6 +152,7 @@ for arg in "$@"; do
     --gslb-regions=*)      export ELCHI_GSLB_REGIONS=${arg#*=} ;;
     --no-collector)        export ELCHI_INSTALL_COLLECTOR=0 ;;
     --no-tune-host)        export ELCHI_TUNE_HOST=0 ;;
+    --overlay-mtu=*)       export ELCHI_OVERLAY_MTU=${arg#*=} ;;
     --nodes=*)             export ELCHI_NODES=${arg#*=} ;;
     --ssh-user=*)          export ELCHI_SSH_USER=${arg#*=}; _SSH_USER_GIVEN=1 ;;
     --ssh-port=*)          export ELCHI_SSH_PORT=${arg#*=} ;;
