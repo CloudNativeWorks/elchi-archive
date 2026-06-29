@@ -2111,7 +2111,7 @@
 
                 <h5>Production setup (default <code>--cloud=other</code>)</h5>
                 <div class="stdl-cmd">wget
-                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.1.0/elchi-install.sh
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.1/elchi-install.sh
                     sudo bash elchi-install.sh \
                     --name=web-server-01 \
                     --host=backend.elchi.io \
@@ -2146,6 +2146,28 @@
                     <code>--enable-bgp</code> additionally installs and configures FRR so the node
                     can announce VIPs / advertise prefixes for the routes elchi-control-plane
                     pushes via BGP. Without it the client only manages Envoy data-plane config.
+                </p>
+
+                <h5>With elchi-shield audit + metrics sinks</h5>
+                <div class="stdl-cmd">sudo bash elchi-install.sh \
+                    --name=web-server-01 \
+                    --host=backend.elchi.io \
+                    --port=443 \
+                    --tls=true \
+                    --token=your-auth-token \
+                    --shield-audit-dsn='clickhouse://user:pass@ch-host:9000/elchi' \
+                    --shield-metrics-otlp=otel-host:4317 \
+                    --shield-metrics-insecure</div>
+                <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
+                    elchi-shield is installed by default. These flags seed its sink config at
+                    <code>/etc/elchi/elchi-shield/config.yaml</code> — <code>--shield-audit-dsn</code>
+                    (ClickHouse audit; TLS is decided inside the DSN, e.g. append
+                    <code>?secure=true</code>), <code>--shield-metrics-otlp</code> (push metrics to an
+                    OTel Collector) and <code>--shield-metrics-insecure</code> (plaintext gRPC to that
+                    collector — skip TLS). They seed the file <strong>only on first install</strong>;
+                    afterwards edit <code>config.yaml</code> and <code>systemctl restart elchi-shield</code>.
+                    Quote the DSN (it has <code>:</code>/<code>@</code>/<code>/</code>). Skip shield with
+                    <code>--no-shield</code>.
                 </p>
 
                 <h4>2. Configuration options</h4>
@@ -2240,12 +2262,12 @@
                     (e.g., from a config-management system or a custom systemd unit):
                 </p>
                 <div class="stdl-cmd">wget
-                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.1.0/elchi-client-linux-amd64
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.1/elchi-client-linux-amd64
                     sudo mv elchi-client-linux-amd64 /usr/local/bin/elchi-client
                     sudo chmod +x /usr/local/bin/elchi-client</div>
                 <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
                     Verify checksum:
-                    <code>wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.1.0/elchi-client-linux-amd64.sha256
+                    <code>wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.1/elchi-client-linux-amd64.sha256
                     &amp;&amp; sha256sum -c elchi-client-linux-amd64.sha256</code>
                 </p>
 
