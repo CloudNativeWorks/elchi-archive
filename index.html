@@ -2221,6 +2221,17 @@
                         <code>--shield-metrics-insecure</code>
                         <div class="desc">Use plaintext gRPC to the metrics collector (no TLS).</div>
                     </div>
+                    <p class="note" style="margin: 8px 0;">
+                        <strong>Where ClickHouse / OTel addresses go:</strong> the flags above just seed
+                        <code>/etc/elchi/elchi-shield/config.yaml</code> (shield's sink config, mode 0600).
+                        Edit that file any time and <code>systemctl restart elchi-shield</code> — re-running
+                        the installer preserves it. Shape:
+                        <code>audit: {exporter: clickhouse, clickhouse_dsn: "clickhouse://user:pass@CH:9000/elchi"}</code> ·
+                        <code>metrics: {otlp_endpoint: "OTEL:4317"}</code>. Security
+                        <strong>policies</strong> are a separate, watched dir:
+                        <code>/etc/elchi/elchi-shield/conf.d/*.yaml</code> (pushed by the control plane, or
+                        drop your own — see the elchi-shield repo's <code>configs/examples/</code>).
+                    </p>
                 </details>
 
                 <h4>3. Manual installation</h4>
