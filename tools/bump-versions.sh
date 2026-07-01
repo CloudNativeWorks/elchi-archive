@@ -15,16 +15,16 @@
 # Each version is read fresh from deploy/docker/versions.env as the OLD value,
 # so a stale/equal value here is just a no-op (never a downgrade).
 
-BACKEND="v1.6.1"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envoy1.38.3
+BACKEND="v1.6.5"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envoy1.38.3
                   #   part is kept; standalone's elchi- prefix too)
-UI="v1.5.2"             # UI image, e.g. v1.5.2
+UI="v1.5.3"             # UI image, e.g. v1.5.2
 COREDNS="v0.1.4"        # CoreDNS / GSLB image, e.g. v0.1.5
 COLLECTOR="v0.1.11"      # elchi-collector, e.g. v0.1.12
 
 SHIELD_OLD=""     # shield has NO canonical default → set BOTH old and new
 SHIELD_NEW=""     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
 
-APPLY=0           # 0 = preview (dry-run) · 1 = write the files
+APPLY=1           # 0 = preview (dry-run) · 1 = write the files
 # ╚════════════════════════════════════════════════════════╝
 
 set -Eeuo pipefail

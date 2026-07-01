@@ -117,8 +117,8 @@ default:
 
 | Component        | Variable                         | Default |
 |------------------|----------------------------------|---------|
-| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.0-v0.14.0-envoy1.38.3` |
-| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.1` |
+| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.5-v0.14.0-envoy1.38.3` |
+| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.3` |
 | Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.37.0` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
 | elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.11` |
