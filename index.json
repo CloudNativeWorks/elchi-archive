@@ -390,6 +390,33 @@
   ],
   "backend_releases": [
     {
+      "version": "v1.6.4",
+      "date": "2026-07-01T15:13:38Z",
+      "binaries": [
+        {
+          "name": "elchi-v1.6.4-v0.14.0-envoy1.35.3",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.4-v0.14.0-envoy1.35.3",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.4/elchi-v1.6.4-v0.14.0-envoy1.35.3",
+          "sha256": "5b40e3a901c883013ae8529d6c87c8d10dc58844cc68f616fabfe16ebaeec367"
+        },
+        {
+          "name": "elchi-v1.6.4-v0.14.0-envoy1.36.2",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.4-v0.14.0-envoy1.36.2",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.4/elchi-v1.6.4-v0.14.0-envoy1.36.2",
+          "sha256": "19af73eec68de8fefa5b1dbd4ee6a1700dff7ee3a5f1d18c5eab2a0be257c4fb"
+        },
+        {
+          "name": "elchi-v1.6.4-v0.14.0-envoy1.38.3",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.4-v0.14.0-envoy1.38.3",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.4/elchi-v1.6.4-v0.14.0-envoy1.38.3",
+          "sha256": "8881e1621f8ceb0bd3ad8242d318d55abde76c89d2c1c969612d1126d95ea635"
+        }
+      ]
+    },
+    {
       "version": "v1.6.1",
       "date": "2026-06-28T15:45:34Z",
       "binaries": [
