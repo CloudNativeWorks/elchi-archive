@@ -29,7 +29,7 @@ permissions:
 
 # Serialize Pages publishes; never cancel an in-flight deploy.
 concurrency:
-  group: "pages-deploy"
+  group: "elchi-archive-publish"
   cancel-in-progress: false
 
 jobs:

@@ -48,7 +48,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "elchi-ui-download"
+  group: "elchi-archive-publish"
   cancel-in-progress: false
 
 jobs:
@@ -159,6 +159,11 @@ jobs:
           with open('index.json', 'w') as f:
               json.dump(index, f, indent=2)
           PYEOF
+
+      - name: Remove existing release (allow same-version re-publish)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "elchi-ui-${{ github.event.inputs.version }}" --yes 2>/dev/null || true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
