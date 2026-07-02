@@ -58,7 +58,7 @@
   "elchi_client_releases": [
     {
       "version": "v1.6.2",
-      "date": "2026-07-02T19:15:42Z",
+      "date": "2026-07-02T19:20:10Z",
       "shield_version": "v0.4.5",
       "files": [
         {
@@ -309,7 +309,7 @@
   "elchi_shield_releases": [
     {
       "version": "v0.4.5",
-      "date": "2026-07-02T19:15:42Z",
+      "date": "2026-07-02T19:20:10Z",
       "files": [
         {
           "name": "elchi-shield-linux-amd64",
