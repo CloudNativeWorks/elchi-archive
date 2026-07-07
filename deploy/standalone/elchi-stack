@@ -977,6 +977,11 @@ cmd_endpoint_test() {
 # firewall::open does not currently whitelist — a FAIL on those against
 # a firewalld/ufw host is a genuine finding, not a test bug.
 
+# _nt_exit <rc> — net-test's exit codes are RESULTS (1 = probes failed),
+# not aborts; drop common.sh's EXIT trap so a FAIL verdict doesn't print
+# a misleading "installer exited with rc=1" line.
+_nt_exit() { trap - EXIT; exit "$1"; }
+
 # Globals filled by _nt_load_topology / flag parsing.
 NT_TIMEOUT=3 NT_SAMPLES=3 NT_ICMP=10 NT_REPORT=0 NT_JSON=0 NT_MESH=0
 NT_SIZE='' NT_PUBPORT='' NT_GSLB=0 NT_CH_MODE=local NT_VM_MODE=local
@@ -1107,22 +1112,25 @@ _nt_tcp_one() {
 # is itself a packet-loss signal. Short-circuits after a first timeout so
 # a black-holed peer costs one timeout per service, not samples×.
 _nt_tcp_probe() {
+  # NB: every branch ends with \n — the caller reads this with
+  # `read < <(...)`, and a missing trailing newline makes read return 1
+  # at EOF, which the ERR trap + set -e would escalate into a hard exit.
   local h=$1 p=$2 n=0 ok=0 sum=0 res ms
   while [ "$n" -lt "$NT_SAMPLES" ]; do
     n=$(( n + 1 ))
     res=$(_nt_tcp_one "$h" "$p")
     case "$res" in
       ok*)     ok=$(( ok + 1 )); ms=${res#ok }; sum=$(( sum + ms )) ;;
-      timeout) [ "$ok" = 0 ] && { printf 'TIMEOUT\t-\t0/%s' "$n"; return 0; } ;;
-      refused) [ "$ok" = 0 ] && [ "$n" -ge 2 ] && { printf 'REFUSED\t-\t0/%s' "$n"; return 0; } ;;
+      timeout) [ "$ok" = 0 ] && { printf 'TIMEOUT\t-\t0/%s\n' "$n"; return 0; } ;;
+      refused) [ "$ok" = 0 ] && [ "$n" -ge 2 ] && { printf 'REFUSED\t-\t0/%s\n' "$n"; return 0; } ;;
     esac
   done
   if [ "$ok" = "$NT_SAMPLES" ]; then
-    printf 'OK\t%s\t%s/%s' "$(( sum / ok ))" "$ok" "$NT_SAMPLES"
+    printf 'OK\t%s\t%s/%s\n' "$(( sum / ok ))" "$ok" "$NT_SAMPLES"
   elif [ "$ok" -gt 0 ]; then
-    printf 'PARTIAL\t%s\t%s/%s' "$(( sum / ok ))" "$ok" "$NT_SAMPLES"
+    printf 'PARTIAL\t%s\t%s/%s\n' "$(( sum / ok ))" "$ok" "$NT_SAMPLES"
   else
-    printf 'REFUSED\t-\t0/%s' "$NT_SAMPLES"
+    printf 'REFUSED\t-\t0/%s\n' "$NT_SAMPLES"
   fi
   return 0
 }
@@ -1224,7 +1232,10 @@ _nt_probe_peer() {
   local svc port status ms samples
   while IFS=$'\t' read -r svc port; do
     [ -n "$svc" ] || continue
-    IFS=$'\t' read -r status ms samples < <(_nt_tcp_probe "$host" "$port")
+    # `|| true`: read returns 1 on EOF-without-newline; never let the ERR
+    # trap turn a probe result into a script abort.
+    IFS=$'\t' read -r status ms samples < <(_nt_tcp_probe "$host" "$port") || true
+    [ -n "${status:-}" ] || status=REFUSED
     case "$status" in
       OK)      NT_P_OK=$(( NT_P_OK + 1 )) ;;
       PARTIAL) NT_P_PARTIAL=$(( NT_P_PARTIAL + 1 )) ;;
@@ -1269,7 +1280,7 @@ _nt_summary_and_exit() {
   [ "$NT_MTUBAD" -gt 0 ]    && printf ' · %s path-MTU problem(s)' "$NT_MTUBAD"
   [ "$NT_WARNS" -gt 0 ]     && printf ' · %s warning(s)' "$NT_WARNS"
   printf '\nresult: %b\n' "$verdict"
-  exit "$rc"
+  _nt_exit "$rc"
 }
 
 # _nt_run_mesh — aggregate --report runs from every node into a matrix.
@@ -1313,8 +1324,8 @@ _nt_run_mesh() {
     $1=="NTI" && $5!="na" && int($5)>=20 {n++}
     $1=="NTE" {n++}
     END{print n+0}' <<<"$all")
-  [ "$fails" -gt 0 ] && exit 1
-  exit 0
+  [ "$fails" -gt 0 ] && _nt_exit 1
+  _nt_exit 0
 }
 
 # _nt_render_matrix — src×dst grid + per-edge failure detail from TSV.
@@ -1345,7 +1356,14 @@ _nt_render_matrix() {
           if (s==d) { printf " %-22s", "—"; continue }
           k=s SUBSEP d
           if (s in err) { printf " %s%-22s%s", R, "ERR", X; continue }
-          if (!(k in worst)) { printf " %-22s", "?"; continue }
+          if (!(k in worst)) {
+            # no TCP records for this edge (remote leg died mid-run?) —
+            # still surface whatever ICMP data made it back.
+            cell="?"
+            if (rtt[k]!="" && rtt[k]!="na") cell=cell sprintf(" %.1fms", rtt[k])
+            if (loss[k]!="" && loss[k]!="na") cell=cell sprintf(" %s%%", loss[k])
+            printf " %s%-22s%s", Y, cell, X; continue
+          }
           cell=worst[k]
           if (rtt[k]!="" && rtt[k]!="na") cell=cell sprintf(" %.1fms", rtt[k])
           if (loss[k]!="" && loss[k]!="na") cell=cell sprintf(" %s%%", loss[k])
@@ -1412,20 +1430,20 @@ cmd_net_test() {
       --timeout=*)     NT_TIMEOUT=${arg#*=} ;;
       --samples=*)     NT_SAMPLES=${arg#*=} ;;
       --icmp-count=*)  NT_ICMP=${arg#*=} ;;
-      -h|--help)       usage; exit 0 ;;
-      *) printf 'net-test: unknown option: %s\n' "$arg" >&2; exit 2 ;;
+      -h|--help)       usage; _nt_exit 0 ;;
+      *) printf 'net-test: unknown option: %s\n' "$arg" >&2; _nt_exit 2 ;;
     esac
   done
   local n
   for n in "$NT_TIMEOUT" "$NT_SAMPLES" "$NT_ICMP"; do
-    case "$n" in ''|*[!0-9]*|0) printf 'net-test: --timeout/--samples/--icmp-count expect a positive integer\n' >&2; exit 2 ;; esac
+    case "$n" in ''|*[!0-9]*|0) printf 'net-test: --timeout/--samples/--icmp-count expect a positive integer\n' >&2; _nt_exit 2 ;; esac
   done
 
   _nt_load_topology
   if [ "${NT_SIZE:-1}" -le 1 ] || [ "${#NT_HOST[@]}" -le 1 ]; then
-    [ "$NT_REPORT" = 1 ] && exit 0
+    [ "$NT_REPORT" = 1 ] && _nt_exit 0
     log::info "single-node cluster — no cross-node flows to test; try 'elchi-stack endpoint-test' instead"
-    exit 0
+    _nt_exit 0
   fi
   _nt_self_index
   _nt_calibrate
@@ -1438,8 +1456,8 @@ cmd_net_test() {
   if [ "$NT_REPORT" = 1 ]; then
     _nt_run_local
     # report mode: rc=1 signals "some probes failed" to the aggregator.
-    [ $(( NT_P_FAIL + NT_P_PARTIAL + NT_LOSSY + NT_MTUBAD )) -gt 0 ] && exit 1
-    exit 0
+    [ $(( NT_P_FAIL + NT_P_PARTIAL + NT_LOSSY + NT_MTUBAD )) -gt 0 ] && _nt_exit 1
+    _nt_exit 0
   fi
 
   if [ "$NT_JSON" = 1 ]; then
@@ -1450,8 +1468,8 @@ cmd_net_test() {
     _nt_emit_json <<<"$recs"
     local bad
     bad=$(awk -F'\t' '$1=="NTP" && $6!="OK" {n++} $1=="NTM" && ($4~/^pmtu:/||$4~/^blackhole:/) {n++} $1=="NTI" && $5!="na" && int($5)>=20 {n++} END{print n+0}' <<<"$recs")
-    [ "$bad" -gt 0 ] && exit 1
-    exit 0
+    [ "$bad" -gt 0 ] && _nt_exit 1
+    _nt_exit 0
   fi
 
   printf '%bnet-test — cross-node connectivity from %s (%s)%b\n' \

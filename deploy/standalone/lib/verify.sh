@@ -510,6 +510,7 @@ verify::print_summary() {
   printf '    elchi-stack add-node IP       extend the cluster (preview + confirm)\n'
   printf '    elchi-stack logs <unit>       tail journalctl on every node\n'
   printf '    elchi-stack verify            cluster-wide deep health check\n'
+  printf '    elchi-stack net-test [--mesh] cross-node TCP+latency, ICMP loss, path-MTU\n'
   printf '    elchi-stack rotate-secret <jwt|gslb|grafana>\n'
   printf '    elchi-stack show-secret <name>\n'
   printf '\n'
