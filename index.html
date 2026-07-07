@@ -1571,7 +1571,7 @@
                     | sudo bash -s -- \
                     --main-address=&lt;your-dns-or-ip&gt;</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Image tags default from <code>versions.env</code>: UI <code>v1.5.4</code>, backend
+                    Image tags default from <code>versions.env</code>: UI <code>v1.5.5</code>, backend
                     <code>v1.6.6-v0.14.0-envoy1.38.3</code>, coredns <code>v0.1.4</code>, collector
                     <code>v0.1.11</code>, plus official <code>mongo:8.0</code> /
                     <code>clickhouse/clickhouse-server</code> / <code>victoriametrics</code> /
@@ -1588,7 +1588,7 @@
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
                     --backend-version=v1.6.6-v0.14.0-envoy1.38.3,v1.6.0-v0.14.0-envoy1.35.3 \
-                    --ui-version=v1.5.4</div>
+                    --ui-version=v1.5.5</div>
 
                 <h5>Custom port / plaintext</h5>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
@@ -1640,7 +1640,7 @@
                                 <code>v1.6.6-v0.14.0-envoy1.38.3</code> (from <code>versions.env</code>).</span></div>
                         <code>--ui-version=&lt;tag&gt;</code>
                         <div class="desc">UI image (<code>jhonbrownn/elchi</code>) tag.
-                            <span class="default">Default: <code>v1.5.4</code>.</span></div>
+                            <span class="default">Default: <code>v1.5.5</code>.</span></div>
                         <code>--coredns-version=&lt;tag&gt;</code>
                         <div class="desc">CoreDNS GSLB image (<code>jhonbrownn/elchi-coredns</code>) tag.
                             <span class="default">Default: <code>v0.1.4</code>.</span></div>
@@ -1960,7 +1960,7 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
-                    --ui-version=v1.5.4 \
+                    --ui-version=v1.5.5 \
                     --backend-version=v1.6.6-v0.14.0-envoy1.38.3</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
@@ -2111,7 +2111,7 @@
 
                 <h5>Production setup (default <code>--cloud=other</code>)</h5>
                 <div class="stdl-cmd">wget
-                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.4/elchi-install.sh
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.5/elchi-install.sh
                     sudo bash elchi-install.sh \
                     --name=web-server-01 \
                     --host=backend.elchi.io \
@@ -2262,12 +2262,12 @@
                     (e.g., from a config-management system or a custom systemd unit):
                 </p>
                 <div class="stdl-cmd">wget
-                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.4/elchi-client-linux-amd64
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.5/elchi-client-linux-amd64
                     sudo mv elchi-client-linux-amd64 /usr/local/bin/elchi-client
                     sudo chmod +x /usr/local/bin/elchi-client</div>
                 <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
                     Verify checksum:
-                    <code>wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.4/elchi-client-linux-amd64.sha256
+                    <code>wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.5/elchi-client-linux-amd64.sha256
                     &amp;&amp; sha256sum -c elchi-client-linux-amd64.sha256</code>
                 </p>
 
