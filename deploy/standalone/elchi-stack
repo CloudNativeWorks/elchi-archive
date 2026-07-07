@@ -105,6 +105,18 @@ Usage:
   elchi-stack endpoint-test           synthetic HTTPS probes through this node's
                                        envoy listener — UI, VictoriaMetrics,
                                        Grafana, internal :8080.
+  elchi-stack net-test [--mesh]       cross-node connectivity check FROM this node
+                                       to every peer: per-service TCP reachability
+                                       + connect latency, ICMP RTT/loss, and a
+                                       path-MTU (DF) probe (catches MTU black
+                                       holes + lossy links that plain TCP checks
+                                       miss). --mesh: every node probes every
+                                       other node → full src×dst matrix (M1 +
+                                       root; uses the persisted SSH creds).
+                                       [--timeout=3] [--samples=3]
+                                       [--icmp-count=10] [--json]
+                                       exit: 0 clean · 1 any FAIL / MTU black
+                                       hole / >=20% ICMP loss · 2 usage
   elchi-stack collector-stats         per-node elchi-collector Prometheus
                                        counters (events in/out, drops, queue,
                                        ClickHouse rows, error counts).
@@ -936,6 +948,520 @@ cmd_endpoint_test() {
   printf '\n'
 }
 
+# ─────────────────────────────────────────────────────────────────────
+# net-test — cross-node connectivity + latency matrix.
+#
+# From THIS node, probe every OTHER cluster node's genuinely cross-node
+# service ports (derived from topology.full.yaml roles + ports.full.json,
+# never hardcoded indexes): TCP reachability + connect latency, ICMP
+# RTT/loss, and a path-MTU (DF-bit) probe. The MTU + loss checks exist
+# because a TCP-connect check alone is blind to the two failure modes
+# that actually take clusters down across DCs: path-MTU black holes
+# (small packets pass, full-size ones vanish) and lossy links (connect
+# succeeds, sustained transfer crawls).
+#
+# --mesh (M1 + root): SSH-fan out and run the same probe FROM every node,
+# aggregate into a src×dst matrix. Remote side is the same installed
+# helper invoked with the hidden --report flag (machine-readable TSV):
+#   NTP <src> <dst> <service> <port> <status> <avg_ms> <ok>/<n>
+#   NTI <src> <dst> <rtt_avg_ms|na> <loss_pct|na> <count>
+#   NTM <src> <dst> <mtu-verdict>
+#   NTE <src> <error text>
+#
+# Loopback-only ports (collector 18090/18091, otel 4317/4318/13133,
+# envoy admin 9901 / internal 8080, coredns webhook 8053, registry
+# metrics 9091) are deliberately NOT probed — they never cross nodes.
+#
+# NB: nginx-ui 8081, grafana 3000 and victoriametrics 8428 ARE real
+# cross-node data-plane flows (envoy round-robins/routes to them) that
+# firewall::open does not currently whitelist — a FAIL on those against
+# a firewalld/ufw host is a genuine finding, not a test bug.
+
+# Globals filled by _nt_load_topology / flag parsing.
+NT_TIMEOUT=3 NT_SAMPLES=3 NT_ICMP=10 NT_REPORT=0 NT_JSON=0 NT_MESH=0
+NT_SIZE='' NT_PUBPORT='' NT_GSLB=0 NT_CH_MODE=local NT_VM_MODE=local
+NT_OVERHEAD_MS=0
+declare -a NT_HOST=() NT_HN=() NT_IS_M1=() NT_MONGO=() NT_CH=() NT_COREDNS=() NT_VARIANTS=()
+NT_P_OK=0 NT_P_FAIL=0 NT_P_PARTIAL=0 NT_LOSSY=0 NT_MTUBAD=0 NT_WARNS=0
+
+_nt_load_topology() {
+  local topo=${ELCHI_ETC}/topology.full.yaml
+  [ -f "$topo" ] || die "$topo missing — install hasn't completed on this node"
+  NT_SIZE=$(awk '/^cluster:/{f=1;next} f&&/^[[:space:]]+size:/{print $2;exit}' "$topo")
+  NT_PUBPORT=$(awk '/^cluster:/{f=1;next} f&&/^[[:space:]]+port:/{print $2;exit}' "$topo")
+  NT_GSLB=$(awk '/^cluster:/{f=1;next} f&&/^[[:space:]]+install_gslb:/{print $2;exit}' "$topo")
+  NT_CH_MODE=$(awk '/^cluster:/{f=1;next} f&&/^[[:space:]]+clickhouse_mode:/{print $2;exit}' "$topo")
+  NT_VM_MODE=$(awk '/^cluster:/{f=1;next} f&&/^[[:space:]]+vm_mode:/{print $2;exit}' "$topo")
+  : "${NT_SIZE:=1}" "${NT_PUBPORT:=443}" "${NT_GSLB:=0}"
+  [ -n "$NT_CH_MODE" ] || NT_CH_MODE=local
+  [ -n "$NT_VM_MODE" ] || NT_VM_MODE=local
+  mapfile -t NT_VARIANTS < <(awk '/^  backend_variants:/{f=1;next} f&&/^    - /{print $2;next} f{exit}' "$topo")
+  # Per-node role flags — parsed from the YAML flags, NOT re-derived from
+  # index math, so net-test always agrees with what install.sh decided.
+  local host hn m1 mongo ch dns
+  while read -r host hn m1 mongo ch dns; do
+    [ -n "$host" ] || continue
+    NT_HOST+=("$host"); NT_HN+=("$hn"); NT_IS_M1+=("$m1")
+    NT_MONGO+=("$mongo"); NT_CH+=("$ch"); NT_COREDNS+=("$dns")
+  done < <(awk '
+    /^  - index:/ { if (seen) print h, n, m, g, c, d; seen=1; h=n=m=g=c=d="false" }
+    /^    host:/          {h=$2}  /^    hostname:/       {n=$2}
+    /^    is_m1:/         {m=$2}  /^    runs_mongo:/     {g=$2}
+    /^    runs_clickhouse:/{c=$2} /^    runs_coredns:/   {d=$2}
+    END { if (seen) print h, n, m, g, c, d }' "$topo")
+  [ "${#NT_HOST[@]}" -gt 0 ] || die "no nodes parsed from $topo"
+}
+
+# _nt_self_index — sets NT_SELF_IDX (0-based) to this machine's slot in
+# the topology. Dies if this host isn't a cluster member.
+_nt_self_index() {
+  local i
+  for i in "${!NT_HOST[@]}"; do
+    if ssh::is_local "${NT_HOST[$i]}"; then NT_SELF_IDX=$i; return 0; fi
+  done
+  die "this machine is not in the cluster topology — run net-test on a cluster node (see ${ELCHI_ETC}/nodes.list)"
+}
+
+# _nt_targets_for_peer <peer_i> <self_i> — emit "service<TAB>port" lines:
+# every flow that legitimately crosses nodes TOWARD this peer. Ports come
+# from ports.full.json (authoritative) with lib/topology.sh constants as
+# fallback — same precedence the backend renderers use.
+_nt_targets_for_peer() {
+  local i=$1 self=$2 pj=${ELCHI_ETC}/ports.full.json
+  local host=${NT_HOST[$i]} have_jq=0
+  command -v jq >/dev/null 2>&1 && [ -f "$pj" ] && have_jq=1
+
+  printf 'envoy-public\t%s\n'  "$NT_PUBPORT"
+  printf 'nginx-ui\t%s\n'      "${ELCHI_PORT_NGINX_UI:-8081}"
+  printf 'registry-grpc\t%s\n' "${ELCHI_PORT_REGISTRY_GRPC:-1870}"
+
+  local grpc='' rest=''
+  if [ "$have_jq" = 1 ]; then
+    grpc=$(jq -r --arg h "$host" '.controller[$h].grpc // empty' "$pj" 2>/dev/null) || grpc=''
+    rest=$(jq -r --arg h "$host" '.controller[$h].rest // empty' "$pj" 2>/dev/null) || rest=''
+  fi
+  printf 'controller-grpc\t%s\n' "${grpc:-${ELCHI_PORT_CONTROLLER_GRPC:-1960}}"
+  printf 'controller-rest\t%s\n' "${rest:-${ELCHI_PORT_CONTROLLER_REST:-1980}}"
+
+  local pos=0 v p label
+  for v in "${NT_VARIANTS[@]}"; do
+    p=''
+    [ "$have_jq" = 1 ] && { p=$(jq -r --arg v "$v" --arg h "$host" '.control_plane[$v][$h] // empty' "$pj" 2>/dev/null) || p=''; }
+    [ -n "$p" ] || p=$(( ${ELCHI_PORT_CONTROL_PLANE_BASE:-1990} + pos ))
+    label=${v##*envoy}                       # elchi-vX-vY-envoy1.38.3 → 1.38.3
+    printf 'control-plane[%s]\t%s\n' "${label:-$pos}" "$p"
+    pos=$(( pos + 1 ))
+  done
+
+  [ "${NT_MONGO[$i]}" = "true" ] && printf 'mongo\t%s\n' "${ELCHI_PORT_MONGO:-27017}"
+  if [ "${NT_CH[$i]}" = "true" ] && [ "$NT_CH_MODE" != "external" ]; then
+    printf 'clickhouse-native\t%s\n' "${ELCHI_PORT_CLICKHOUSE_NATIVE:-9000}"
+    # interserver / keeper / raft only flow BETWEEN ClickHouse members.
+    if [ "$NT_SIZE" -ge 3 ] && [ "${NT_CH[$self]}" = "true" ]; then
+      printf 'clickhouse-interserver\t%s\n' "${ELCHI_PORT_CLICKHOUSE_INTERSERVER:-9009}"
+      printf 'clickhouse-keeper\t%s\n'      "${ELCHI_PORT_CLICKHOUSE_KEEPER:-9181}"
+      printf 'clickhouse-raft\t%s\n'        "${ELCHI_PORT_CLICKHOUSE_RAFT:-9234}"
+    fi
+  fi
+  if [ "${NT_IS_M1[$i]}" = "true" ]; then
+    [ "$NT_VM_MODE" != "external" ] && printf 'victoriametrics\t%s\n' "${ELCHI_PORT_VICTORIAMETRICS:-8428}"
+    printf 'grafana\t%s\n' "${ELCHI_PORT_GRAFANA:-3000}"
+  fi
+  [ "$NT_GSLB" = "1" ] && [ "${NT_COREDNS[$i]}" = "true" ] && printf 'coredns-tcp\t%s\n' "${ELCHI_PORT_COREDNS:-53}"
+  return 0
+}
+
+# _nt_calibrate — measure the fork/exec cost of `timeout bash -c` once so
+# connect timings can subtract it (on small VMs it's 5-15 ms, which would
+# otherwise swamp sub-millisecond LAN latencies).
+_nt_calibrate() {
+  local t0 t1
+  t0=$(date +%s%N)
+  timeout "$NT_TIMEOUT" bash -c ':' 2>/dev/null || true
+  t1=$(date +%s%N)
+  NT_OVERHEAD_MS=$(( (t1 - t0) / 1000000 ))
+}
+
+# _nt_tcp_one <host> <port> → "ok <ms>" | "refused" | "timeout"
+# /dev/tcp connect wrapped in timeout(1): returns the moment the TCP
+# handshake completes (no read-wait — curl telnet:// would hang until the
+# remote closes, costing max-time per sample against gRPC/mongo ports).
+_nt_tcp_one() {
+  local h=$1 p=$2 t0 t1 rc ms
+  t0=$(date +%s%N)
+  timeout "$NT_TIMEOUT" bash -c "exec 3<>/dev/tcp/${h}/${p}" 2>/dev/null
+  rc=$?
+  t1=$(date +%s%N)
+  case $rc in
+    0)
+      ms=$(( (t1 - t0) / 1000000 - NT_OVERHEAD_MS ))
+      [ "$ms" -lt 0 ] && ms=0
+      printf 'ok %s' "$ms" ;;
+    124) printf 'timeout' ;;
+    *)   printf 'refused' ;;   # ECONNREFUSED / no-route — remote answered "no"
+  esac
+}
+
+# _nt_tcp_probe <host> <port> → "STATUS<TAB>avg_ms<TAB>ok/n"
+# STATUS ∈ OK | PARTIAL | REFUSED | TIMEOUT. PARTIAL (some samples failed)
+# is itself a packet-loss signal. Short-circuits after a first timeout so
+# a black-holed peer costs one timeout per service, not samples×.
+_nt_tcp_probe() {
+  local h=$1 p=$2 n=0 ok=0 sum=0 res ms
+  while [ "$n" -lt "$NT_SAMPLES" ]; do
+    n=$(( n + 1 ))
+    res=$(_nt_tcp_one "$h" "$p")
+    case "$res" in
+      ok*)     ok=$(( ok + 1 )); ms=${res#ok }; sum=$(( sum + ms )) ;;
+      timeout) [ "$ok" = 0 ] && { printf 'TIMEOUT\t-\t0/%s' "$n"; return 0; } ;;
+      refused) [ "$ok" = 0 ] && [ "$n" -ge 2 ] && { printf 'REFUSED\t-\t0/%s' "$n"; return 0; } ;;
+    esac
+  done
+  if [ "$ok" = "$NT_SAMPLES" ]; then
+    printf 'OK\t%s\t%s/%s' "$(( sum / ok ))" "$ok" "$NT_SAMPLES"
+  elif [ "$ok" -gt 0 ]; then
+    printf 'PARTIAL\t%s\t%s/%s' "$(( sum / ok ))" "$ok" "$NT_SAMPLES"
+  else
+    printf 'REFUSED\t-\t0/%s' "$NT_SAMPLES"
+  fi
+  return 0
+}
+
+# _nt_icmp_probe <host> → "<rtt_avg_ms> <loss_pct>" | "na <reason>"
+_nt_icmp_probe() {
+  local h=$1 out rtt loss
+  command -v ping >/dev/null 2>&1 || { printf 'na ping-not-installed'; return 0; }
+  out=$(LC_ALL=C ping -n -q -c "$NT_ICMP" -i 0.2 -W 2 "$h" 2>/dev/null) || true
+  # Only trust output that actually contains ping statistics — anything
+  # else (no CAP_NET_RAW, locked ping_group_range, DNS failure) is "na".
+  case "$out" in *'packet loss'*) ;; *) printf 'na blocked-or-no-permission'; return 0 ;; esac
+  loss=$(printf '%s' "$out" | grep -oE '[0-9]+(\.[0-9]+)?% packet loss' | cut -d'%' -f1)
+  rtt=$(printf '%s' "$out" | sed -nE 's|^(rtt\|round-trip) [^=]*= [0-9.]+/([0-9.]+)/.*|\2|p')
+  if [ "${loss%%.*}" = "100" ]; then printf 'na all-lost-icmp-filtered'; return 0; fi
+  printf '%s %s' "${rtt:-na}" "${loss:-na}"
+  return 0
+}
+
+# _nt_mtu_probe <host> <icmp_ok(0|1)> → verdict:
+#   ok1500 | pmtu:<N> | localmtu:<N> | blackhole:1400ok | inconclusive | na
+# DF-bit ladder: full-size (wire 1500) → exact PMTU from frag-needed →
+# local-interface EMSGSIZE → 1400-wire fallback (black-hole detection —
+# the exact failure mode that silently breaks overlay/tunnel paths).
+_nt_mtu_probe() {
+  local h=$1 icmp_ok=$2 out pm
+  [ "$icmp_ok" = 1 ] || { printf 'na'; return 0; }
+  out=$(LC_ALL=C ping -M "do" -n -q -c 2 -i 0.2 -W 1 -s 1472 "$h" 2>&1) || true
+  if printf '%s' "$out" | grep -qE '[1-9][0-9]* received'; then printf 'ok1500'; return 0; fi
+  pm=$(printf '%s' "$out" | grep -oiE 'mtu[ =]+[0-9]+' | grep -oE '[0-9]+' | head -n1)
+  if printf '%s' "$out" | grep -qi 'local error' && [ -n "$pm" ]; then
+    printf 'localmtu:%s' "$pm"; return 0     # our own iface < 1500 (deliberate?)
+  fi
+  [ -n "$pm" ] && { printf 'pmtu:%s' "$pm"; return 0; }   # honest frag-needed
+  out=$(LC_ALL=C ping -M "do" -n -q -c 2 -i 0.2 -W 1 -s 1372 "$h" 2>&1) || true
+  if printf '%s' "$out" | grep -qE '[1-9][0-9]* received'; then
+    printf 'blackhole:1400ok'; return 0      # 1400 passes, 1500 silently dropped
+  fi
+  printf 'inconclusive'
+  return 0
+}
+
+# _nt_mtu_render <verdict> → human string (and classifies severity via
+# the counters — pmtu/blackhole are FAIL-class, localmtu<1400 is a WARN).
+_nt_mtu_render() {
+  case "$1" in
+    ok1500)         printf '1500 OK' ;;
+    pmtu:*)         printf 'path MTU = %s (frag-needed received)' "${1#pmtu:}" ;;
+    blackhole:*)    printf 'SUSPECT — wire 1400 passes, 1500 silently dropped (black hole in 1401-1500)' ;;
+    localmtu:*)     printf 'local interface MTU %s (<1500)' "${1#localmtu:}" ;;
+    inconclusive)   printf 'inconclusive (DF probes dropped at <=1400 too)' ;;
+    *)              printf 'n/a (needs working ICMP)' ;;
+  esac
+}
+
+# _nt_probe_peer <peer_i> <self_i> — one peer: ICMP + MTU + all TCP
+# targets. Human mode prints a section; --report mode prints TSV records.
+_nt_probe_peer() {
+  local i=$1 self=$2
+  local host=${NT_HOST[$i]} hn=${NT_HN[$i]} selfhost=${NT_HOST[$self]}
+  local icmp rtt loss icmp_ok=0 mtu
+
+  icmp=$(_nt_icmp_probe "$host")
+  rtt=${icmp%% *}; loss=${icmp#* }
+  [ "$rtt" != "na" ] && icmp_ok=1
+  mtu=$(_nt_mtu_probe "$host" "$icmp_ok")
+
+  case "$mtu" in
+    pmtu:*|blackhole:*) NT_MTUBAD=$(( NT_MTUBAD + 1 )) ;;
+    inconclusive)       NT_WARNS=$(( NT_WARNS + 1 )) ;;
+    localmtu:*)         [ "${mtu#localmtu:}" -lt 1400 ] 2>/dev/null && NT_WARNS=$(( NT_WARNS + 1 )) ;;
+  esac
+  if [ "$icmp_ok" = 1 ]; then
+    # loss >= 20% is FAIL-class (TCP crawls at that level), 1-19% WARN.
+    local loss_int=${loss%%.*}
+    if [ "${loss_int:-0}" -ge 20 ] 2>/dev/null; then NT_LOSSY=$(( NT_LOSSY + 1 ));
+    elif [ "${loss_int:-0}" -ge 1 ] 2>/dev/null; then NT_WARNS=$(( NT_WARNS + 1 )); fi
+  fi
+
+  if [ "$NT_REPORT" = 1 ]; then
+    printf 'NTI\t%s\t%s\t%s\t%s\t%s\n' "$selfhost" "$host" "$rtt" "$loss" "$NT_ICMP"
+    printf 'NTM\t%s\t%s\t%s\n' "$selfhost" "$host" "$mtu"
+  else
+    local m1tag=''
+    [ "${NT_IS_M1[$i]}" = "true" ] && m1tag=', M1'
+    printf '\n%s── peer %s (%s%s) ──%s\n' "$C_BOLD" "$host" "$hn" "$m1tag" "$C_RESET"
+    if [ "$icmp_ok" = 1 ]; then
+      local lc=$C_GREEN
+      [ "${loss%%.*}" -ge 1 ] 2>/dev/null && lc=$C_YELLOW
+      [ "${loss%%.*}" -ge 20 ] 2>/dev/null && lc=$C_RED
+      printf '  icmp  rtt avg %s ms   %bloss %s%%%b (%s pkts)   path-mtu  %s\n' \
+        "$rtt" "$lc" "$loss" "$C_RESET" "$NT_ICMP" "$(_nt_mtu_render "$mtu")"
+    else
+      printf '  icmp  n/a (%s) — loss + path-MTU cannot be measured\n' "${loss}"
+    fi
+    printf '  %-30s %6s   %-9s %s\n' 'SERVICE' 'PORT' 'TCP' 'CONNECT'
+  fi
+
+  local svc port status ms samples
+  while IFS=$'\t' read -r svc port; do
+    [ -n "$svc" ] || continue
+    IFS=$'\t' read -r status ms samples < <(_nt_tcp_probe "$host" "$port")
+    case "$status" in
+      OK)      NT_P_OK=$(( NT_P_OK + 1 )) ;;
+      PARTIAL) NT_P_PARTIAL=$(( NT_P_PARTIAL + 1 )) ;;
+      *)       NT_P_FAIL=$(( NT_P_FAIL + 1 )) ;;
+    esac
+    if [ "$NT_REPORT" = 1 ]; then
+      printf 'NTP\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$selfhost" "$host" "$svc" "$port" "$status" "$ms" "$samples"
+    else
+      local col=$C_GREEN detail="${ms} ms"
+      case "$status" in
+        PARTIAL) col=$C_YELLOW; detail="${ms} ms (${samples} samples)" ;;
+        TIMEOUT) col=$C_RED;    detail="— (>${NT_TIMEOUT}s, SYN black-holed?)" ;;
+        REFUSED) col=$C_RED;    detail="— (refused / unreachable)" ;;
+      esac
+      printf '  %-30s %6s   %b%-9s%b %s\n' "$svc" "$port" "$col" "$status" "$C_RESET" "$detail"
+    fi
+  done < <(_nt_targets_for_peer "$i" "$self")
+}
+
+# _nt_run_local — probe every peer ≠ self from this node.
+_nt_run_local() {
+  local i
+  for i in "${!NT_HOST[@]}"; do
+    [ "$i" = "$NT_SELF_IDX" ] && continue
+    _nt_probe_peer "$i" "$NT_SELF_IDX"
+  done
+}
+
+_nt_summary_and_exit() {
+  local total=$(( NT_P_OK + NT_P_PARTIAL + NT_P_FAIL )) verdict rc=0
+  if [ "$NT_P_FAIL" -gt 0 ] || [ "$NT_P_PARTIAL" -gt 0 ] || [ "$NT_LOSSY" -gt 0 ] || [ "$NT_MTUBAD" -gt 0 ]; then
+    rc=1 verdict="${C_RED}FAIL${C_RESET}"
+  elif [ "$NT_WARNS" -gt 0 ]; then
+    verdict="${C_YELLOW}OK (with warnings)${C_RESET}"
+  else
+    verdict="${C_GREEN}OK${C_RESET}"
+  fi
+  printf '\nsummary: %s/%s TCP probes OK' "$NT_P_OK" "$total"
+  [ "$NT_P_PARTIAL" -gt 0 ] && printf ', %s PARTIAL' "$NT_P_PARTIAL"
+  [ "$NT_P_FAIL" -gt 0 ]    && printf ', %s FAILED'  "$NT_P_FAIL"
+  [ "$NT_LOSSY" -gt 0 ]     && printf ' · %s peer(s) with >=20%% ICMP loss' "$NT_LOSSY"
+  [ "$NT_MTUBAD" -gt 0 ]    && printf ' · %s path-MTU problem(s)' "$NT_MTUBAD"
+  [ "$NT_WARNS" -gt 0 ]     && printf ' · %s warning(s)' "$NT_WARNS"
+  printf '\nresult: %b\n' "$verdict"
+  exit "$rc"
+}
+
+# _nt_run_mesh — aggregate --report runs from every node into a matrix.
+_nt_run_mesh() {
+  [ -f "${ELCHI_ETC}/orchestrator.env" ] || die "--mesh needs the persisted SSH creds at ${ELCHI_ETC}/orchestrator.env — run it on M1"
+  [ -r "${ELCHI_ETC}/orchestrator.env" ] || die "--mesh must run as root (orchestrator.env is 0600 root)"
+  _ssh_setup
+
+  local host rec all='' rc
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    log::node "$host" "collecting probe report"
+    rc=0
+    if ssh::is_local "$host"; then
+      # Subshell: report-mode output captured, counters stay isolated.
+      rec=$( NT_REPORT=1
+             NT_P_OK=0 NT_P_FAIL=0 NT_P_PARTIAL=0 NT_LOSSY=0 NT_MTUBAD=0 NT_WARNS=0
+             _nt_run_local ) || rc=$?
+    else
+      rec=$(ssh::run "$host" /usr/local/bin/elchi-stack net-test --report \
+              --timeout="$NT_TIMEOUT" --samples="$NT_SAMPLES" --icmp-count="$NT_ICMP" 2>/dev/null) || rc=$?
+      if [ "$rc" = 2 ]; then
+        printf -v rec 'NTE\t%s\tremote elchi-stack has no net-test — refresh the helper (re-run install.sh/upgrade.sh)' "$host"
+      elif [ "$rc" -gt 1 ] || [ -z "$rec" ]; then
+        printf -v rec 'NTE\t%s\tssh/remote invocation failed (rc=%s)' "$host" "$rc"
+      fi
+      # rc=1 means "probes ran, some failed" — records are valid, keep them.
+    fi
+    all+="${rec}"$'\n'
+  done < "${ELCHI_ETC}/nodes.list"
+
+  if [ "$NT_JSON" = 1 ]; then _nt_emit_json <<<"$all"; return 0; fi
+  _nt_render_matrix <<<"$all"
+
+  # Exit code from the aggregated records (counters above only cover the
+  # local leg; the matrix legs live in the TSV).
+  local fails
+  fails=$(awk -F'\t' '
+    $1=="NTP" && $6!="OK" {n++}
+    $1=="NTM" && ($4 ~ /^pmtu:/ || $4 ~ /^blackhole:/) {n++}
+    $1=="NTI" && $5!="na" && int($5)>=20 {n++}
+    $1=="NTE" {n++}
+    END{print n+0}' <<<"$all")
+  [ "$fails" -gt 0 ] && exit 1
+  exit 0
+}
+
+# _nt_render_matrix — src×dst grid + per-edge failure detail from TSV.
+_nt_render_matrix() {
+  awk -F'\t' -v G="$C_GREEN" -v R="$C_RED" -v Y="$C_YELLOW" -v B="$C_BOLD" -v X="$C_RESET" '
+    $1=="NTP" {
+      key=$2 SUBSEP $3
+      if (!(key in worst)) worst[key]="OK"
+      if ($6=="PARTIAL" && worst[key]=="OK") worst[key]="PARTIAL"
+      if ($6=="TIMEOUT" || $6=="REFUSED") worst[key]="FAIL"
+      if ($6!="OK") faildetail[key]=faildetail[key] sprintf("%s:%s %s · ", $4, $5, $6)
+      if (!($2 in seen)) { order[++n]=$2; seen[$2]=1 }
+      if (!($3 in seen)) { order[++n]=$3; seen[$3]=1 }
+    }
+    $1=="NTI" { rtt[$2 SUBSEP $3]=$4; loss[$2 SUBSEP $3]=$5 }
+    $1=="NTM" { mtu[$2 SUBSEP $3]=$4 }
+    $1=="NTE" { err[$2]=$3; if (!($2 in seen)) { order[++n]=$2; seen[$2]=1 } }
+    END {
+      printf "\n%s── mesh matrix (worst TCP per edge · icmp avg/loss · MTU flag) ──%s\n", B, X
+      printf "  %-18s", "src \\ dst"
+      for (j=1; j<=n; j++) printf " %-22s", order[j]
+      printf "\n"
+      for (i=1; i<=n; i++) {
+        s=order[i]
+        printf "  %-18s", s
+        for (j=1; j<=n; j++) {
+          d=order[j]
+          if (s==d) { printf " %-22s", "—"; continue }
+          k=s SUBSEP d
+          if (s in err) { printf " %s%-22s%s", R, "ERR", X; continue }
+          if (!(k in worst)) { printf " %-22s", "?"; continue }
+          cell=worst[k]
+          if (rtt[k]!="" && rtt[k]!="na") cell=cell sprintf(" %.1fms", rtt[k])
+          if (loss[k]!="" && loss[k]!="na") cell=cell sprintf(" %s%%", loss[k])
+          if (mtu[k] ~ /^pmtu:/ || mtu[k] ~ /^blackhole:/) cell=cell " MTU!"
+          col=G; if (worst[k]=="PARTIAL") col=Y; if (worst[k]=="FAIL") col=R
+          if (mtu[k] ~ /^pmtu:/ || mtu[k] ~ /^blackhole:/) col=R
+          printf " %s%-22s%s", col, cell, X
+        }
+        printf "\n"
+      }
+      hdr=0
+      for (k in faildetail) {
+        if (!hdr) { printf "\n%s── failures ──%s\n", B, X; hdr=1 }
+        split(k, p, SUBSEP)
+        d=faildetail[k]; sub(/ · $/, "", d)
+        printf "  %s → %s   %s\n", p[1], p[2], d
+      }
+      for (h in err) {
+        if (!hdr) { printf "\n%s── failures ──%s\n", B, X; hdr=1 }
+        printf "  %s   %s\n", h, err[h]
+      }
+    }'
+}
+
+# _nt_emit_json — TSV records → JSON (mesh + local share the format).
+_nt_emit_json() {
+  command -v jq >/dev/null 2>&1 || die "net-test: --json requires jq"
+  jq -Rn '
+    [inputs | select(length > 0) | split("\t")] as $r |
+    {
+      probes: [ $r[] | select(.[0]=="NTP") |
+        { src: .[1], dst: .[2], service: .[3], port: (.[4]|tonumber),
+          status: .[5],
+          connect_ms: (if .[6]=="-" then null else (.[6]|tonumber) end),
+          samples: .[7] } ],
+      icmp: [ $r[] | select(.[0]=="NTI") |
+        { src: .[1], dst: .[2],
+          rtt_avg_ms: (if .[3]=="na" then null else (.[3]|tonumber) end),
+          loss_pct:   (if .[4]=="na" then null else (.[4]|tonumber) end),
+          packets: (.[5]|tonumber) } ],
+      path_mtu: [ $r[] | select(.[0]=="NTM") | { src: .[1], dst: .[2], verdict: .[3] } ],
+      errors:   [ $r[] | select(.[0]=="NTE") | { src: .[1], error: .[2] } ]
+    }
+    | . + { summary: {
+        probes:  (.probes | length),
+        ok:      ([ .probes[] | select(.status=="OK") ] | length),
+        failed:  ([ .probes[] | select(.status!="OK") ] | length),
+        mtu_bad: ([ .path_mtu[] | select(.verdict | test("^(pmtu:|blackhole:)")) ] | length),
+        lossy:   ([ .icmp[] | select(.loss_pct != null and .loss_pct >= 20) ] | length),
+        result:  (if ([ .probes[] | select(.status!="OK") ] | length) > 0
+                     or ([ .path_mtu[] | select(.verdict | test("^(pmtu:|blackhole:)")) ] | length) > 0
+                     or ([ .icmp[] | select(.loss_pct != null and .loss_pct >= 20) ] | length) > 0
+                     or (.errors | length) > 0
+                  then "FAIL" else "OK" end) } }'
+}
+
+cmd_net_test() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --mesh)          NT_MESH=1 ;;
+      --json)          NT_JSON=1 ;;
+      --report)        NT_REPORT=1 ;;        # internal: TSV for --mesh aggregation
+      --timeout=*)     NT_TIMEOUT=${arg#*=} ;;
+      --samples=*)     NT_SAMPLES=${arg#*=} ;;
+      --icmp-count=*)  NT_ICMP=${arg#*=} ;;
+      -h|--help)       usage; exit 0 ;;
+      *) printf 'net-test: unknown option: %s\n' "$arg" >&2; exit 2 ;;
+    esac
+  done
+  local n
+  for n in "$NT_TIMEOUT" "$NT_SAMPLES" "$NT_ICMP"; do
+    case "$n" in ''|*[!0-9]*|0) printf 'net-test: --timeout/--samples/--icmp-count expect a positive integer\n' >&2; exit 2 ;; esac
+  done
+
+  _nt_load_topology
+  if [ "${NT_SIZE:-1}" -le 1 ] || [ "${#NT_HOST[@]}" -le 1 ]; then
+    [ "$NT_REPORT" = 1 ] && exit 0
+    log::info "single-node cluster — no cross-node flows to test; try 'elchi-stack endpoint-test' instead"
+    exit 0
+  fi
+  _nt_self_index
+  _nt_calibrate
+
+  if [ "$NT_MESH" = 1 ]; then
+    _nt_run_mesh          # exits with its own aggregated code
+    return 0
+  fi
+
+  if [ "$NT_REPORT" = 1 ]; then
+    _nt_run_local
+    # report mode: rc=1 signals "some probes failed" to the aggregator.
+    [ $(( NT_P_FAIL + NT_P_PARTIAL + NT_LOSSY + NT_MTUBAD )) -gt 0 ] && exit 1
+    exit 0
+  fi
+
+  if [ "$NT_JSON" = 1 ]; then
+    local recs
+    recs=$( NT_REPORT=1
+            NT_P_OK=0 NT_P_FAIL=0 NT_P_PARTIAL=0 NT_LOSSY=0 NT_MTUBAD=0 NT_WARNS=0
+            _nt_run_local ) || true
+    _nt_emit_json <<<"$recs"
+    local bad
+    bad=$(awk -F'\t' '$1=="NTP" && $6!="OK" {n++} $1=="NTM" && ($4~/^pmtu:/||$4~/^blackhole:/) {n++} $1=="NTI" && $5!="na" && int($5)>=20 {n++} END{print n+0}' <<<"$recs")
+    [ "$bad" -gt 0 ] && exit 1
+    exit 0
+  fi
+
+  printf '%bnet-test — cross-node connectivity from %s (%s)%b\n' \
+    "$C_BOLD" "${NT_HOST[$NT_SELF_IDX]}" "${NT_HN[$NT_SELF_IDX]}" "$C_RESET"
+  printf '  cluster: %s node(s)   timeout=%ss  samples=%s  icmp-count=%s\n' \
+    "$NT_SIZE" "$NT_TIMEOUT" "$NT_SAMPLES" "$NT_ICMP"
+  _nt_run_local
+  _nt_summary_and_exit
+}
+
 # cmd_collector_stats — fetch /metrics from elchi-collector on every
 # cluster node, pull the operationally interesting counters into one
 # screen. Best-effort: metric names are the ones the collector
@@ -1338,6 +1864,7 @@ case "${1:-}" in
   stack-version)     shift; cmd_stack_version "$@" ;;
   tls-info)          shift; cmd_tls_info "$@" ;;
   endpoint-test)     shift; cmd_endpoint_test "$@" ;;
+  net-test)          shift; cmd_net_test "$@" ;;
   collector-stats)   shift; cmd_collector_stats "$@" ;;
   export-bundle)     shift; cmd_export_bundle "$@" ;;
   show-secret)       shift; cmd_show_secret "$@" ;;

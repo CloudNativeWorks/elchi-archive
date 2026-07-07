@@ -1195,6 +1195,18 @@
                         <code>/api/v1/query</code>, Grafana <code>/grafana/api/health</code>, internal
                         plaintext listener <code>:8080/</code>. Prints HTTP status for each.
                     </div>
+                    <code>elchi-stack net-test [--mesh]</code>
+                    <div class="desc">Cross-node connectivity check from this node to every peer: per-service
+                        TCP reachability + connect latency (registry, controllers, control-planes,
+                        nginx-UI, envoy, mongo, ClickHouse, VM/grafana, coredns — derived from the
+                        topology, per-node roles respected), plus ICMP RTT/loss and a
+                        <strong>path-MTU (DF) probe</strong> — catches the MTU black holes and lossy
+                        inter-DC links that plain TCP checks miss. <code>--mesh</code> (M1 + root):
+                        every node probes every other node → full src×dst matrix.
+                        <code>--timeout=3 --samples=3 --icmp-count=10 --json</code>. Exit
+                        <code>0</code> clean, <code>1</code> on any failure / MTU black hole /
+                        ≥20% ICMP loss — scriptable as a CI/cron gate.
+                    </div>
                     <code>elchi-stack collector-stats</code>
                     <div class="desc">Per-node elchi-collector metrics summary (from <code>:18091/metrics</code>):
                         events received / dropped, active ALS streams, batcher queue depth, ClickHouse rows

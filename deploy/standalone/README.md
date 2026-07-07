@@ -245,6 +245,14 @@ elchi-stack add-node <ip>           extend the cluster (M1 only)
 elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
 elchi-stack export-bundle <out>     re-package the encrypted cluster bundle
 elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart)
+elchi-stack net-test [--mesh]       cross-node connectivity check from this node to
+                                    every peer: per-service TCP reachability + connect
+                                    latency, ICMP RTT/loss, path-MTU (DF) probe —
+                                    catches MTU black holes and lossy links that plain
+                                    TCP checks miss. --mesh (M1 + root): every node
+                                    probes every other node → full src×dst matrix.
+                                    [--timeout=3] [--samples=3] [--icmp-count=10] [--json]
+                                    exit 0 clean · 1 FAIL/MTU-black-hole/≥20% loss
 ```
 
 ---
