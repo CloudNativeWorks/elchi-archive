@@ -72,25 +72,21 @@ coredns::setup() {
   sec=$(secrets::value ELCHI_GSLB_SECRET 2>/dev/null || true)
   [ -n "$sec" ] || die "ELCHI_GSLB_SECRET missing — did secrets::generate run?"
 
-  # CoreDNS-with-elchi-plugin binary lives at upstream
-  # https://github.com/cloudnativeworks/elchi-gslb (separate repo from
-  # elchi-archive). Release tag = "v<X.Y.Z>", asset filename =
-  # "coredns-elchi-linux-<arch>-v<X.Y.Z>". Both the previous URL pattern
-  # (elchi-archive/elchi-gslb-<v>/coredns-elchi-linux-<arch>) and the
-  # filename without version suffix were never published — pulling from
-  # there fetched a vanilla coredns or 404 → "Unknown directive 'elchi'"
-  # at runtime.
-  # v0.1.3 = first elchi-gslb release built with the corrected CI that
-  # actually runs `go generate` before `go build` (v0.1.1 shipped a
-  # vanilla coredns by mistake — "Unknown directive 'elchi'" at runtime).
-  # Default lives in lib/versions.sh (ELCHI_DEFAULT_COREDNS_VERSION);
+  # CoreDNS-with-elchi-plugin binary is pulled from the PUBLIC elchi-archive
+  # mirror — NEVER the private cloudnativeworks/elchi-gslb source (install-time
+  # curl is unauthenticated → a private-repo URL 404s, which is exactly what
+  # this used to do). The build-elchi-gslb.yml mirror job republishes the
+  # binary under release tag "elchi-gslb-v<X.Y.Z>" with a version-STRIPPED
+  # asset name "coredns-elchi-linux-<arch>" (the private source suffixes it
+  # with "-v<X.Y.Z>"; the mirror renames it on republish). v0.1.3+ carry the
+  # real elchi plugin (v0.1.1 shipped a vanilla coredns → "Unknown directive
+  # 'elchi'"). Default lives in lib/versions.sh (ELCHI_DEFAULT_COREDNS_VERSION);
   # install.sh sets + exports ELCHI_COREDNS_VERSION from it.
   local v=${ELCHI_COREDNS_VERSION:?ELCHI_COREDNS_VERSION not set (install.sh sources lib/versions.sh)}
-  # Normalize: accept both "v0.1.1" and "0.1.1" inputs; the tag and the
-  # filename in upstream releases both use the "v"-prefixed form.
+  # Normalize: accept both "v0.1.1" and "0.1.1"; the mirror tag is v-prefixed.
   local tag=v${v#v}
-  local fname="coredns-elchi-linux-${ELCHI_ARCH}-${tag}"
-  local url="https://github.com/cloudnativeworks/elchi-gslb/releases/download/${tag}/${fname}"
+  local fname="coredns-elchi-linux-${ELCHI_ARCH}"
+  local url="https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-gslb-${tag}/${fname}"
 
   if [ ! -x "$COREDNS_BIN" ]; then
     local tmp
