@@ -49,7 +49,7 @@ sudo bash deploy/standalone/install.sh \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
   --backend-version=elchi-v1.4.8-v0.14.0-envoy1.36.2,elchi-v1.4.8-v0.14.0-envoy1.38.0 \
   --ui-version=v1.4.4 \
-  --envoy-version=v1.37.0 \
+  --envoy-version=v1.38.3 \
   --main-address=elchi.example.com \
   --hostnames=elchi.example.com,m1,m2,m3
 ```
@@ -71,7 +71,7 @@ sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
   --backend-version=elchi-v1.4.8-v0.14.0-envoy1.36.2 \
   --ui-version=v1.4.4 \
-  --envoy-version=v1.37.0 \
+  --envoy-version=v1.38.3 \
   --main-address=$(hostname -f)
 ```
 
@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
       --backend-version=elchi-v1.4.8-v0.14.0-envoy1.36.2 \
       --ui-version=v1.4.4 \
-      --envoy-version=v1.37.0 \
+      --envoy-version=v1.38.3 \
       --main-address=elchi.example.com
 ```
 
@@ -119,7 +119,7 @@ default:
 |------------------|----------------------------------|---------|
 | elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.6-v0.14.0-envoy1.38.3` |
 | elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.5` |
-| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.37.0` |
+| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.38.3` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
 | elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.11` |
 | VictoriaMetrics  | `ELCHI_DEFAULT_VM_VERSION`       | `v1.93.5` |

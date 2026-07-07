@@ -437,7 +437,7 @@ topology::compute() {
 #   Cluster: 3 node(s)  main_address=...  port=443  TLS=true
 #   Versions:
 #     UI:                   v1.1.9
-#     Envoy proxy:          v1.37.0
+#     Envoy proxy:          v1.38.3
 #     CoreDNS GSLB plugin:  v0.1.1 (disabled)
 #     Backend variants:
 #       - elchi-v1.4.8-v0.14.0-envoy1.35.3

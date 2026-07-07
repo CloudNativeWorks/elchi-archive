@@ -32,7 +32,7 @@ ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.6.6-v0.14.0-envoy1.38.3"
 ELCHI_DEFAULT_UI_VERSION="v1.5.5"
 
 # Envoy proxy binary (served from the elchi-archive release mirror).
-ELCHI_DEFAULT_ENVOY_VERSION="v1.37.0"
+ELCHI_DEFAULT_ENVOY_VERSION="v1.38.3"
 
 # CoreDNS build carrying the elchi GSLB plugin.
 ELCHI_DEFAULT_COREDNS_VERSION="v0.1.4"

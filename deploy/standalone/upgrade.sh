@@ -153,7 +153,7 @@ while [ "$#" -gt 0 ]; do
     --backend-variants=*)                 NEW_BACKEND_VARIANTS=${1#*=} ;;
     # Additive shortcut: append to current variants instead of replacing.
     # Use case: cluster running v1.36.2 → operator wants to ALSO offer
-    # v1.37.0 to UI users without listing v1.36.2 again. Resolved against
+    # v1.38.3 to UI users without listing v1.36.2 again. Resolved against
     # the current backend_variants set after argparse so dedup is honest.
     --add-backend-version=*)              ADD_BACKEND_VARIANTS=${1#*=} ;;
     --add-backend-variants=*)             ADD_BACKEND_VARIANTS=${1#*=} ;;

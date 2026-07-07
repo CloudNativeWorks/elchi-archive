@@ -14,7 +14,7 @@
 #         --main-address=elchi.example.com \
 #         --ui-version=v1.1.9 \
 #         --backend-version=elchi-v1.4.8-v0.14.0-envoy1.35.3,elchi-v1.4.8-v0.14.0-envoy1.36.2 \
-#         --envoy-version=v1.37.0
+#         --envoy-version=v1.38.3
 #
 # What this script does:
 #   1. Downloads the elchi-archive `main` branch as a tarball from
