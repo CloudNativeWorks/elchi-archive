@@ -58,8 +58,8 @@
   "elchi_client_releases": [
     {
       "version": "v1.6.2",
-      "date": "2026-07-02T19:20:10Z",
-      "shield_version": "v0.4.5",
+      "date": "2026-07-07T22:18:09Z",
+      "shield_version": "v0.4.6",
       "files": [
         {
           "name": "elchi-client-linux-amd64",
@@ -71,14 +71,14 @@
           "name": "elchi-install.sh",
           "type": "script",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.2/elchi-install.sh",
-          "sha256": "7880494925ced91db9a302087687b15b9b4d1cb824eb2370e58a495dd9e855c8"
+          "sha256": "2d7896f60461382a088b3a3e271a8585e4386f1d13453e13f031d42f6f552f7e"
         },
         {
           "name": "elchi-shield-linux-amd64",
           "type": "binary",
-          "description": "elchi-shield v0.4.5 (Envoy ext_proc WAF sidecar) bundled with this client release",
+          "description": "elchi-shield v0.4.6 (Envoy ext_proc WAF sidecar) bundled with this client release",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.2/elchi-shield-linux-amd64",
-          "sha256": "b529eace69ecf570a88d0515f93286dacc8645876d781131685a70e8c58efa56"
+          "sha256": "679c96bc364c131006045f6cd4241f29547b8d4c4e7a27015276ab539c5ed2d5"
         }
       ]
     },
@@ -307,6 +307,19 @@
     }
   ],
   "elchi_shield_releases": [
+    {
+      "version": "v0.4.6",
+      "date": "2026-07-07T22:18:09Z",
+      "files": [
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.2",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.2/elchi-shield-linux-amd64",
+          "sha256": "679c96bc364c131006045f6cd4241f29547b8d4c4e7a27015276ab539c5ed2d5"
+        }
+      ]
+    },
     {
       "version": "v0.4.5",
       "date": "2026-07-02T19:20:10Z",
