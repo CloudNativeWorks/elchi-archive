@@ -500,7 +500,8 @@
                             asset name. Accepted but ignored.</div>
                         <code>--ui-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">UI bundle version (<code>elchi-dist-vX.Y.Z.tar.gz</code>), downloaded from the
-                            public <code>elchi-archive</code> releases — mirrored from the private <code>elchi</code> repo
+                            public <code>elchi-archive</code> releases — mirrored from the private <code>elchi</code>
+                            repo
                             by the <code>build-elchi-ui</code> workflow. <span class="default">Default:
                                 <code>v1.4.4</code>.</span>
                         </div>
@@ -1554,7 +1555,8 @@
                     <code>jhonbrownn/*</code> images (the same ones the Helm chart consumes); third-party
                     services (MongoDB, ClickHouse, VictoriaMetrics, Grafana, OpenTelemetry, Envoy) use
                     their official upstream images — nothing is built locally. Source lives at
-                    <a href="https://github.com/CloudNativeWorks/elchi-archive/tree/main/deploy/docker">deploy/docker/</a>;
+                    <a
+                        href="https://github.com/CloudNativeWorks/elchi-archive/tree/main/deploy/docker">deploy/docker/</a>;
                     the installer is unversioned (always runs from the <code>main</code> branch) — component
                     image tags are pinned per-flag, defaulting from
                     <code>deploy/docker/versions.env</code>.
@@ -1562,7 +1564,8 @@
                 <p class="info" style="margin-bottom: 12px;">
                     <strong>Prerequisites: none beyond a Linux host.</strong> <code>get.sh</code>
                     auto-installs whatever's missing — Docker Engine (via the official
-                    <code>get.docker.com</code>), plus <code>curl</code>/<code>tar</code>/<code>gzip</code>/<code>openssl</code>
+                    <code>get.docker.com</code>), plus
+                    <code>curl</code>/<code>tar</code>/<code>gzip</code>/<code>openssl</code>
                     (needs root, i.e. <code>sudo</code>). You run the install command on a
                     <strong>single machine</strong> (M1, the Swarm manager) and it initializes Swarm
                     automatically. For multi-node HA, pass <code>--nodes=</code> — M1 fans out over
@@ -1583,8 +1586,8 @@
                     | sudo bash -s -- \
                     --main-address=&lt;your-dns-or-ip&gt;</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Image tags default from <code>versions.env</code>: UI <code>v1.5.5</code>, backend
-                    <code>v1.6.6-v0.14.0-envoy1.38.3</code>, coredns <code>v0.1.4</code>, collector
+                    Image tags default from <code>versions.env</code>: UI <code>v1.5.6</code>, backend
+                    <code>v1.6.7-v0.14.0-envoy1.38.3</code>, coredns <code>v0.1.4</code>, collector
                     <code>v0.1.11</code>, plus official <code>mongo:8.0</code> /
                     <code>clickhouse/clickhouse-server</code> / <code>victoriametrics</code> /
                     <code>grafana</code> / <code>otel-collector-contrib</code> / <code>envoyproxy/envoy</code>.
@@ -1599,8 +1602,8 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
-                    --backend-version=v1.6.6-v0.14.0-envoy1.38.3,v1.6.0-v0.14.0-envoy1.35.3 \
-                    --ui-version=v1.5.5</div>
+                    --backend-version=v1.6.7-v0.14.0-envoy1.38.3,v1.6.0-v0.14.0-envoy1.35.3 \
+                    --ui-version=v1.5.6</div>
 
                 <h5>Custom port / plaintext</h5>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
@@ -1629,16 +1632,19 @@
                     <div class="flag-table">
                         <code>--main-address=&lt;dns|ip&gt;</code>
                         <div class="desc"><strong>Required.</strong> Public address — TLS cert SAN + the UI's
-                            <code>API_URL</code>. Use a real DNS name if you want ACME / browser-trusted certs.</div>
+                            <code>API_URL</code>. Use a real DNS name if you want ACME / browser-trusted certs.
+                        </div>
                         <code>--port=&lt;n&gt;</code>
                         <div class="desc">Public Envoy edge port (published via Swarm ingress).
                             <span class="default">Default: <code>443</code>.</span> <code>80</code> implies
-                            plaintext unless TLS is set explicitly.</div>
+                            plaintext unless TLS is set explicitly.
+                        </div>
                         <code>--ui-port=&lt;n&gt;</code>
                         <div class="desc">Internal port the UI nginx image listens on (Envoy upstream).
                             <span class="default">Default: <code>8080</code></span> — the
                             <code>jhonbrownn/elchi</code> image runs unprivileged nginx on
-                            <code>8080</code>. Only set this for an older image that binds <code>80</code>.</div>
+                            <code>8080</code>. Only set this for an older image that binds <code>80</code>.
+                        </div>
                     </div>
                 </details>
 
@@ -1649,20 +1655,24 @@
                         <div class="desc">One or more <code>jhonbrownn/elchi-backend</code> tags, comma-separated.
                             One control-plane service + Envoy cluster per variant; the embedded envoy version
                             must be unique. <span class="default">Default:
-                                <code>v1.6.6-v0.14.0-envoy1.38.3</code> (from <code>versions.env</code>).</span></div>
+                                <code>v1.6.7-v0.14.0-envoy1.38.3</code> (from <code>versions.env</code>).</span></div>
                         <code>--ui-version=&lt;tag&gt;</code>
                         <div class="desc">UI image (<code>jhonbrownn/elchi</code>) tag.
-                            <span class="default">Default: <code>v1.5.5</code>.</span></div>
+                            <span class="default">Default: <code>v1.5.6</code>.</span>
+                        </div>
                         <code>--coredns-version=&lt;tag&gt;</code>
                         <div class="desc">CoreDNS GSLB image (<code>jhonbrownn/elchi-coredns</code>) tag.
-                            <span class="default">Default: <code>v0.1.4</code>.</span></div>
+                            <span class="default">Default: <code>v0.1.4</code>.</span>
+                        </div>
                         <code>--collector-version=&lt;tag&gt;</code>
                         <div class="desc">elchi-collector image (<code>jhonbrownn/elchi-collector</code>) tag.
-                            <span class="default">Default: <code>v0.1.11</code>.</span></div>
+                            <span class="default">Default: <code>v0.1.11</code>.</span>
+                        </div>
                         <code>--image-repo=&lt;repo&gt;</code>
                         <div class="desc">Docker Hub namespace / registry for the elchi images.
                             <span class="default">Default: <code>jhonbrownn</code>.</span> Point at a private
-                            mirror (e.g. a local <code>registry:2</code>) for air-gapped multi-node.</div>
+                            mirror (e.g. a local <code>registry:2</code>) for air-gapped multi-node.
+                        </div>
                     </div>
                 </details>
 
@@ -1673,7 +1683,8 @@
                         <div class="desc"><span class="default">Default: <code>self-signed</code></span> — a
                             10-year ECDSA-P256 cert with <code>--main-address</code> + <code>elchi-envoy</code>
                             + loopback as SANs, bind-mounted into Envoy from
-                            <code>/etc/elchi/tls/</code>.</div>
+                            <code>/etc/elchi/tls/</code>.
+                        </div>
                         <code>--cert=&lt;path&gt; --key=&lt;path&gt;</code>
                         <div class="desc">For <code>--tls=provided</code> — your own cert/key files.</div>
                     </div>
@@ -1691,10 +1702,12 @@
                         <code>--gslb-publish</code>
                         <div class="desc">Publish CoreDNS <code>:53</code> on the host (Swarm ingress).
                             <span class="default">Off by default</span> to avoid clashing with the host
-                            resolver — GSLB is reachable on the overlay regardless.</div>
+                            resolver — GSLB is reachable on the overlay regardless.
+                        </div>
                         <code>--gslb-forwarders=&lt;csv&gt;</code>
                         <div class="desc">Upstream resolvers for non-authoritative queries.
-                            <span class="default">Default: <code>8.8.8.8,8.8.4.4</code>.</span></div>
+                            <span class="default">Default: <code>8.8.8.8,8.8.4.4</code>.</span>
+                        </div>
                         <code>--gslb-regions=&lt;csv&gt;</code>
                         <div class="desc">Region directive for the GSLB plugin.</div>
                     </div>
@@ -1711,14 +1724,17 @@
                             container with a scoped <code>elchi</code> app user). For external, also pass
                             <code>--mongo-uri=</code> (collector) and
                             <code>--mongo-hosts= --mongo-username= --mongo-password= --mongo-database=
-                            --mongo-replicaset=</code> (backend).</div>
+                            --mongo-replicaset=</code> (backend).
+                        </div>
                         <code>--clickhouse=local|external</code>
                         <div class="desc"><span class="default">Default: <code>local</code>.</span> External:
-                            <code>--clickhouse-uri=clickhouse://user:pass@host:9000/elchi</code>.</div>
+                            <code>--clickhouse-uri=clickhouse://user:pass@host:9000/elchi</code>.
+                        </div>
                         <code>--vm=local|external</code>
                         <div class="desc"><span class="default">Default: <code>local</code>.</span> External:
                             <code>--vm-endpoint=&lt;url|host:port&gt;</code> (used by OTel remote-write +
-                            Grafana datasource).</div>
+                            Grafana datasource).
+                        </div>
                     </div>
                 </details>
 
@@ -1731,12 +1747,14 @@
                         <code>--grafana-password=&lt;p&gt;</code>
                         <div class="desc">Admin password (bind-mounted file via <code>__FILE</code>).
                             <span class="default">Default: random <code>elchi-&lt;hex&gt;</code></span>,
-                            printed in the install summary.</div>
+                            printed in the install summary.
+                        </div>
                         <code>--enable-demo</code>
                         <div class="desc">Enable UI demo mode (<code>window.APP_CONFIG.ENABLE_DEMO</code>).</div>
                         <code>--log-level=&lt;level&gt;</code>
                         <div class="desc">Backend + collector log level.
-                            <span class="default">Default: <code>info</code>.</span></div>
+                            <span class="default">Default: <code>info</code>.</span>
+                        </div>
                     </div>
                 </details>
 
@@ -1751,14 +1769,15 @@
                             Envoy config. <span class="default">Default: single node (this host).</span></div>
                         <code>--ssh-user=&lt;user&gt;</code>
                         <div class="desc">SSH user for the other nodes. <span class="default">Default:
-                            <code>root</code></span> (non-root needs passwordless sudo).</div>
+                                <code>root</code></span> (non-root needs passwordless sudo).</div>
                         <code>--ssh-key=&lt;path&gt;</code>
                         <div class="desc">SSH private key for the other nodes.</div>
                         <code>--ssh-password=&lt;pwd&gt;</code>
                         <div class="desc">SSH password (via <code>sshpass</code>).</div>
                         <code>--no-ssh</code>
                         <div class="desc">Skip auto-join; join the workers yourself (M1 prints the
-                            <code>docker swarm join</code> command).</div>
+                            <code>docker swarm join</code> command).
+                        </div>
                     </div>
                     <p style="font-size: 13px; color: #24292f; margin: 8px 0; line-height: 1.7;">
                         <strong>There are NO storage / HA flags.</strong> MongoDB / ClickHouse clustering
@@ -1788,8 +1807,9 @@
                         <code>--placement-m1="&lt;expr&gt;"</code>
                         <div class="desc">Override the placement constraint for M1 singletons.
                             <span class="default">Default: the first <code>--nodes</code> host
-                            (<code>node.hostname == …</code>), or <code>node.role == manager</code> for a
-                            single host.</span></div>
+                                (<code>node.hostname == …</code>), or <code>node.role == manager</code> for a
+                                single host.</span>
+                        </div>
                         <code>--no-tune-host</code>
                         <div class="desc">Skip host kernel/docker tuning (sysctl + Transparent Huge Pages
                             off + docker log rotation), applied on every node by default. Use on a shared /
@@ -1801,7 +1821,8 @@
                         <code>--state-dir=&lt;path&gt;</code>
                         <div class="desc">Where the generated <code>stack.yml</code> is written.
                             <span class="default">Default: <code>~/.elchi-docker</code>.</span> (Editable
-                            config lives under <code>--etc-dir</code>, not here.)</div>
+                            config lives under <code>--etc-dir</code>, not here.)
+                        </div>
                         <code>--dry-run</code>
                         <div class="desc">Render config + the stack file only — no Swarm init, no deploy
                             (everything under the state dir; the host is not touched).</div>
@@ -1824,14 +1845,16 @@
                         target (leader-elected via Mongo).</div>
                     <code>elchi-controller-node&lt;i&gt;</code>
                     <div class="desc"><code>elchi-backend</code> — REST + gRPC API; <strong>one per
-                        node</strong> (version-agnostic singleton).</div>
+                            node</strong> (version-agnostic singleton).</div>
                     <code>elchi-cp-&lt;envoy&gt;-node&lt;i&gt;</code>
                     <div class="desc"><code>elchi-backend</code> — control-plane (xDS); <strong>one per
-                        node per variant</strong>, addressable as
-                        <code>node&lt;i&gt;-controlplane-&lt;X.Y.Z&gt;</code> in the Envoy config.</div>
+                            node per variant</strong>, addressable as
+                        <code>node&lt;i&gt;-controlplane-&lt;X.Y.Z&gt;</code> in the Envoy config.
+                    </div>
                     <code>elchi-ui</code>
                     <div class="desc"><code>jhonbrownn/elchi</code> · <em>global</em> — SPA (nginx);
-                        <code>config.js</code> injected.</div>
+                        <code>config.js</code> injected.
+                    </div>
                     <code>elchi-mongo[-1..3]</code>
                     <div class="desc"><code>mongo:8.0</code> — single instance, or a 3-member replica set
                         automatically at 3+ nodes.</div>
@@ -1859,8 +1882,8 @@
                     <code>/etc/elchi</code> on the host (not baked-in Swarm configs), so you edit a file
                     and apply it with a <strong>service restart</strong> — no reinstall:
                 </p>
-                <div class="stdl-cmd">sudo vi /etc/elchi/config/Corefile          # or envoy.yaml, config-prod-*.yaml, …
-                    docker service update --force elchi_elchi-coredns   # restart that service to pick it up</div>
+                <div class="stdl-cmd">sudo vi /etc/elchi/config/Corefile # or envoy.yaml, config-prod-*.yaml, …
+                    docker service update --force elchi_elchi-coredns # restart that service to pick it up</div>
                 <p style="font-size: 13px; color: #656d76; margin: 6px 0 6px 0;">
                     Which file → which service to <code>--force</code>:
                 </p>
@@ -1876,8 +1899,10 @@
                     <code>config/clickhouse-*.xml</code>
                     <div class="desc"><code>elchi_elchi-clickhouse</code> (or <code>-1/-2/-3</code> in HA)</div>
                     <code>config/config-prod-&lt;variant&gt;.yaml</code>
-                    <div class="desc"><code>elchi_elchi-registry</code> + <code>elchi_elchi-controller-node&lt;i&gt;</code>
-                        + <code>elchi_elchi-cp-&lt;envoy&gt;-node&lt;i&gt;</code> (all use it)</div>
+                    <div class="desc"><code>elchi_elchi-registry</code> +
+                        <code>elchi_elchi-controller-node&lt;i&gt;</code>
+                        + <code>elchi_elchi-cp-&lt;envoy&gt;-node&lt;i&gt;</code> (all use it)
+                    </div>
                     <code>tls/server.crt · tls/server.key</code>
                     <div class="desc"><code>elchi_elchi-envoy</code></div>
                     <code>secrets/ELCHI_GRAFANA_PASSWORD</code>
@@ -1910,7 +1935,8 @@
                     transferred installer with <code>--offline</code> (it <code>docker load</code>s the
                     images and deploys with <code>--resolve-image=never</code>):
                 </p>
-                <div class="stdl-cmd">sudo deploy/docker/install.sh --main-address=10.0.0.5 --offline=elchi-images.tar</div>
+                <div class="stdl-cmd">sudo deploy/docker/install.sh --main-address=10.0.0.5 --offline=elchi-images.tar
+                </div>
                 <p class="note" style="margin: 8px 0;">
                     Multi-node air-gapped: <code>docker load</code> the bundle on <strong>every</strong> node,
                     or run a throwaway <code>registry:2</code>, push the loaded images there and pass
@@ -1972,8 +1998,8 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
-                    --ui-version=v1.5.5 \
-                    --backend-version=v1.6.6-v0.14.0-envoy1.38.3</div>
+                    --ui-version=v1.5.6 \
+                    --backend-version=v1.6.7-v0.14.0-envoy1.38.3</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
                 <div class="stdl-cmd"># remove the stack, keep data volumes
@@ -2038,7 +2064,8 @@
                         not <code>/etc/hosts</code> aliases; Envoy clusters are <code>STRICT_DNS</code>.</li>
                     <li><strong>Backend identity</strong> (<code>CONTROLLER_ID</code> /
                         <code>CONTROL_PLANE_ID</code>) pinned to DNS-safe service names, so the
-                        <code>x-target-cluster</code> header matches the generated Envoy cluster names.</li>
+                        <code>x-target-cluster</code> header matches the generated Envoy cluster names.
+                    </li>
                     <li><strong>Registry client path</strong> uses the Envoy internal <em>plaintext</em>
                         listener (<code>elchi-envoy:8080</code>) — keeps traffic on the overlay, avoids
                         shipping the self-signed CA into every backend container.</li>
@@ -2047,7 +2074,8 @@
                         operators can edit a file and apply it with
                         <code>docker service update --force &lt;svc&gt;</code>. Each service carries an
                         <code>elchi.cfghash</code> label so a re-render still rolling-updates the changed
-                        services.</li>
+                        services.
+                    </li>
                     <li><strong>SSH fan-out</strong>: like the bare-metal installer, M1 SSHes into the other
                         nodes to join the Swarm <em>and</em> to copy the <code>/etc/elchi</code> tree to each
                         (Swarm doesn't distribute bind-mount files). Containers themselves are scheduled by
@@ -2057,7 +2085,7 @@
                 <h4>11. Notes &amp; limitations</h4>
                 <ul style="font-size: 13px; color: #24292f; line-height: 1.7; margin: 0 0 8px 18px;">
                     <li><strong>Editable config / secrets / TLS / dashboards live under
-                        <code>/etc/elchi</code></strong> (bind-mounted into the containers, on every node);
+                            <code>/etc/elchi</code></strong> (bind-mounted into the containers, on every node);
                         only the generated <code>stack.yml</code> lives in <code>~/.elchi-docker</code>. Edit
                         a file then <code>docker service update --force &lt;svc&gt;</code> to apply
                         (<code>collector.env</code> is an <code>env_file</code> — needs a redeploy instead).</li>
@@ -2065,13 +2093,15 @@
                         <code>--no-tune-host</code>): sysctl (<code>vm.max_map_count</code>, conntrack,
                         somaxconn, FDs, …), Transparent Huge Pages <strong>off</strong> (MongoDB/ClickHouse
                         require it), and docker log rotation (only if <code>daemon.json</code> is
-                        absent; restarted pre-deploy, rolled back if docker doesn't return).</li>
+                        absent; restarted pre-deploy, rolled back if docker doesn't return).
+                    </li>
                     <li><strong>coredns</strong> runs but its healthcheck is disabled: it only reports ready
                         once you create the GSLB zone in the UI (a post-install step), so it would otherwise
                         churn forever. It serves once the zone snapshot is fetched in the background.</li>
                     <li>ACME (Let's Encrypt) is enabled in the backend config but only works when
                         <code>--main-address</code> is a real public DNS name with a reachable
-                        <code>:443</code>; self-signed (the default) is the safe choice otherwise.</li>
+                        <code>:443</code>; self-signed (the default) is the safe choice otherwise.
+                    </li>
                     <li>The full Grafana dashboard JSON (~850&nbsp;KB) exceeds the Docker config size limit,
                         so dashboards are bind-mounted from the state dir instead of shipped as configs.</li>
                     <li>CoreDNS GSLB <code>node_ip</code> is set to <code>--main-address</code> (an overlay
@@ -2123,7 +2153,7 @@
 
                 <h5>Production setup (default <code>--cloud=other</code>)</h5>
                 <div class="stdl-cmd">wget
-                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.5/elchi-install.sh
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.6/elchi-install.sh
                     sudo bash elchi-install.sh \
                     --name=web-server-01 \
                     --host=backend.elchi.io \
@@ -2236,10 +2266,11 @@
                     <div class="flag-table">
                         <code>--no-shield</code>
                         <div class="desc">Do NOT install the elchi-shield sidecar.
-                            <span class="default">Installed by default</span> next to the client.</div>
+                            <span class="default">Installed by default</span> next to the client.
+                        </div>
                         <code>--shield-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">Pin the elchi-shield release. <span class="default">Default: the
-                            version bundled with this client release</span> (fetched from the public
+                                version bundled with this client release</span> (fetched from the public
                             elchi-archive mirror, not a private repo).</div>
                         <code>--shield-audit-dsn=&lt;DSN&gt;</code>
                         <div class="desc">Send shield audit events to a central ClickHouse
@@ -2247,11 +2278,13 @@
                             <span class="default">Off by default.</span> The ClickHouse host must allow this
                             edge node to reach <code>:9000</code> and the DSN user needs
                             <code>CREATE</code>/<code>INSERT</code> (shield auto-creates its
-                            <code>elchi_shield_audit</code> table).</div>
+                            <code>elchi_shield_audit</code> table).
+                        </div>
                         <code>--shield-metrics-otlp=&lt;host:port&gt;</code>
                         <div class="desc">Push shield metrics to an OTel Collector (OTLP/gRPC).
                             <span class="default">Off by default</span> — otherwise scrape
-                            <code>/metrics</code> on <code>127.0.0.1:9001</code>.</div>
+                            <code>/metrics</code> on <code>127.0.0.1:9001</code>.
+                        </div>
                         <code>--shield-metrics-insecure</code>
                         <div class="desc">Use plaintext gRPC to the metrics collector (no TLS).</div>
                     </div>
@@ -2260,7 +2293,8 @@
                         <code>/etc/elchi/elchi-shield/config.yaml</code> (shield's sink config, mode 0600).
                         Edit that file any time and <code>systemctl restart elchi-shield</code> — re-running
                         the installer preserves it. Shape:
-                        <code>audit: {exporter: clickhouse, clickhouse_dsn: "clickhouse://user:pass@CH:9000/elchi"}</code> ·
+                        <code>audit: {exporter: clickhouse, clickhouse_dsn: "clickhouse://user:pass@CH:9000/elchi"}</code>
+                        ·
                         <code>metrics: {otlp_endpoint: "OTEL:4317"}</code>. Security
                         <strong>policies</strong> are a separate, watched dir:
                         <code>/etc/elchi/elchi-shield/conf.d/*.yaml</code> (pushed by the control plane, or
@@ -2274,12 +2308,12 @@
                     (e.g., from a config-management system or a custom systemd unit):
                 </p>
                 <div class="stdl-cmd">wget
-                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.5/elchi-client-linux-amd64
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.6/elchi-client-linux-amd64
                     sudo mv elchi-client-linux-amd64 /usr/local/bin/elchi-client
                     sudo chmod +x /usr/local/bin/elchi-client</div>
                 <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">
                     Verify checksum:
-                    <code>wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.5/elchi-client-linux-amd64.sha256
+                    <code>wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.5.6/elchi-client-linux-amd64.sha256
                     &amp;&amp; sha256sum -c elchi-client-linux-amd64.sha256</code>
                 </p>
 
