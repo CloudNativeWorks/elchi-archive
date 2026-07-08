@@ -17,7 +17,7 @@
 
 BACKEND="v1.6.8"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envoy1.38.3
                   #   part is kept; standalone's elchi- prefix too)
-UI="v1.5.7"             # UI image, e.g. v1.5.2
+UI="v1.5.8"             # UI image, e.g. v1.5.2
 COREDNS="v0.1.4"        # CoreDNS / GSLB image, e.g. v0.1.5
 COLLECTOR="v0.1.11"      # elchi-collector, e.g. v0.1.12
 
