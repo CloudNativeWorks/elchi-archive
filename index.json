@@ -453,6 +453,19 @@
   ],
   "ui_releases": [
     {
+      "version": "v1.5.8",
+      "date": "2026-07-08T10:14:48Z",
+      "files": [
+        {
+          "name": "elchi-dist-v1.5.8.tar.gz",
+          "type": "bundle",
+          "description": "elchi UI static distribution bundle (index.html + assets)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.8/elchi-dist-v1.5.8.tar.gz",
+          "sha256": "b4ef8210218960024f1d561d16d8d628e61ec715a394ce360bbb479dedb5d85b"
+        }
+      ]
+    },
+    {
       "version": "v1.5.7",
       "date": "2026-07-08T09:38:07Z",
       "files": [
