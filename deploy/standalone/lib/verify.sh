@@ -151,7 +151,10 @@ verify::_https_handshake() {
             -connect "127.0.0.1:${port}" -showcerts 2>/dev/null \
           | openssl x509 -noout -ext subjectAltName 2>/dev/null \
           | tr -d ' ' | tr ',' '\n')
-    if [ -n "$san" ] && ! printf '%s\n' "$san" | grep -qE "(^|:)(DNS|IP):${main}\$"; then
+    # NB: `tr -d ' '` collapses openssl's "IP Address:" label to
+    # "IPAddress:" — the pattern must accept that form, or every
+    # IP-based --main-address false-WARNs even when the SAN is correct.
+    if [ -n "$san" ] && ! printf '%s\n' "$san" | grep -qE "(^|:)(DNS|IP|IPAddress):${main}\$"; then
       log::warn "TLS cert SAN does not list '${main}' — browsers will fail name validation"
       log::warn "  SAN: ${san}"
     fi
@@ -405,20 +408,20 @@ verify::_keeper_leader() {
   local port=${ELCHI_PORT_CLICKHOUSE_KEEPER:-9181}
   local state=''
   # Try nc first (most portable), fall back to bash's /dev/tcp builtin.
-  # Both are best-effort — a missing client is not a hard failure here.
+  # NB: /dev/tcp is a bash SHELL FEATURE, not a filesystem path — a
+  # "[ -e /dev/tcp ]" existence probe is always false and previously made
+  # every nc-less host (RHEL/Alma minimal) skip this probe entirely. Under
+  # bash it is always available; just attempt the connection and let the
+  # empty-state branch below report an unreachable Keeper.
   if command -v nc >/dev/null 2>&1; then
     state=$(printf 'mntr\n' | nc -w 3 127.0.0.1 "$port" 2>/dev/null \
               | awk -F'\t' '/^zk_server_state/{print $2; exit}')
-  elif [ -e /dev/tcp ] || (echo >/dev/tcp/127.0.0.1/0) 2>/dev/null; then
-    # /dev/tcp probe — bash builtin, no external binary needed.
+  else
     state=$( { exec 3<>"/dev/tcp/127.0.0.1/${port}" 2>/dev/null || exit 1
               printf 'mntr\n' >&3
               timeout 3 cat <&3 2>/dev/null
               exec 3<&- ; exec 3>&-
             } | awk -F'\t' '/^zk_server_state/{print $2; exit}')
-  else
-    log::warn "clickhouse-keeper: no nc + no /dev/tcp support — skipping leader probe"
-    return 0
   fi
 
   case "$state" in
