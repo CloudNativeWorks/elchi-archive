@@ -755,30 +755,56 @@ preflight::check_cluster_ports() {
     preflight::check_port "${ELCHI_PORT_COLLECTOR_HTTP:-18091}" "elchi-collector-http"
   fi
   if [ "$runs_coredns" = "true" ] || [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
-    preflight::check_port "${ELCHI_PORT_COREDNS:-53}"          "coredns-tcp"
-    # UDP :53 is shared territory: Ubuntu / Debian default-on
-    # `systemd-resolved` binds 127.0.0.53:53 for the local stub
-    # resolver, while CoreDNS binds the cluster-public IP (e.g.
-    # 45.13.226.177:53). Different IPs, no collision — both can
-    # coexist on the same machine. The previous unconditional WARN
-    # confused operators because it fired on every healthy install.
-    # Suppress when the only UDP/53 listener is the loopback stub;
-    # warn for real when something binds the cluster IP or 0.0.0.0.
-    if preflight::_port_in_use "${ELCHI_PORT_COREDNS:-53}" udp; then
-      local _udp53_owners=""
-      if command -v ss >/dev/null 2>&1; then
-        _udp53_owners=$(ss -lunp 2>/dev/null \
-                          | awk '$5 ~ /:53$/ {print $5}')
+    # :53 is shared territory on BOTH protocols: Ubuntu / Debian
+    # default-on `systemd-resolved` binds 127.0.0.53:53 (tcp AND udp,
+    # shown by ss as "127.0.0.53%lo:53") for the local stub resolver,
+    # while CoreDNS binds the cluster-public IP (e.g. 45.13.226.177:53).
+    # Different IPs, no collision — both coexist on the same machine,
+    # exactly as the Helm DaemonSet coexists with each k8s node's
+    # resolved. The generic check_port probe matches ANY listener on
+    # the port, so it used to hard-fail every stock Ubuntu/Debian
+    # install ("port 53 in use by foreign process: systemd-resolved")
+    # even though the install would have succeeded. Only a non-loopback
+    # listener — dnsmasq/bind on the wildcard or another DNS server on
+    # the cluster IP — is a genuine collision (a wildcard bind DOES
+    # conflict with our node-IP bind): die for tcp, warn for udp
+    # (kept advisory, matching the previous udp behavior).
+    #
+    # The loopback filter matches on the "^127." PREFIX, not the exact
+    # address: ss suffixes scoped binds ("127.0.0.53%lo:53"), which an
+    # exact "^127.0.0.53:53$" pattern would miss.
+    local _p53=${ELCHI_PORT_COREDNS:-53}
+    if command -v ss >/dev/null 2>&1; then
+      local _tcp53
+      _tcp53=$(ss -ltnp 2>/dev/null | awk -v p="$_p53" '
+        $4 ~ "[:.]"p"$" && $4 !~ /^127\./ && $4 !~ /^\[::1\]/ { print; exit }
+      ')
+      if [ -n "$_tcp53" ]; then
+        local _tcp53_pid
+        _tcp53_pid=$(printf '%s' "$_tcp53" | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
+        if [ -n "$_tcp53_pid" ] && preflight::_holder_is_elchi "$_tcp53_pid"; then
+          log::info "port ${_p53} (coredns-tcp) is held by an elchi unit (pid ${_tcp53_pid}) — assuming rerun"
+        else
+          die "port ${_p53} (coredns-tcp) has a non-loopback listener: ${_tcp53}
+       CoreDNS must bind the node IP on :${_p53} — stop the conflicting DNS service or free the port
+       (systemd-resolved's loopback stub on 127.0.0.53 is fine and does NOT trigger this)"
+        fi
       fi
-      # Only flag when SOMETHING listens on a non-loopback IP for
-      # UDP/53 — that's the genuine collision case for CoreDNS.
-      if printf '%s\n' "$_udp53_owners" \
-           | grep -vE '^127\.0\.0\.53:53$|^127\.0\.0\.1:53$|^\[::1\]:53$' \
-           | grep -qE ':53$'; then
-        log::warn "UDP port 53 has a non-loopback listener; CoreDNS may fail to bind on the cluster IP"
-        log::warn "  current UDP/53 listeners:"
-        printf '%s\n' "$_udp53_owners" | sed 's/^/    /'
+      # udp: same non-loopback filter. NOTE the previous revision read
+      # ss field $5 (the peer column, always "0.0.0.0:*") instead of $4,
+      # so the warn could never fire at all.
+      local _udp53
+      _udp53=$(ss -lunp 2>/dev/null | awk -v p="$_p53" '
+        $4 ~ "[:.]"p"$" && $4 !~ /^127\./ && $4 !~ /^\[::1\]/ { print; exit }
+      ')
+      if [ -n "$_udp53" ]; then
+        log::warn "UDP port ${_p53} has a non-loopback listener; CoreDNS may fail to bind on the cluster IP"
+        log::warn "  listener: ${_udp53}"
       fi
+    else
+      # No ss → can't tell the loopback stub from a real collision;
+      # fall back to the strict probe rather than skipping the check.
+      preflight::check_port "$_p53" "coredns-tcp"
     fi
     preflight::check_port "${ELCHI_PORT_COREDNS_WEBHOOK:-8053}" "coredns-webhook"
   fi
