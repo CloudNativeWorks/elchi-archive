@@ -985,15 +985,6 @@ render::clickhouse() {
 </clickhouse>
 EOF
 
-  # Background merge pool: the shipped default (16) assumes a dedicated
-  # box; the stack co-locates ClickHouse with mongo/Envoy/backend on the
-  # same host. Half the cores, clamped [4,16]. Computed on the RENDERING
-  # host — with --nodes HA the members are assumed hardware-homogeneous
-  # (same assumption the rest of the stack file makes).
-  local ch_bg_pool
-  ch_bg_pool=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
-  [ "$ch_bg_pool" -lt 4 ]  && ch_bg_pool=4
-  [ "$ch_bg_pool" -gt 16 ] && ch_bg_pool=16
   local ch_log_ttl_days=${ELCHI_CLICKHOUSE_SYSTEM_LOG_TTL_DAYS:-14}
 
   cat > "${CONFIG_DIR}/clickhouse-server.xml" <<EOF
@@ -1004,10 +995,15 @@ EOF
     <logger>
         <level>warning</level>
     </logger>
-    <background_pool_size>${ch_bg_pool}</background_pool_size>
-    <!-- Scheduler pool (replicated-table housekeeping, TTL drops, Keeper
-         session upkeep): default 512 threads is dedicated-box sizing;
-         64 leaves ample headroom for our handful of tables. -->
+    <!-- background_pool_size deliberately stays at its default (16):
+         24.8+'s MergeTreeSettings::sanityCheck requires pool_size *
+         background_merges_mutations_concurrency_ratio (2) to cover
+         number_of_free_entries_in_pool_to_execute_optimize_entire_partition
+         (25) — anything below 13 aborts startup with BAD_ARGUMENTS.
+         Scheduler pool (replicated-table housekeeping, TTL drops, Keeper
+         session upkeep) has no such check: default 512 threads is
+         dedicated-box sizing; 64 leaves ample headroom for our handful
+         of tables. -->
     <background_schedule_pool_size>64</background_schedule_pool_size>
     <!-- Mark cache: shipped 5 GiB cap is dedicated-box sizing; the elchi
          dataset's marks fit comfortably in 512 MiB. -->

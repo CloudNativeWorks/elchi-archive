@@ -346,15 +346,14 @@ clickhouse::render_server() {
   else
     listen='127.0.0.1'
   fi
-  # Background merge pool: the shipped default is 16 threads, sized for a
-  # dedicated ClickHouse box. Scale to half the cores, clamped to [4,16]
-  # — merges keep up with the collector's insert rate at 4 threads even
-  # on small VMs, and anything above cores/2 just fights Envoy/mongod
-  # for CPU inside our CPUQuota.
-  local bg_pool
-  bg_pool=$(( $(clickhouse::_cpu_cores) / 2 ))
-  [ "$bg_pool" -lt 4 ]  && bg_pool=4
-  [ "$bg_pool" -gt 16 ] && bg_pool=16
+  # background_pool_size deliberately stays at its default (16). Lowering
+  # it looks tempting on small VMs but ABORTS STARTUP: 24.8+'s
+  # MergeTreeSettings::sanityCheck requires background_pool_size *
+  # background_merges_mutations_concurrency_ratio (2) to cover
+  # number_of_free_entries_in_pool_to_execute_optimize_entire_partition
+  # (25) — anything below 13 dies with BAD_ARGUMENTS before listening.
+  # Idle merge threads are near-free anyway; the systemd CPUQuota is
+  # what actually bounds ClickHouse's CPU share.
 
   # Mark cache: shipped cap is 5 GiB — sized for a dedicated box with
   # thousands of parts. Scale to MemoryMax/8, clamped to [128,512] MiB:
@@ -373,11 +372,11 @@ clickhouse::render_server() {
     <logger>
         <level>warning</level>
     </logger>
-    <background_pool_size>${bg_pool}</background_pool_size>
     <!-- Scheduler pool (replicated-table housekeeping, TTL drops, Keeper
          session upkeep): default 512 threads is dedicated-box sizing.
          64 leaves ample headroom for our handful of tables while
-         releasing ~450 idle threads' worth of stacks. -->
+         releasing ~450 idle threads' worth of stacks. (Unlike
+         background_pool_size, this pool has NO startup sanity check.) -->
     <background_schedule_pool_size>64</background_schedule_pool_size>
     <mark_cache_size>$(( mc_mb * 1048576 ))</mark_cache_size>
     <!-- Disk-full safeguard: refuse inserts/merges that would leave the data
