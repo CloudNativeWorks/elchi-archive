@@ -934,7 +934,11 @@ HASH_SALT=${hash_salt}
 # losing the cache across restarts is harmless (no volume needed).
 GEOIP_CACHE_DIR=/tmp/geoip
 BATCH_MAX_SIZE=20000
-BATCH_FLUSH_INTERVAL=1s
+# 10s only matters at LOW traffic (size/bytes ceilings flush first under
+# load): one 10x-bigger insert instead of a tiny one per shard per second
+# — fewer parts/merges/rollup-MV runs. Cost: ~10s analytics lag +
+# worst-case crash-loss, acceptable for ALS telemetry.
+BATCH_FLUSH_INTERVAL=${ELCHI_COLLECTOR_FLUSH_INTERVAL:-10s}
 BATCH_MAX_BYTES=8388608
 BATCH_BACKPRESSURE_POLICY=drop_new
 BATCH_QUEUE_SIZE=20000
@@ -981,6 +985,17 @@ render::clickhouse() {
 </clickhouse>
 EOF
 
+  # Background merge pool: the shipped default (16) assumes a dedicated
+  # box; the stack co-locates ClickHouse with mongo/Envoy/backend on the
+  # same host. Half the cores, clamped [4,16]. Computed on the RENDERING
+  # host — with --nodes HA the members are assumed hardware-homogeneous
+  # (same assumption the rest of the stack file makes).
+  local ch_bg_pool
+  ch_bg_pool=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
+  [ "$ch_bg_pool" -lt 4 ]  && ch_bg_pool=4
+  [ "$ch_bg_pool" -gt 16 ] && ch_bg_pool=16
+  local ch_log_ttl_days=${ELCHI_CLICKHOUSE_SYSTEM_LOG_TTL_DAYS:-14}
+
   cat > "${CONFIG_DIR}/clickhouse-server.xml" <<EOF
 <?xml version="1.0"?>
 <!-- Managed by the elchi Docker Swarm installer. -->
@@ -989,6 +1004,34 @@ EOF
     <logger>
         <level>warning</level>
     </logger>
+    <background_pool_size>${ch_bg_pool}</background_pool_size>
+    <!-- Scheduler pool (replicated-table housekeeping, TTL drops, Keeper
+         session upkeep): default 512 threads is dedicated-box sizing;
+         64 leaves ample headroom for our handful of tables. -->
+    <background_schedule_pool_size>64</background_schedule_pool_size>
+    <!-- Mark cache: shipped 5 GiB cap is dedicated-box sizing; the elchi
+         dataset's marks fit comfortably in 512 MiB. -->
+    <mark_cache_size>536870912</mark_cache_size>
+    <!-- System log tables grow FOREVER out of the box, and metric_log +
+         asynchronous_metric_log flush a row every second — constant
+         background writes serving no purpose here (VictoriaMetrics +
+         Grafana own the monitoring story). processors_profile_log logs
+         per query (default-on in modern CH); query_views_log fires on
+         every collector batch via the rollup materialized views. Keep
+         only query_log/part_log for debugging, with a TTL. -->
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <text_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <query_views_log remove="1"/>
+    <query_log>
+        <ttl>event_date + INTERVAL ${ch_log_ttl_days} DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL ${ch_log_ttl_days} DAY DELETE</ttl>
+    </part_log>
     <!-- Disk-full safeguard: refuse inserts/merges that would leave the data
          disk with less than this much free space, so a runaway event volume
          (collector api_events + shield audit) can't fill the disk to 100% and

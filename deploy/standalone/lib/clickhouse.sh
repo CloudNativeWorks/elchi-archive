@@ -186,6 +186,62 @@ clickhouse::_password_sha256() {
   printf '%s' "$(clickhouse::_password)" | sha256sum | awk '{print $1}'
 }
 
+# ----- host-proportional resource sizing ---------------------------------
+# ClickHouse ships tuned for a DEDICATED box:
+# max_server_memory_usage_to_ram_ratio defaults to 0.9 (90% of host RAM)
+# and the background merge pool to 16
+# threads. On an elchi node it shares the machine with mongod, Envoy, the
+# backend, VictoriaMetrics and Grafana — and our OOMScoreAdjust=-600 means
+# an unbounded ClickHouse would push the OOM killer onto THOSE services
+# instead of itself. Every other elchi unit already carries a MemoryMax;
+# these helpers derive ClickHouse's share from the host so small and large
+# VMs both get a sane split without per-size tuning.
+
+clickhouse::_total_ram_mb() {
+  awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo
+}
+
+clickhouse::_cpu_cores() {
+  nproc 2>/dev/null || echo 2
+}
+
+# clickhouse::_mem_max_mb — MemoryMax in MiB. Default: 40% of host RAM,
+# floored at 1024 MiB (below ~1G ClickHouse struggles to merge at all).
+# ELCHI_CLICKHOUSE_MEMORY_MAX overrides; accepts "4G", "2048M" or a plain
+# MiB integer. Normalized to MiB here because the derived per-query
+# limits in render_users need it as a number.
+clickhouse::_mem_max_mb() {
+  local o=${ELCHI_CLICKHOUSE_MEMORY_MAX:-}
+  if [ -n "$o" ]; then
+    case "$o" in
+      *[Gg]) printf '%d' $(( ${o%[Gg]} * 1024 )) ;;
+      *[Mm]) printf '%d' "${o%[Mm]}" ;;
+      *)     printf '%d' "$o" ;;
+    esac
+    return
+  fi
+  local ram mm
+  ram=$(clickhouse::_total_ram_mb)
+  mm=$(( ${ram:-2048} * 40 / 100 ))
+  [ "$mm" -lt 1024 ] && mm=1024
+  printf '%d' "$mm"
+}
+
+# clickhouse::_cpu_quota — systemd CPUQuota. Default: half the cores
+# (cores * 50%), floored at 100% so a 1-core box still gets a full core.
+# Merges + inserts parallelize well past that, but on a co-located node
+# the front door (Envoy) and mongod matter more than merge latency.
+clickhouse::_cpu_quota() {
+  if [ -n "${ELCHI_CLICKHOUSE_CPU_QUOTA:-}" ]; then
+    printf '%s' "$ELCHI_CLICKHOUSE_CPU_QUOTA"
+    return
+  fi
+  local q
+  q=$(( $(clickhouse::_cpu_cores) * 50 ))
+  [ "$q" -lt 100 ] && q=100
+  printf '%d%%' "$q"
+}
+
 # ----- config rendering --------------------------------------------------
 # ClickHouse merges every *.xml under config.d/ and users.d/ on top of the
 # package-shipped config.xml / users.xml. We only ever write our own
@@ -211,10 +267,39 @@ clickhouse::render_users() {
   local sha
   sha=$(clickhouse::_password_sha256)
   local user=${ELCHI_CLICKHOUSE_USERNAME:-elchi}
+
+  # Per-query guardrails for the application user, derived from the same
+  # host-proportional MemoryMax the systemd drop-in enforces. The shipped
+  # `default` profile allows 10 GiB per query on ALL cores with no time
+  # limit — one runaway Grafana/backend dashboard query would eat the
+  # whole cgroup budget and starve the collector's inserts. Spill-to-disk
+  # thresholds at half the query budget turn "query killed at the memory
+  # cap" into "query slows down but completes" for big GROUP BY/ORDER BY.
+  local mem_max_mb query_mem_bytes spill_bytes threads exec_time
+  mem_max_mb=$(clickhouse::_mem_max_mb)
+  query_mem_bytes=$(( mem_max_mb / 2 * 1048576 ))
+  spill_bytes=$(( query_mem_bytes / 2 ))
+  threads=$(( $(clickhouse::_cpu_cores) / 2 ))
+  [ "$threads" -lt 2 ] && threads=2
+  exec_time=${ELCHI_CLICKHOUSE_QUERY_TIMEOUT:-60}
+
   clickhouse::_write_xml "${CLICKHOUSE_USERS_D}/elchi.xml" <<EOF
 <?xml version="1.0"?>
 <!-- Managed by elchi-stack installer. DO NOT EDIT BY HAND. -->
 <clickhouse>
+    <profiles>
+        <!-- Host-proportional limits (RAM $(clickhouse::_total_ram_mb)MiB /
+             $(clickhouse::_cpu_cores) cores at render time). The collector's
+             batched inserts sit far below every one of these; they exist
+             to box in ad-hoc analytics queries. -->
+        <${user}>
+            <max_memory_usage>${query_mem_bytes}</max_memory_usage>
+            <max_bytes_before_external_group_by>${spill_bytes}</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>${spill_bytes}</max_bytes_before_external_sort>
+            <max_execution_time>${exec_time}</max_execution_time>
+            <max_threads>${threads}</max_threads>
+        </${user}>
+    </profiles>
     <users>
         <!-- Lock the package-shipped, PASSWORDLESS \`default\` user to
              loopback only. On a multi-VM cluster clickhouse-server
@@ -240,7 +325,7 @@ clickhouse::render_users() {
             <networks>
                 <ip>::/0</ip>
             </networks>
-            <profile>default</profile>
+            <profile>${user}</profile>
             <quota>default</quota>
             <access_management>0</access_management>
         </${user}>
@@ -261,6 +346,25 @@ clickhouse::render_server() {
   else
     listen='127.0.0.1'
   fi
+  # Background merge pool: the shipped default is 16 threads, sized for a
+  # dedicated ClickHouse box. Scale to half the cores, clamped to [4,16]
+  # — merges keep up with the collector's insert rate at 4 threads even
+  # on small VMs, and anything above cores/2 just fights Envoy/mongod
+  # for CPU inside our CPUQuota.
+  local bg_pool
+  bg_pool=$(( $(clickhouse::_cpu_cores) / 2 ))
+  [ "$bg_pool" -lt 4 ]  && bg_pool=4
+  [ "$bg_pool" -gt 16 ] && bg_pool=16
+
+  # Mark cache: shipped cap is 5 GiB — sized for a dedicated box with
+  # thousands of parts. Scale to MemoryMax/8, clamped to [128,512] MiB:
+  # the elchi dataset's marks fit comfortably, and an oversized cap
+  # would crowd out query memory inside the cgroup budget under load.
+  local mc_mb
+  mc_mb=$(( $(clickhouse::_mem_max_mb) / 8 ))
+  [ "$mc_mb" -lt 128 ] && mc_mb=128
+  [ "$mc_mb" -gt 512 ] && mc_mb=512
+
   clickhouse::_write_xml "${CLICKHOUSE_CONFIG_D}/elchi.xml" <<EOF
 <?xml version="1.0"?>
 <!-- Managed by elchi-stack installer. DO NOT EDIT BY HAND. -->
@@ -269,6 +373,13 @@ clickhouse::render_server() {
     <logger>
         <level>warning</level>
     </logger>
+    <background_pool_size>${bg_pool}</background_pool_size>
+    <!-- Scheduler pool (replicated-table housekeeping, TTL drops, Keeper
+         session upkeep): default 512 threads is dedicated-box sizing.
+         64 leaves ample headroom for our handful of tables while
+         releasing ~450 idle threads' worth of stacks. -->
+    <background_schedule_pool_size>64</background_schedule_pool_size>
+    <mark_cache_size>$(( mc_mb * 1048576 ))</mark_cache_size>
     <!-- Disk-full safeguard: refuse inserts/merges that would leave the data
          disk with less than this much free space, so the event volume (collector
          api_events + shield audit) can't fill it to 100% and wedge the server.
@@ -375,6 +486,48 @@ ${zk_nodes}
 EOF
 }
 
+# clickhouse::render_system_logs — cap the self-observability tables.
+# Out of the box every system log table grows FOREVER (no TTL), and
+# metric_log + asynchronous_metric_log flush a row every second — a
+# constant background write load plus unbounded disk growth that serves
+# no purpose on an ALS-ingest node (VictoriaMetrics/Grafana already own
+# the monitoring story). We drop the per-second and per-sample loggers
+# outright and put a TTL on the two tables that are genuinely useful
+# when debugging (query_log, part_log).
+#
+# The <ttl> takes effect when ClickHouse (re)creates the table: on a
+# fresh install immediately; on an existing install the server renames
+# the old table (suffix _N) and starts a new one on the next restart —
+# old data ages out with the renamed table, nothing is lost abruptly.
+clickhouse::render_system_logs() {
+  install -d -m 0755 "$CLICKHOUSE_CONFIG_D"
+  local ttl_days=${ELCHI_CLICKHOUSE_SYSTEM_LOG_TTL_DAYS:-14}
+  clickhouse::_write_xml "${CLICKHOUSE_CONFIG_D}/elchi-system-logs.xml" <<EOF
+<?xml version="1.0"?>
+<!-- Managed by elchi-stack installer. DO NOT EDIT BY HAND. -->
+<clickhouse>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <text_log remove="1"/>
+    <!-- processors_profile_log: log_processors_profiles defaults ON in
+         modern ClickHouse — one row set per query, silently accumulating.
+         query_views_log: fires on every insert that cascades through a
+         materialized view, which is EVERY collector batch (the rollup
+         MVs), so it grows at ingest rate. -->
+    <processors_profile_log remove="1"/>
+    <query_views_log remove="1"/>
+    <query_log>
+        <ttl>event_date + INTERVAL ${ttl_days} DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL ${ttl_days} DAY DELETE</ttl>
+    </part_log>
+</clickhouse>
+EOF
+}
+
 # clickhouse::clear_cluster_config — drop the cluster-only overlays.
 # Called on the standalone path so a node that shrank below 3 members
 # doesn't keep a stale Keeper config that would refuse to start.
@@ -390,7 +543,20 @@ clickhouse::clear_cluster_config() {
 # as mongodb::write_dropin.
 clickhouse::write_dropin() {
   install -d -m 0755 /etc/systemd/system/clickhouse-server.service.d
-  cat > /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf.tmp <<'EOF'
+
+  # Host-proportional memory/CPU budget — see the sizing helpers above.
+  # MemoryMax at the systemd layer doubles as ClickHouse's own memory
+  # budget: the server is cgroup-aware and applies its
+  # max_server_memory_usage_to_ram_ratio (0.9) to the cgroup limit instead of
+  # host RAM, so no separate config.d knob is needed and the two layers
+  # can never disagree. MemoryHigh at 90% throttles/reclaims before the
+  # hard cap so a spike degrades instead of OOM-killing the server.
+  local mem_max_mb mem_high_mb cpu_quota
+  mem_max_mb=$(clickhouse::_mem_max_mb)
+  mem_high_mb=$(( mem_max_mb * 90 / 100 ))
+  cpu_quota=$(clickhouse::_cpu_quota)
+
+  cat > /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf.tmp <<EOF
 # Managed by elchi-stack installer. DO NOT EDIT BY HAND.
 # Re-rendered on every install.sh; removed by uninstall.sh --purge-clickhouse.
 [Unit]
@@ -408,13 +574,18 @@ LimitCORE=0
 # that triggered it.
 OOMScoreAdjust=-600
 TasksMax=infinity
+# Host-proportional (40% RAM / half the cores by default). Override with
+# ELCHI_CLICKHOUSE_MEMORY_MAX / ELCHI_CLICKHOUSE_CPU_QUOTA and rerun.
+MemoryHigh=${mem_high_mb}M
+MemoryMax=${mem_max_mb}M
+CPUQuota=${cpu_quota}
 EOF
   install -m 0644 -o root -g root \
     /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf.tmp \
     /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf
   rm -f /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf.tmp
   systemctl daemon-reload
-  log::info "clickhouse-server systemd drop-in applied (Restart=on-failure, OOMAdj=-600)"
+  log::info "clickhouse-server systemd drop-in applied (MemoryMax=${mem_max_mb}M, CPUQuota=${cpu_quota}, OOMAdj=-600)"
 }
 
 # ----- service start -----------------------------------------------------
@@ -424,6 +595,7 @@ clickhouse::start_service() {
   # a restart on rerun.
   local -a fp_files=(
     "${CLICKHOUSE_CONFIG_D}/elchi.xml"
+    "${CLICKHOUSE_CONFIG_D}/elchi-system-logs.xml"
     "${CLICKHOUSE_USERS_D}/elchi.xml"
     /etc/systemd/system/clickhouse-server.service.d/10-elchi.conf
   )
@@ -511,6 +683,7 @@ clickhouse::setup_local_standalone() {
   clickhouse::write_dropin
   clickhouse::clear_cluster_config
   clickhouse::render_server
+  clickhouse::render_system_logs
   clickhouse::render_users
   clickhouse::start_service
   clickhouse::create_database
@@ -523,6 +696,7 @@ clickhouse::setup_cluster_member() {
   clickhouse::install_package
   clickhouse::write_dropin
   clickhouse::render_server
+  clickhouse::render_system_logs
   clickhouse::render_users
   clickhouse::render_cluster
   clickhouse::start_service

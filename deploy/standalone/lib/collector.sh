@@ -179,8 +179,15 @@ GEOIP_CACHE_DIR=${COLLECTOR_DATA}/geoip
 # 1000/250ms produced ~26 rows/insert, a CH anti-pattern that capped
 # throughput. queueSize is the TOTAL in-flight cap divided across shards
 # (~18 MB buffers).
+#
+# flushInterval only matters at LOW traffic: under load the size/bytes
+# ceilings flush first, so 10s adds no latency there. At a trickle it
+# turns "a tiny insert per shard per second" (part churn + one MV
+# cascade each) into one 10x-bigger insert — fewer parts, fewer merges,
+# fewer rollup-MV executions. Cost: analytics lag and worst-case
+# crash-loss grow to ~10s, acceptable for ALS telemetry.
 BATCH_MAX_SIZE=20000
-BATCH_FLUSH_INTERVAL=1s
+BATCH_FLUSH_INTERVAL=${ELCHI_COLLECTOR_FLUSH_INTERVAL:-10s}
 BATCH_MAX_BYTES=8388608
 BATCH_BACKPRESSURE_POLICY=drop_new
 BATCH_QUEUE_SIZE=20000
