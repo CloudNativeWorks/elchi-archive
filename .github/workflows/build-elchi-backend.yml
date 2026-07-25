@@ -12,9 +12,9 @@ name: Download Elchi Backend
 #   github.com/CloudNativeWorks/elchi-archive/releases/download/
 #     elchi-backend-<version>/<variant-tag>
 #
-# A single source release (e.g. v1.4.8) carries ONE binary per
+# A single source release (e.g. 1.6.14) carries ONE binary per
 # control-plane / Envoy variant, each asset named after the full variant
-# tag (elchi-v1.4.8-v0.14.0-envoy1.36.2) plus a matching .sha256. This
+# tag (elchi-1.6.14-v0.14.0-envoy1.39.0) plus a matching .sha256. This
 # workflow mirrors ALL of them into one elchi-archive release tagged
 # `elchi-backend-<version>`, keeping the asset names byte-for-byte
 # identical so lib/topology.sh::backend_asset_basename needs no change.
@@ -31,13 +31,13 @@ name: Download Elchi Backend
 #     repo, THEN run this one.
 #
 # Trigger: Actions tab → "Download Elchi Backend" → Run workflow →
-#          enter the version (e.g. v1.4.8).
+#          enter the version (e.g. 1.6.14).
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'elchi-backend release version to mirror (e.g., v1.4.8)'
+        description: 'elchi-backend release version to mirror (e.g., 1.6.14)'
         required: true
         type: string
 
@@ -217,7 +217,7 @@ jobs:
 
             ```bash
             # Pick the variant that matches your Envoy fleet.
-            VARIANT=elchi-${{ github.event.inputs.version }}-v0.14.0-envoy1.36.2
+            VARIANT=elchi-${{ github.event.inputs.version }}-v0.14.0-envoy1.39.0
             curl -fL -o elchi-backend \
               https://github.com/${{ github.repository }}/releases/download/elchi-backend-${{ github.event.inputs.version }}/${VARIANT}
             chmod +x elchi-backend

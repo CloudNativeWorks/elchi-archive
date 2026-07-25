@@ -91,7 +91,7 @@ Usage:
 
 Version flags (omit to keep current):
   --backend-version=<csv>           full variant tags, e.g.
-                                     elchi-v1.4.8-v0.14.0-envoy1.36.2,...
+                                     elchi-1.6.14-v0.14.0-envoy1.39.0,...
                                      Replaces the active variant set.
   --add-backend-version=<csv>       additive shortcut: appends to the
                                      current variant set without making
@@ -134,14 +134,14 @@ Op-mode:
 
 Examples:
   # Add a new variant alongside an existing one
-  sudo $0 --backend-version=elchi-v1.4.8-v0.14.0-envoy1.36.2,elchi-v1.4.8-v0.14.0-envoy1.37.0
+  sudo $0 --backend-version=elchi-1.6.14-v0.14.0-envoy1.38.3,elchi-1.6.14-v0.14.0-envoy1.39.0
 
   # Replace the existing variant with a new one
-  sudo $0 --backend-version=elchi-v1.4.8-v0.14.0-envoy1.37.0 \\
-          --prune-version=elchi-v1.4.8-v0.14.0-envoy1.36.2
+  sudo $0 --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0 \\
+          --prune-version=elchi-1.6.14-v0.14.0-envoy1.38.3
 
   # Replace + add in one step (declarative — new list is the truth)
-  sudo $0 --backend-version=elchi-v1.4.8-v0.14.0-envoy1.37.0,elchi-v1.4.8-v0.14.0-envoy1.38.0 \\
+  sudo $0 --backend-version=elchi-1.6.14-v0.14.0-envoy1.38.3,elchi-1.6.14-v0.14.0-envoy1.39.0 \\
           --prune-missing
 
 EOF
@@ -152,8 +152,8 @@ while [ "$#" -gt 0 ]; do
     --backend-version=*)                  NEW_BACKEND_VARIANTS=${1#*=} ;;
     --backend-variants=*)                 NEW_BACKEND_VARIANTS=${1#*=} ;;
     # Additive shortcut: append to current variants instead of replacing.
-    # Use case: cluster running v1.36.2 → operator wants to ALSO offer
-    # v1.38.3 to UI users without listing v1.36.2 again. Resolved against
+    # Use case: cluster running v1.39.0 → operator wants to ALSO offer
+    # v1.38.3 to UI users without listing v1.39.0 again. Resolved against
     # the current backend_variants set after argparse so dedup is honest.
     --add-backend-version=*)              ADD_BACKEND_VARIANTS=${1#*=} ;;
     --add-backend-variants=*)             ADD_BACKEND_VARIANTS=${1#*=} ;;

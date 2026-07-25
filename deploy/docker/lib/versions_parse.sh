@@ -20,15 +20,15 @@ ver::sanitize() {
   printf '%s' "${tag//./-}"
 }
 
-# ver::envoy_version <tag> — "...-envoy1.36.2" → "v1.36.2"
+# ver::envoy_version <tag> — "...-envoy1.38.3" → "v1.39.0"
 ver::envoy_version() {
   local tag=$1 match
   match=$(printf '%s' "$tag" | grep -oE 'envoy[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
-  [ -n "$match" ] || die "could not extract envoy version from tag: $tag (expected substring like envoy1.36.2)"
+  [ -n "$match" ] || die "could not extract envoy version from tag: $tag (expected substring like envoy1.39.0)"
   printf '%s' "${match/envoy/v}"
 }
 
-# ver::envoy_full <tag> — "...-envoy1.36.2" → "1.36.2" (no leading v)
+# ver::envoy_full <tag> — "...-envoy1.39.0" → "1.39.0" (no leading v)
 ver::envoy_full() {
   local tag=$1 match
   match=$(printf '%s' "$tag" | grep -oE 'envoy[0-9]+\.[0-9]+\.[0-9]+' | head -n1)

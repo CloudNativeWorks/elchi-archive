@@ -74,7 +74,7 @@ render::_node_count() {
 }
 # Per-node service base names.
 render::_ctrl_svc()  { printf 'elchi-controller-node%s' "$1"; }              # $1 = node index
-render::_cp_svc()    { printf 'elchi-cp-%s-node%s' "${2//./-}" "$1"; }       # $1=idx $2=envoy full (1.36.2)
+render::_cp_svc()    { printf 'elchi-cp-%s-node%s' "${2//./-}" "$1"; }       # $1=idx $2=envoy full (1.39.0)
 
 # ----- secret accessor -----------------------------------------------------
 # sec <NAME> — read a minted secret value from ${SECRETS_DIR}/<NAME>.

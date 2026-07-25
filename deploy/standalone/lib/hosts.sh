@@ -9,7 +9,7 @@
 # and Envoy's bootstrap exposes it as a cluster name. For Envoy to
 # resolve those cluster names to actual TCP endpoints WITHOUT a real
 # DNS server, we put one /etc/hosts entry per (node, role, variant)
-# pair on every node — so `linuxhost-controller-1.36.2` resolves to
+# pair on every node — so `linuxhost-controller-1.39.0` resolves to
 # the IP of linuxhost wherever you ask.
 #
 # The block is delimited by markers; re-running the installer rewrites
