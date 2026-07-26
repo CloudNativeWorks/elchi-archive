@@ -840,6 +840,13 @@ local_install_phase1() {
     [ -n "$ELCHI_BUNDLE_PATH" ] || die "--bundle is required with --skip-orchestration"
     [ -n "$ELCHI_BUNDLE_KEY"  ] || die "--bundle-key is required with --skip-orchestration"
     local extracted=/tmp/elchi-bundle-extracted
+    # Wipe before extract: tar overwrites archive members but leaves
+    # EXTRA files from a previous interrupted run in place, and the
+    # manifest check only verifies listed files. A stale tls/.provided
+    # left behind would be picked up by tls::install_from_bundle's
+    # marker propagation and mislabel a self-signed cert as
+    # operator-provided.
+    rm -rf "$extracted"
     install -d -m 0700 "$extracted"
     bundle::decrypt "$ELCHI_BUNDLE_PATH" "${extracted}/bundle.tar.gz" "$ELCHI_BUNDLE_KEY"
     bundle::extract "${extracted}/bundle.tar.gz" "$extracted"

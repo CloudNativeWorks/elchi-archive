@@ -22,9 +22,14 @@
 #     topology.full.yaml                cluster shape
 #     ports.full.json                   port atlas
 #     secrets.env                       JWT/mongo/GSLB/registry secrets
-#     tls/server.crt                    10-yr ECDSA-P256 cert (CA == leaf)
+#     tls/server.crt                    cluster leaf cert (self-signed 10-yr
+#                                       ECDSA-P256, or operator-provided)
 #     tls/server.key
-#     tls/ca.crt                        symlink/copy of server.crt
+#     tls/ca.crt                        trust anchor: the REAL CA chain when
+#                                       one exists (provided mode with a
+#                                       custom CA), else a copy of server.crt
+#     tls/.provided                     (only in provided mode) marker that
+#                                       suppresses self-signed regeneration
 #     mongo/keyfile                     1024-byte random; replica auth
 #     installer/                        the lib/, templates/, install.sh
 #                                       so the remote node can run itself
@@ -71,9 +76,24 @@ bundle::build() {
   if [ -f "${ELCHI_TLS}/server.crt" ] && [ -f "${ELCHI_TLS}/server.key" ]; then
     install -m 0644 "${ELCHI_TLS}/server.crt"       "${stage}/bundle/tls/server.crt"
     install -m 0600 "${ELCHI_TLS}/server.key"       "${stage}/bundle/tls/server.key"
-    # CA cert == server cert for self-signed. Client trust stores load
-    # this so `https://main.example.com` validates.
-    install -m 0644 "${ELCHI_TLS}/server.crt"       "${stage}/bundle/tls/ca.crt"
+    # CA cert: ship M1's real ca.crt when present — in provided mode
+    # with a custom CA (--tls=provided + ELCHI_TLS_CA_PATH, or
+    # `elchi-stack set-cert <crt> <key> <ca>`) it is a genuine CA chain
+    # DISTINCT from the leaf, and shipping the leaf as the anchor would
+    # break trust on M2+ (a CA:FALSE leaf can't anchor RHEL's p11-kit,
+    # and the backend's Go client would reject main_address). For
+    # self-signed mode ca.crt is a copy of server.crt anyway, which the
+    # fallback preserves.
+    if [ -f "${ELCHI_TLS}/ca.crt" ]; then
+      install -m 0644 "${ELCHI_TLS}/ca.crt"         "${stage}/bundle/tls/ca.crt"
+    else
+      install -m 0644 "${ELCHI_TLS}/server.crt"     "${stage}/bundle/tls/ca.crt"
+    fi
+    # The operator-provided marker rides along so every node's tls tree
+    # matches M1's (tls::_self_signed's regen guard reads it).
+    if [ -f "${ELCHI_TLS}/.provided" ]; then
+      install -m 0644 "${ELCHI_TLS}/.provided"      "${stage}/bundle/tls/.provided"
+    fi
   else
     die "TLS material missing — run tls::setup before bundle::build"
   fi

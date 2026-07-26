@@ -33,6 +33,20 @@ tls::setup() {
 }
 
 tls::_self_signed() {
+  # Operator-provided material (installed via --tls=provided or
+  # `elchi-stack set-cert`) carries a .provided marker — NEVER
+  # regenerate over it. Without this guard, any rerun/add-node that
+  # omits --tls=provided falls back here and the drift/CA:TRUE checks
+  # below would all but guarantee clobbering a real certificate back
+  # to self-signed (real certs are CA:FALSE and their SAN list never
+  # matches our computed node-IP list).
+  if [ -f "${ELCHI_TLS}/.provided" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+    log::info "operator-provided TLS cert (.provided marker) — leaving it untouched"
+    log::info "  rotate: elchi-stack set-cert <crt> <key> [ca] — revert to self-signed: rm ${ELCHI_TLS}/.provided, then rerun install"
+    tls::_finalize_perms
+    return
+  fi
+
   # Compute the desired SAN list up front — even on the reuse path —
   # so we can compare against the live cert and catch drift introduced
   # by `add-node` / changed --hostnames / changed --main-address.
@@ -256,20 +270,103 @@ tls::_san_drift() {
   return 1
 }
 
+# tls::validate_pair <cert> <key> [san-host]
+# Shared pre-install validation for operator-provided material — called
+# by tls::_provided (install/rerun) and elchi-stack's set-cert. A bad
+# pair is loaded by Envoy's static tls_certificates block at startup on
+# EVERY node (the bundle ships it verbatim), so it must never reach
+# disk. Dies on: invalid PEM, cert/key mismatch, expired cert. Warns
+# on: <30 days validity, SAN list not covering <san-host> (RFC 6125
+# one-label wildcard matching).
+tls::validate_pair() {
+  local crt=$1 key=$2 san_host=${3:-}
+  require_cmd openssl
+  openssl x509 -in "$crt" -noout 2>/dev/null \
+    || die "not a valid PEM certificate: ${crt}"
+  local cpub kpub
+  cpub=$(openssl x509 -in "$crt" -pubkey -noout 2>/dev/null)
+  kpub=$(openssl pkey -in "$key" -pubout 2>/dev/null) \
+    || die "cannot read private key ${key} (passphrase-protected keys are not supported — decrypt it first)"
+  [ "$cpub" = "$kpub" ] \
+    || die "certificate and private key do NOT match (public keys differ)"
+  openssl x509 -in "$crt" -noout -checkend 0 >/dev/null 2>&1 \
+    || die "certificate is already expired: ${crt}"
+  openssl x509 -in "$crt" -noout -checkend $(( 30 * 86400 )) >/dev/null 2>&1 \
+    || log::warn "certificate expires within 30 days"
+  [ -n "$san_host" ] || return 0
+
+  local san covered=0 wc rest
+  san=$(openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null || true)
+  if printf '%s' "$san" | grep -qE "(DNS|IP Address):${san_host}(,|\$| )"; then
+    covered=1
+  else
+    # RFC 6125: a wildcard covers exactly ONE left-most label —
+    # *.example.com matches foo.example.com but NOT a.b.example.com.
+    # (An earlier glob-based match here accepted any depth, silencing
+    # the warning in exactly the multi-label case clients reject.)
+    rest=${san_host#*.}
+    if [ "$rest" != "$san_host" ]; then
+      for wc in $(printf '%s' "$san" | grep -oE '\*\.[A-Za-z0-9.-]+' || true); do
+        if [ "$rest" = "${wc#\*.}" ]; then covered=1; fi
+      done
+    fi
+  fi
+  if [ "$covered" != 1 ]; then
+    log::warn "certificate SANs do not cover ${san_host} — the backend's HTTPS callback and data-plane clients validate against this name"
+    log::warn "  cert SANs: $(printf '%s' "$san" | tr -d '\n' | head -c 200)"
+  fi
+  return 0
+}
+
 tls::_provided() {
+  # Rerun without --cert/--key: reuse the already-installed material.
+  # An operator whose mode IS provided naturally re-passes
+  # --tls=provided on later reruns without re-supplying file paths;
+  # dying here (the old behavior) aborted the whole install even
+  # though cert+key+marker were already on disk.
+  if [ -z "${ELCHI_TLS_CERT_PATH:-}" ] && [ -z "${ELCHI_TLS_KEY_PATH:-}" ] \
+     && [ -f "${ELCHI_TLS}/.provided" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+    log::info "reusing operator-provided TLS material at ${ELCHI_TLS} (pass --cert/--key to rotate)"
+    tls::_finalize_perms
+    return 0
+  fi
   [ -n "${ELCHI_TLS_CERT_PATH:-}" ] || die "--tls=provided requires --cert=<path>"
   [ -n "${ELCHI_TLS_KEY_PATH:-}"  ] || die "--tls=provided requires --key=<path>"
   [ -f "$ELCHI_TLS_CERT_PATH" ] || die "cert not found: $ELCHI_TLS_CERT_PATH"
   [ -f "$ELCHI_TLS_KEY_PATH"  ] || die "key  not found: $ELCHI_TLS_KEY_PATH"
 
+  tls::validate_pair "$ELCHI_TLS_CERT_PATH" "$ELCHI_TLS_KEY_PATH" "${ELCHI_MAIN_ADDRESS:-}"
+
+  # Detect a REAL pre-existing CA chain BEFORE overwriting server.crt:
+  # ca.crt distinct from the leaf means the operator installed a
+  # genuine chain earlier (--ca or set-cert's ca arg). A leaf-only
+  # rotation rerun that omits --ca must NOT clobber that chain with the
+  # new leaf — bundle::build ships ca.crt as every future node's trust
+  # anchor, and a CA:FALSE leaf can't anchor RHEL's p11-kit.
+  local keep_existing_ca=0
+  if [ -z "${ELCHI_TLS_CA_PATH:-}" ] && [ -f "$TLS_CA" ] && [ -f "$TLS_CERT" ] \
+     && ! cmp -s "$TLS_CA" "$TLS_CERT"; then
+    keep_existing_ca=1
+  fi
+
   install -m 0644 -o root -g "$ELCHI_GROUP" "$ELCHI_TLS_CERT_PATH" "$TLS_CERT"
   install -m 0640 -o root -g "$ELCHI_GROUP" "$ELCHI_TLS_KEY_PATH"  "$TLS_KEY"
   if [ -n "${ELCHI_TLS_CA_PATH:-}" ] && [ -f "$ELCHI_TLS_CA_PATH" ]; then
     install -m 0644 -o root -g "$ELCHI_GROUP" "$ELCHI_TLS_CA_PATH" "$TLS_CA"
+  elif [ "$keep_existing_ca" = 1 ]; then
+    log::info "keeping existing CA chain at ${TLS_CA} (distinct from the leaf; pass --ca to replace it)"
   else
+    # Self-signed-style fallback: ca.crt tracks the live leaf so the
+    # bundle never ships a stale anchor.
     cp -f "$TLS_CERT" "$TLS_CA"
   fi
   tls::_finalize_perms
+  # Persist the operator's choice: this marker is what makes the header
+  # comment's "never overwritten on rerun" promise actually true —
+  # tls::_self_signed checks it before its regen logic, so a later
+  # rerun/add-node without --tls=provided can't clobber this material.
+  : > "${ELCHI_TLS}/.provided"
+  chmod 0644 "${ELCHI_TLS}/.provided"
   log::ok "installed user-provided TLS material into ${ELCHI_TLS}"
 }
 
@@ -291,6 +388,17 @@ tls::install_from_bundle() {
   install -m 0644 -o root -g "$ELCHI_GROUP" "${bundle_root}/tls/server.crt" "$TLS_CERT"
   install -m 0640 -o root -g "$ELCHI_GROUP" "${bundle_root}/tls/server.key" "$TLS_KEY"
   install -m 0644 -o root -g "$ELCHI_GROUP" "${bundle_root}/tls/ca.crt"     "$TLS_CA"
+  if [ -f "${bundle_root}/tls/.provided" ]; then
+    install -m 0644 -o root -g "$ELCHI_GROUP" "${bundle_root}/tls/.provided" "${ELCHI_TLS}/.provided"
+  else
+    # Marker ABSENT from the bundle = the cluster is (back) on
+    # self-signed. Remove any stale local marker — the documented
+    # revert flow (rm .provided on M1 + rerun) must not leave M2+
+    # believing a self-signed cert is operator-provided, or
+    # tls::_self_signed's guard would suppress SAN-drift self-heal on
+    # those nodes forever.
+    rm -f "${ELCHI_TLS}/.provided"
+  fi
   log::ok "TLS material installed from bundle"
 }
 

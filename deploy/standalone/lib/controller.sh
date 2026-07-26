@@ -108,7 +108,15 @@ EOF
   # controller on rerun. Without this, edits to operator config
   # (cors_origins, jwt_*, log_*, etc.) write to disk but the
   # controller never sees them until manual restart.
-  systemd::install_and_apply elchi-controller.service "${conf}/config-prod.yaml"
+  # ca.crt is folded in because the controller's Go runtime loads the
+  # system cert pool ONCE per process: when the cluster trust anchor
+  # changes (cert rotation / CA swap), refreshing the trust store on
+  # disk is not enough — the running process keeps validating
+  # main_address against the stale pool ("x509: certificate signed by
+  # unknown authority"). A ca.crt content change bumps the fingerprint
+  # → restart → fresh pool.
+  systemd::install_and_apply elchi-controller.service "${conf}/config-prod.yaml" \
+    "${ELCHI_TLS}/ca.crt"
 
   # Healthcheck — controller binds REST on 1980 and gRPC on 1960 by
   # default. Probe REST since it always answers TCP regardless of

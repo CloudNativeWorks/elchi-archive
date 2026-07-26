@@ -229,13 +229,21 @@ ssh::run_sudo() {
 #     expects (caller can chown afterward via ssh::run_sudo if it
 #     needs a different owner — e.g. root:elchi for env files).
 ssh::scp() {
-  local src=$1 host=$2 dst=$3
+  # ssh::scp <src> <host> <dst> [mode]
+  # Optional 4th arg overrides the destination mode. Without it the
+  # SOURCE file's mode is preserved — fine for our own rendered files,
+  # but dangerous for operator-supplied secrets (a 0644 privkey.pem
+  # would land world-readable at the final path). Sensitive callers
+  # (set-cert's server.key) pass an explicit 0600/0640.
+  local src=$1 host=$2 dst=$3 mode=${4:-}
+  if [ -z "$mode" ]; then
+    mode=$(stat -c '%a' "$src" 2>/dev/null || stat -f '%Lp' "$src" 2>/dev/null || echo 0644)
+  fi
   if ssh::is_local "$host"; then
-    install -m "$(stat -c '%a' "$src" 2>/dev/null || stat -f '%Lp' "$src")" "$src" "$dst"
+    install -m "$mode" "$src" "$dst"
     return $?
   fi
-  local mode q_dst
-  mode=$(stat -c '%a' "$src" 2>/dev/null || stat -f '%Lp' "$src" 2>/dev/null || echo 0644)
+  local q_dst
   q_dst=$(printf '%q' "$dst")
   ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" -- \
     "set -e; sudo install -m ${mode} /dev/stdin ${q_dst}" \

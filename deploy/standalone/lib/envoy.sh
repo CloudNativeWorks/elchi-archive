@@ -113,7 +113,17 @@ EOF
   # same — without folding envoy.yaml into the hash, a topology change
   # (new node, new variant, /etc/hosts diff) would NOT trigger an envoy
   # restart and the proxy would silently keep an outdated cluster list.
-  systemd::install_and_apply elchi-envoy.service "$ENVOY_CONFIG"
+  #
+  # server.crt/server.key are folded in for the same reason: envoy.yaml
+  # references them BY FILENAME in a static DownstreamTlsContext and
+  # Envoy loads them once at startup. Without hashing their CONTENT, a
+  # cert rotation via install rerun (--tls=provided --cert --key) or a
+  # SAN-drift regen produced an identical fingerprint → "noop" → the
+  # old cert kept being served from memory indefinitely. Missing files
+  # are skipped by the fingerprint loop, so plaintext installs are
+  # unaffected.
+  systemd::install_and_apply elchi-envoy.service "$ENVOY_CONFIG" \
+    "${ELCHI_TLS}/server.crt" "${ELCHI_TLS}/server.key"
 
   # Probe whichever the public listener is — TLS or plaintext, but
   # always on ELCHI_PORT.

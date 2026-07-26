@@ -246,6 +246,10 @@ elchi-stack retune                  recompute ClickHouse's host-proportional siz
                                     shrink); per-node noop when nothing changed
 elchi-stack envoy-clusters [ip]     per-node Envoy cluster dump: endpoints, health
                                     state, connection/request counters
+elchi-stack set-cert <crt> <key> [ca]
+                                    replace the cluster TLS cert (validates, distributes
+                                    to every node, rolling envoy restart; .provided marker
+                                    keeps reruns/add-node from regenerating over it)
 elchi-stack add-node <ip>           extend the cluster (M1 only)
 elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
 elchi-stack export-bundle <out>     re-package the encrypted cluster bundle
@@ -541,6 +545,7 @@ different and why — read this if you're cross-checking against
 | ClickHouse system log tables: chart defaults (unbounded) | `metric_log`/`asynchronous_metric_log`/`trace_log`/`query_thread_log`/`text_log`/`processors_profile_log`/`query_views_log` disabled; `query_log`+`part_log` TTL 14d (`ELCHI_CLICKHOUSE_SYSTEM_LOG_TTL_DAYS`); `background_schedule_pool_size` 64, `mark_cache_size` = MemoryMax/8 clamped [128M,512M]. `background_pool_size` intentionally left at default 16 — the 24.8+ startup sanity check aborts (BAD_ARGUMENTS) below 13 (`pool*2 ≥ number_of_free_entries_in_pool_to_execute_optimize_entire_partition=25`) | Per-second self-observability flushes are pure overhead on an ALS-ingest node — VictoriaMetrics/Grafana own the monitoring story; unbounded system tables eventually eat the data disk. `query_views_log` grows at ingest rate (every collector batch cascades through the rollup MVs) |
 | Collector `BATCH_FLUSH_INTERVAL` 1s | 10s default (`ELCHI_COLLECTOR_FLUSH_INTERVAL`) | Only matters at low traffic (size/bytes ceilings flush first under load): 10x bigger inserts → fewer parts/merges/rollup-MV runs. Cost: ~10s analytics lag + worst-case crash-loss |
 | UI `config.js` `API_URL`: fixed `https://<main_address>` | `window.location.origin` (JS expression; `ELCHI_UI_API_URL=<url>` pins the old fixed-address form) | Every node's Envoy serves UI + API on the same listener, so same-origin works from ANY entry point. A fixed address funneled all API traffic into one node and made it a UI-wide SPOF; same-origin also removes CORS preflights. `main_address` still drives TLS SANs, Grafana `root_url`, the backend's client-facing address and verify probes |
+| TLS rotation: replace the k8s Secret | Operator-provided certs carry a `/etc/elchi/tls/.provided` marker: installed by `--tls=provided` / `elchi-stack set-cert`, shipped in the bundle, and honored by the self-signed regen logic (never overwritten by reruns/`add-node`; revert = rm marker on M1 + rerun). Cert/key content is folded into envoy's unit fingerprint and `ca.crt` into the controller/control-plane fingerprints, so a rotation or CA swap on rerun actually restarts the affected services. The bundle ships the REAL CA chain when one exists (not the leaf) | k8s reloads Secrets and restarts pods for us; systemd has no such linkage — the marker + fingerprint folding recreate it. Envoy loads static `tls_certificates` at startup only, and Go processes load the system cert pool once per process |
 
 If a behavior isn't in this table, it's faithfully replicated.
 

@@ -69,8 +69,11 @@ control_plane::create_instances() {
     # re-render (cors_origins, jwt_*, log_*, etc.) actually bounces
     # this instance on rerun — without it the file changes but the
     # process keeps the old values until a manual restart.
+    # ca.crt folded in for the same reason as elchi-controller (see
+    # lib/controller.sh): Go loads the system cert pool once per
+    # process; a trust-anchor change must bounce the instance.
     systemd::install_and_apply "elchi-control-plane-${sanitized}@0.service" \
-      "${ELCHI_ETC}/${v}/config-prod.yaml"
+      "${ELCHI_ETC}/${v}/config-prod.yaml" "${ELCHI_TLS}/ca.crt"
     # 90s — same first-boot mongo / xDS bootstrap window as registry +
     # controller. Cold cluster electing PRIMARY can stretch first bind.
     if ! wait_for_tcp 127.0.0.1 "$cp_p" 90; then

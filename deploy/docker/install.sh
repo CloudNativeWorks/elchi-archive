@@ -74,7 +74,10 @@ Common:
 
 TLS:
   --tls=self-signed|provided  (default: self-signed, 10-year ECDSA-P256)
-  --cert=<path> --key=<path>  For --tls=provided.
+  --cert=<path> --key=<path>  For --tls=provided. Rerunning install.sh with
+                              these flags ROTATES the cert on a live stack:
+                              files are validated, re-distributed to every
+                              node, and envoy rolls automatically (cfghash).
   --tls-san=<csv>             Extra SAN names/IPs for the self-signed cert
                               (--main-address + all --nodes are included auto).
 
@@ -424,6 +427,45 @@ tls_setup() {
 
   if [ "$ELCHI_TLS_MODE" = "provided" ]; then
     [ -f "${ELCHI_TLS_CERT:-}" ] && [ -f "${ELCHI_TLS_KEY:-}" ] || die "--tls=provided needs --cert and --key"
+    command -v openssl >/dev/null 2>&1 || die "openssl is required to validate --tls=provided material"
+    # Validate BEFORE installing: these files are bind-mounted into the
+    # GLOBAL envoy service — a bad pair (mismatched key, truncated PEM)
+    # would crashloop the edge on every node at once. Mirrors the
+    # standalone installer's `elchi-stack set-cert` checks. This branch
+    # runs on rerun too, so rerunning with --tls=provided --cert --key
+    # IS the cert-rotation path: the new files change the envoy
+    # service's cfghash label and `docker stack deploy` rolls it.
+    openssl x509 -in "$ELCHI_TLS_CERT" -noout 2>/dev/null \
+      || die "--cert is not a valid PEM certificate: ${ELCHI_TLS_CERT}"
+    local _cpub _kpub
+    _cpub=$(openssl x509 -in "$ELCHI_TLS_CERT" -pubkey -noout 2>/dev/null)
+    _kpub=$(openssl pkey -in "$ELCHI_TLS_KEY" -pubout 2>/dev/null) \
+      || die "cannot read --key (passphrase-protected keys are not supported — decrypt it first)"
+    [ "$_cpub" = "$_kpub" ] || die "--cert and --key do NOT match (public keys differ)"
+    openssl x509 -in "$ELCHI_TLS_CERT" -noout -checkend 0 >/dev/null 2>&1 \
+      || die "--cert is already expired"
+    openssl x509 -in "$ELCHI_TLS_CERT" -noout -checkend $(( 30 * 86400 )) >/dev/null 2>&1 \
+      || log::warn "--cert expires within 30 days"
+    # SAN coverage of --main-address — warn-only, wildcard-aware.
+    local _san _covered=0 _wc
+    _san=$(openssl x509 -in "$ELCHI_TLS_CERT" -noout -ext subjectAltName 2>/dev/null || true)
+    if printf '%s' "$_san" | grep -qE "(DNS|IP Address):${ELCHI_MAIN_ADDRESS}(,|\$| )"; then
+      _covered=1
+    else
+      # RFC 6125: a wildcard covers exactly ONE left-most label —
+      # *.example.com matches foo.example.com but NOT a.b.example.com.
+      # (Copied from standalone lib/tls.sh tls::validate_pair; an
+      # earlier glob accepted any depth, silencing the warning in
+      # exactly the multi-label case clients reject.)
+      local _rest=${ELCHI_MAIN_ADDRESS#*.}
+      if [ "$_rest" != "$ELCHI_MAIN_ADDRESS" ]; then
+        for _wc in $(printf '%s' "$_san" | grep -oE '\*\.[A-Za-z0-9.-]+' || true); do
+          if [ "$_rest" = "${_wc#\*.}" ]; then _covered=1; fi
+        done
+      fi
+    fi
+    [ "$_covered" = 1 ] \
+      || log::warn "--cert SANs do not cover --main-address=${ELCHI_MAIN_ADDRESS} — clients hitting that name will fail TLS validation"
     install -m 0644 "$ELCHI_TLS_CERT" "${TLS_DIR}/server.crt"
     install -m 0600 "$ELCHI_TLS_KEY"  "${TLS_DIR}/server.key"
     log::ok "installed operator-provided TLS material"

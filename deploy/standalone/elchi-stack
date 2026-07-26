@@ -37,6 +37,10 @@ if [ -d "${ELCHI_INSTALLER_ROOT}/lib" ]; then
   # Sourced for cmd_retune (clickhouse::retune_local + _members) and its
   # host-proportional sizing helpers.
   . "${ELCHI_INSTALLER_ROOT}/lib/clickhouse.sh"
+  # shellcheck source=lib/tls.sh
+  # Sourced for cmd_set_cert (TLS_CERT/TLS_KEY/TLS_CA paths +
+  # tls::validate_pair + tls::_provided + tls::trust_ca_system_wide).
+  . "${ELCHI_INSTALLER_ROOT}/lib/tls.sh"
   # shellcheck source=lib/verify.sh
   # Sourced so cmd_verify can call verify::_mongo_rs_leader for M1-only
   # cluster-state probes (rs.status() needs root creds that only live
@@ -115,6 +119,14 @@ Usage:
   elchi-stack stack-version           one-screen "what's installed where" —
                                        topology version block + the actual
                                        binary versions on this node.
+  elchi-stack set-cert <crt> <key> [ca]
+                                      replace the cluster TLS cert with operator-
+                                       provided PEM material: validates the pair,
+                                       distributes to every node, restarts envoy
+                                       (rolling). Marks the cert .provided so
+                                       reruns/add-node never regenerate over it.
+                                       Revert to self-signed: rm /etc/elchi/tls/.provided
+                                       on M1, then rerun install
   elchi-stack tls-info                cluster TLS cert: subject, SANs, validity
                                        window, days-to-expiry, sha256 fingerprint.
   elchi-stack endpoint-test           synthetic HTTPS probes through this node's
@@ -401,6 +413,7 @@ existing M1 data is preserved and replicated to M2/M3 on initial sync"
   printf '    [new node]      install backend (controller + control-plane), envoy, nginx, coredns, otel\n'
   printf '    [topology]      re-render topology.full.yaml + ports.full.json\n'
   printf '    [tls]           regenerate self-signed cert (SAN list will include %s)\n' "$new_ip"
+  printf '                    (skipped when an operator-provided cert is installed — set-cert/.provided)\n'
   printf '    [/etc/hosts]    push the new managed block to every node\n'
   if [ "$install_gslb" = "1" ]; then
     printf '    [coredns]       new CoreDNS instance binds %s:53 with the same Corefile\n' "$new_ip"
@@ -945,6 +958,157 @@ cmd_stack_version() {
     && _probe_version nginx           nginx -v
   unset -f _probe_version
   printf '\n'
+}
+
+# cmd_set_cert — replace the cluster TLS cert with operator-provided
+# PEM material and roll it out to every node. Envoy (not nginx) is what
+# terminates :443 with this cert; nginx serves plaintext 8081 behind it.
+#
+# Validates EVERYTHING before touching any node: a half-distributed bad
+# cert would take the whole front door down. The .provided marker makes
+# the change survive reruns/add-node (tls::_self_signed's regen guard).
+# When a CA is supplied, it is installed into every node's system trust
+# store AND the backend controllers are restarted — Go loads the system
+# cert pool once per process, so a running controller would keep
+# rejecting the new chain until restarted.
+cmd_set_cert() {
+  case "${1:-}" in
+    -h|--help|"")
+      printf 'Usage: elchi-stack set-cert <cert.pem> <key.pem> [ca-chain.pem]\n'
+      printf '  Validates the pair, distributes to every node, restarts envoy per node.\n'
+      printf '  Pass the CA chain when the cert is signed by a private/corporate CA —\n'
+      printf '  it is added to each node'"'"'s system trust store (public CAs need no ca arg).\n'
+      printf '  Revert to self-signed: rm /etc/elchi/tls/.provided on M1, rerun install.\n'
+      [ -n "${1:-}" ] && return 0
+      die "cert and key paths required"
+      ;;
+  esac
+  local crt=$1 key=${2:-} ca=${3:-}
+  [ -n "$key" ] || die "usage: elchi-stack set-cert <cert.pem> <key.pem> [ca-chain.pem]"
+  [ -f "$crt" ] || die "cert not found: $crt"
+  [ -f "$key" ] || die "key not found: $key"
+  [ -z "$ca" ] || [ -f "$ca" ] || die "CA chain not found: $ca"
+  command -v openssl >/dev/null 2>&1 || die "openssl is required"
+  [ -f /etc/elchi/nodes.list ] || die "/etc/elchi/nodes.list missing — is the stack installed?"
+
+  # ----- validate before touching ANY node -----
+  # Shared checker (lib/tls.sh) — same rules as the install-time
+  # --tls=provided path, including the RFC 6125 one-label wildcard SAN
+  # match. main_address is what the backend callback + clients validate.
+  local main
+  main=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' \
+           /etc/elchi/topology.full.yaml 2>/dev/null || true)
+  tls::validate_pair "$crt" "$key" "$main"
+  if [ -n "$ca" ]; then
+    openssl verify -CAfile "$ca" "$crt" >/dev/null 2>&1 \
+      || log::warn "openssl verify against ${ca} failed — chain may be incomplete (missing intermediates?)"
+  fi
+
+  # Trust-store + controller impact: needed when a CA is supplied OR
+  # the new cert is SELF-SIGNED (it is its own anchor, so every node
+  # must trust it and every Go process must reload its once-per-process
+  # cert pool). A public-CA leaf without a ca arg needs neither — the
+  # distro root stores already validate it.
+  local need_trust=0
+  if [ -n "$ca" ]; then
+    need_trust=1
+  else
+    local issuer subject
+    issuer=$(openssl x509 -in "$crt" -noout -issuer 2>/dev/null)
+    subject=$(openssl x509 -in "$crt" -noout -subject 2>/dev/null)
+    if [ "${issuer#issuer=}" = "${subject#subject=}" ]; then need_trust=1; fi
+  fi
+
+  _ssh_setup
+  export ELCHI_OS_FAMILY=${ELCHI_OS_FAMILY:-$( [ -f /etc/debian_version ] && echo debian || echo rhel )}
+
+  # Remote script — host-independent, so assembled ONCE. Files are
+  # transferred to staged .new paths and only moved into place HERE, so
+  # a failed transfer can never leave a node with a mismatched live
+  # crt/key pair. keep_ca mirrors tls::_provided: a pre-existing ca.crt
+  # DISTINCT from the old leaf is a real CA chain and must survive a
+  # leaf-only rotation; otherwise ca.crt tracks the new leaf so the
+  # bundle never ships a stale anchor. Explicit `bash -c` per
+  # ssh::run_sudo's argv contract (see cmd_reload_envoy).
+  local rscript="set -e
+keep_ca=0
+if [ -f ${TLS_CA} ] && [ -f ${TLS_CERT} ] && ! cmp -s ${TLS_CA} ${TLS_CERT}; then keep_ca=1; fi
+install -m 0644 -o root -g ${ELCHI_GROUP} ${TLS_CERT}.new ${TLS_CERT}
+install -m 0640 -o root -g ${ELCHI_GROUP} ${TLS_KEY}.new ${TLS_KEY}
+rm -f ${TLS_CERT}.new ${TLS_KEY}.new"
+  if [ -n "$ca" ]; then
+    rscript+="
+install -m 0644 -o root -g ${ELCHI_GROUP} ${TLS_CA}.new ${TLS_CA}
+rm -f ${TLS_CA}.new"
+  else
+    rscript+="
+if [ \"\$keep_ca\" = 0 ]; then install -m 0644 -o root -g ${ELCHI_GROUP} ${TLS_CERT} ${TLS_CA}; fi"
+  fi
+  rscript+="
+: > ${ELCHI_TLS}/.provided && chmod 0644 ${ELCHI_TLS}/.provided"
+  if [ "$need_trust" = 1 ]; then
+    rscript+="
+. ${ELCHI_INSTALLER_ROOT}/lib/common.sh
+. ${ELCHI_INSTALLER_ROOT}/lib/tls.sh
+export ELCHI_OS_FAMILY=\${ELCHI_OS_FAMILY:-\$( [ -f /etc/debian_version ] && echo debian || echo rhel )}
+tls::trust_ca_system_wide"
+  fi
+  rscript+="
+systemctl restart elchi-envoy.service"
+  if [ "$need_trust" = 1 ]; then
+    rscript+="
+systemctl restart \"elchi-controller.service\" \"elchi-control-plane-*@*.service\" || true"
+  fi
+
+  # ----- roll out, one node at a time; contain per-node failures -----
+  # A dead/unreachable node must NOT abort the loop (set -e would
+  # otherwise leave a mixed-cert cluster with no summary): failures are
+  # collected and reported at the end. The staged-.new design means a
+  # failed node's LIVE cert/key were never touched.
+  local host rc
+  local -a failed=()
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    log::node "$host" "installing certificate + restarting envoy"
+    rc=0
+    if ssh::is_local "$host"; then
+      # Subshell: tls::_provided's die must fail THIS node, not the
+      # whole rollout. Reuses the exact install/perms/ca-coherence/
+      # marker logic of the install path (single source of truth).
+      (
+        export ELCHI_TLS_CERT_PATH="$crt" ELCHI_TLS_KEY_PATH="$key" ELCHI_TLS_CA_PATH="$ca"
+        tls::_provided
+        if [ "$need_trust" = 1 ]; then tls::trust_ca_system_wide; fi
+        systemctl restart elchi-envoy.service
+        if [ "$need_trust" = 1 ]; then
+          systemctl restart "elchi-controller.service" "elchi-control-plane-*@*.service" 2>/dev/null || true
+        fi
+      ) || rc=$?
+    else
+      # Explicit modes on scp: the destination must never inherit the
+      # operator's local file mode (a 0644 privkey.pem would otherwise
+      # sit world-readable at the staged path).
+      {
+        ssh::scp "$crt" "$host" "${TLS_CERT}.new" 0644 \
+          && ssh::scp "$key" "$host" "${TLS_KEY}.new" 0600 \
+          && { [ -z "$ca" ] || ssh::scp "$ca" "$host" "${TLS_CA}.new" 0644; } \
+          && ssh::run_sudo "$host" bash -c "$rscript"
+      } || rc=$?
+    fi
+    if [ "$rc" != 0 ]; then
+      log::err "node ${host} FAILED (rc=${rc}) — continuing with the remaining nodes"
+      failed+=("$host")
+    fi
+  done < /etc/elchi/nodes.list
+
+  if [ "${#failed[@]}" -gt 0 ]; then
+    die "cert rollout INCOMPLETE — failed node(s): ${failed[*]}
+       Their live cert/key were NOT modified (only staged .new files may remain).
+       Fix connectivity and rerun the same 'elchi-stack set-cert' command; it is idempotent."
+  fi
+  log::ok "certificate rolled out cluster-wide"
+  printf '  verify: elchi-stack tls-info\n'
+  printf '  revert: rm %s/.provided on M1, then rerun install (regenerates self-signed)\n' "$ELCHI_TLS"
 }
 
 # cmd_tls_info — subject, SANs, validity window, days-to-expiry and the
@@ -2049,6 +2213,7 @@ case "${1:-}" in
   ch-client)         shift; cmd_ch_client "$@" ;;
   ssh)               shift; cmd_ssh "$@" ;;
   stack-version)     shift; cmd_stack_version "$@" ;;
+  set-cert)          shift; cmd_set_cert "$@" ;;
   tls-info)          shift; cmd_tls_info "$@" ;;
   endpoint-test)     shift; cmd_endpoint_test "$@" ;;
   net-test)          shift; cmd_net_test "$@" ;;

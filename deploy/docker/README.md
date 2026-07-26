@@ -165,6 +165,24 @@ Pure helpers (`rand_hex`/`rand_alnum`, version parsing) are **copied** from
 the standalone `lib/` into `lib/common.sh` + `lib/versions_parse.sh` (not
 sourced) so this layer is self-contained; each copy cites its source.
 
+### Replacing / rotating the TLS certificate
+
+Rerun the installer with the provided-cert flags — that IS the rotation path:
+
+```bash
+sudo bash install.sh <your original flags> \
+  --tls=provided --cert=/path/fullchain.pem --key=/path/privkey.pem
+```
+
+The pair is validated up front (PEM parse, cert↔key match, expiry; SAN
+coverage of `--main-address` is warn-only) *before* anything is installed —
+a bad pair would otherwise crashloop the global envoy edge on every node at
+once. The new files change the envoy service's `elchi.cfghash` label, so
+`docker stack deploy` rolls envoy automatically; on multi-node the tree is
+SSH-copied to every node first. A later rerun *without* `--tls=provided`
+preserves the existing material (never regenerates over it). The standalone
+installer's equivalent is `elchi-stack set-cert <crt> <key> [ca]`.
+
 ## Upgrade / uninstall
 
 ```bash
