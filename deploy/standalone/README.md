@@ -244,6 +244,8 @@ elchi-stack reload-envoy            re-render bootstrap and restart Envoy on eve
 elchi-stack retune                  recompute ClickHouse's host-proportional sizing on
                                     every CH node — run after a VM resize (grow or
                                     shrink); per-node noop when nothing changed
+elchi-stack envoy-clusters [ip]     per-node Envoy cluster dump: endpoints, health
+                                    state, connection/request counters
 elchi-stack add-node <ip>           extend the cluster (M1 only)
 elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
 elchi-stack export-bundle <out>     re-package the encrypted cluster bundle

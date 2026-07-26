@@ -77,6 +77,10 @@ Usage:
                                        Pass ELCHI_CLICKHOUSE_MEMORY_MAX /
                                        ELCHI_CLICKHOUSE_CPU_QUOTA env to pin
                                        custom values instead of the defaults
+  elchi-stack envoy-clusters [ip]     per-node Envoy cluster dump: every
+                                       cluster's endpoints, health state, and
+                                       connection/request counters (active,
+                                       total, connect-fails, errors, timeouts)
   elchi-stack clickhouse-status       ClickHouse cluster health snapshot
                                        (run on any CH node — first 3 by topology)
                                        — version, Keeper quorum, elchi_cluster
@@ -990,6 +994,89 @@ cmd_tls_info() {
 # (public listener resolved to 127.0.0.1 via curl --resolve, so DNS /
 # the cluster's main_address don't have to be pointed here yet).
 # Confirms the major route classes still respond after an upgrade.
+# cmd_envoy_clusters — per-node dump of every cluster in that node's
+# Envoy: endpoints, health verdict, connection/request counters. Reads
+# the admin API (loopback-only :9901, hence fetched ON each node) and
+# renders one table per node.
+#
+# Health verdict comes from failed_active_health_check — the same
+# authoritative field cmd_verify uses — NOT eds_health_status, which
+# reports HEALTHY unconditionally for STRICT_DNS clusters and once
+# masked a real endpoint-count bug for months. failed_outlier_check is
+# surfaced as its own state so passive ejections are distinguishable
+# from active-HC failures. Registry followers showing UNHEALTHY is
+# expected: only the leader answers SERVING (see cmd_verify).
+cmd_envoy_clusters() {
+  local only=""
+  case "${1:-}" in
+    -h|--help)
+      printf 'Usage: elchi-stack envoy-clusters [node-ip]\n'
+      printf '  Dumps every Envoy cluster on every node (or just node-ip): endpoint\n'
+      printf '  addresses, health state, active/total/failed connections, active/\n'
+      printf '  total/errored/timed-out requests. Counters are cumulative since the\n'
+      printf '  last envoy restart.\n'
+      return 0
+      ;;
+    *) only=${1:-} ;;
+  esac
+  command -v jq >/dev/null 2>&1 || die "jq is required for envoy-clusters"
+  [ -f /etc/elchi/nodes.list ] || die "/etc/elchi/nodes.list missing — is the stack installed?"
+  _ssh_setup
+
+  # One TSV row per endpoint; endpoint-less clusters still get a row so
+  # a cluster silently losing ALL its members stays visible. Stats are
+  # a name/value list in the admin JSON and zero-valued counters may be
+  # omitted — the `// "0"` defaults keep columns aligned.
+  local jq_prog='
+    .cluster_statuses[]
+    | .name as $c
+    | if ((.host_statuses // []) | length) == 0 then
+        [$c, "(no endpoints)", "-", "-", "-", "-", "-", "-", "-", "-"] | @tsv
+      else
+        (.host_statuses[]
+         | (reduce (.stats // [])[] as $s ({}; .[$s.name] = ($s.value // "0"))) as $st
+         | [$c,
+            "\(.address.socket_address.address):\(.address.socket_address.port_value)",
+            (if (.health_status.failed_active_health_check // false) then "UNHEALTHY"
+             elif (.health_status.failed_outlier_check // false) then "OUTLIER"
+             else "healthy" end),
+            ($st["cx_active"] // "0"),
+            ($st["cx_total"] // "0"),
+            ($st["cx_connect_fail"] // "0"),
+            ($st["rq_active"] // "0"),
+            ($st["rq_total"] // "0"),
+            ($st["rq_error"] // "0"),
+            ($st["rq_timeout"] // "0")]
+         | @tsv)
+      end'
+
+  local host dump matched=0
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    if [ -n "$only" ] && [ "$host" != "$only" ]; then continue; fi
+    matched=1
+    printf '\n%s── %s ──%s\n' "$C_BOLD" "$host" "$C_RESET"
+    if ssh::is_local "$host"; then
+      dump=$(curl -sf --max-time 5 "http://127.0.0.1:9901/clusters?format=json" 2>/dev/null || true)
+    else
+      # argv-style ssh::run_sudo (see the quoting-contract comments on
+      # cmd_reload_envoy / cmd_retune).
+      dump=$(ssh::run_sudo "$host" curl -sf --max-time 5 "http://127.0.0.1:9901/clusters?format=json" 2>/dev/null || true)
+    fi
+    if [ -z "$dump" ]; then
+      printf '  %s[WARN]%s envoy admin :9901 unreachable on this node\n' "$C_YELLOW" "$C_RESET"
+      continue
+    fi
+    {
+      printf 'CLUSTER\tENDPOINT\tSTATE\tCX_ACT\tCX_TOT\tCX_FAIL\tRQ_ACT\tRQ_TOT\tRQ_ERR\tRQ_TIMEOUT\n'
+      printf '%s\n' "$dump" | jq -r "$jq_prog"
+    } | if command -v column >/dev/null 2>&1; then column -t -s $'\t'; else cat; fi | sed 's/^/  /'
+  done < /etc/elchi/nodes.list
+  if [ -n "$only" ] && [ "$matched" = 0 ]; then
+    die "node ${only} not found in /etc/elchi/nodes.list"
+  fi
+}
+
 cmd_endpoint_test() {
   local topo=/etc/elchi/topology.full.yaml
   [ -f "$topo" ] || die "$topo missing"
@@ -1956,6 +2043,7 @@ case "${1:-}" in
   init-replica-set)  shift; cmd_init_rs "$@" ;;
   mongo-status)      shift; cmd_mongo_status "$@" ;;
   retune)            shift; cmd_retune "$@" ;;
+  envoy-clusters)    shift; cmd_envoy_clusters "$@" ;;
   clickhouse-status) shift; cmd_clickhouse_status "$@" ;;
   mongosh)           shift; cmd_mongosh "$@" ;;
   ch-client)         shift; cmd_ch_client "$@" ;;
