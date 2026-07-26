@@ -627,7 +627,9 @@ cmd_retune() {
       return 0
       ;;
   esac
-  export ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
+  # `:=` guard, NOT an assignment: common.sh declares ELCHI_ETC readonly,
+  # and assigning to a readonly — even the same value — aborts under set -e.
+  : "${ELCHI_ETC:=/etc/elchi}"
   [ -f "${ELCHI_ETC}/topology.full.yaml" ] || die "topology.full.yaml missing — is the stack installed?"
   _ssh_setup
 

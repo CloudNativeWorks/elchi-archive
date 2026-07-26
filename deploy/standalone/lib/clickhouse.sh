@@ -727,7 +727,11 @@ clickhouse::setup_cluster_member() {
 # ELCHI_CLICKHOUSE_CPU_QUOTA at install time must pass the same env to
 # retune, or their pin is replaced by the recomputed default.
 clickhouse::retune_local() {
-  export ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
+  # `:=` guard, NOT an assignment: common.sh (sourced before this lib in
+  # both the elchi-stack and remote-ssh paths) declares ELCHI_ETC
+  # readonly — assigning to it, even with the identical value, aborts
+  # under set -e.
+  : "${ELCHI_ETC:=/etc/elchi}"
   local dropin=/etc/systemd/system/clickhouse-server.service.d/10-elchi.conf
 
   # Not a ClickHouse host: a 4th+ cluster member, a 2-VM M2, or a
@@ -760,9 +764,10 @@ clickhouse::retune_local() {
 
   # Port defaults: install.sh exports these during install, but retune
   # runs from elchi-stack / a bare ssh shell where they may be unset
-  # (start_service waits on the HTTP port).
-  export ELCHI_PORT_CLICKHOUSE_HTTP=${ELCHI_PORT_CLICKHOUSE_HTTP:-8123}
-  export ELCHI_PORT_CLICKHOUSE_NATIVE=${ELCHI_PORT_CLICKHOUSE_NATIVE:-9000}
+  # (start_service waits on the HTTP port). Same readonly-safe `:=`
+  # form as ELCHI_ETC above; only read in-process, so no export needed.
+  : "${ELCHI_PORT_CLICKHOUSE_HTTP:=8123}"
+  : "${ELCHI_PORT_CLICKHOUSE_NATIVE:=9000}"
 
   # Re-render exactly the sizing-derived files. The cluster-only
   # overlays (keeper/cluster xml) are host-size independent and stay
