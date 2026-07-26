@@ -114,12 +114,34 @@ collector::render_env() {
   # across all replicas — slower than a single-node create. The 5s
   # default can be tight for the initial 6 migrations + materialized
   # views on a loaded cluster, so widen the window when clustered.
-  local ch_connect_timeout=5s ch_write_timeout=10s
-  if [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ] \
-     && [ "$(clickhouse::_cluster_size)" -ge 3 ] 2>/dev/null; then
-    ch_connect_timeout=20s
-    ch_write_timeout=15s
+  # CLICKHOUSE_REPLICATED is TRI-state by contract with the collector:
+  # a SET flag always wins; an EMPTY/absent flag makes the collector
+  # auto-detect from the target database's engine. Local mode: we know
+  # the answer (Replicated `elchi` DB on 3+ nodes replicates
+  # DDL/metadata ONLY — official docs: "if the table is not replicated,
+  # the data will not be replicated" — so the collector must create
+  # Replicated* tables), write it explicitly. EXTERNAL mode: the
+  # operator's ClickHouse may or may not be a Replicated-DB cluster —
+  # forcing `false` here would override the collector's auto-detect and
+  # silo data on THEIR cluster, so we omit the flag entirely.
+  local ch_connect_timeout=5s ch_write_timeout=10s ch_replicated=""
+  if [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ]; then
+    ch_replicated=false
+    if [ "$(clickhouse::_cluster_size)" -ge 3 ] 2>/dev/null; then
+      ch_connect_timeout=20s
+      ch_write_timeout=15s
+      ch_replicated=true
+    fi
   fi
+  # Normalize the override: the collector parses a strict boolean —
+  # shell idioms like ELCHI_CLICKHOUSE_REPLICATED=1/yes would land
+  # verbatim in collector.env and parse wrong (strconv.ParseBool
+  # rejects "yes"; "1" is fine but keep one canonical form).
+  # Unrecognized values keep the computed default.
+  case "${ELCHI_CLICKHOUSE_REPLICATED:-}" in
+    true|True|TRUE|1|yes)   ch_replicated=true ;;
+    false|False|FALSE|0|no) ch_replicated=false ;;
+  esac
 
   cat > "${COLLECTOR_ENV}.tmp" <<EOF
 # Managed by elchi-stack installer. DO NOT EDIT BY HAND.
@@ -159,6 +181,12 @@ CLICKHOUSE_CONNECT_TIMEOUT=${ch_connect_timeout}
 CLICKHOUSE_WRITE_TIMEOUT=${ch_write_timeout}
 CLICKHOUSE_MAX_OPEN_CONNS=20
 CLICKHOUSE_MAX_IDLE_CONNS=5
+# true on 3+ node local clusters → collector creates its tables with
+# Replicated* engines (argless: table UUID derives the Keeper path
+# inside the Replicated DB). Absent line (external mode) → collector
+# auto-detects from the DB engine. Collectors predating the flag
+# ignore unknown env vars harmlessly. Override: ELCHI_CLICKHOUSE_REPLICATED.
+${ch_replicated:+CLICKHOUSE_REPLICATED=${ch_replicated}}
 
 # --- Security: SHA-256 hashing salt for source IP / user-agent / consumer ---
 HASH_SALT=${hash_salt}

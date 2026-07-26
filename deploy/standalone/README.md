@@ -177,10 +177,15 @@ and have no knob: **mongodb** (canonical major `8.0`), **clickhouse**
   - **1-2 VMs:** standalone ClickHouse on M1.
   - **3+ VMs:** a replicated cluster on M1+M2+M3. Each member runs an
     embedded ClickHouse Keeper (Raft coordination) and the `elchi`
-    database is created with `ENGINE = Replicated`, so every table the
-    collector creates inside it is transparently upgraded to
-    `ReplicatedMergeTree` and its DDL fanned out to all 3 replicas — the
-    collector itself stays cluster-unaware.
+    database is created with `ENGINE = Replicated`. NOTE the exact
+    semantics: a Replicated database replicates **DDL/metadata only**
+    ("if the table is not replicated, the data will not be replicated" —
+    official docs). Data replication requires the tables themselves to
+    be `ReplicatedMergeTree`, which the collector creates when the
+    installer sets `CLICKHOUSE_REPLICATED=true` in `collector.env`
+    (automatic on 3+ node clusters). With an older collector that
+    predates this flag, tables exist on every node but each node's data
+    stays LOCAL — `elchi-stack clickhouse-status` flags this state.
 
   The installer always creates the `elchi` database (as `Replicated` in
   cluster mode) **before** starting any collector, and each ClickHouse
@@ -277,6 +282,13 @@ against the new args, prints a plan banner, and re-runs `install.sh`
 with the merged set. SSH credentials persisted at install time
 (`/etc/elchi/orchestrator.env`) are reused, so most reruns only need
 the version flags.
+
+Forgot which flags the cluster was installed with (`--gslb-zone`,
+versions, `--tls` mode, ...)? Every install/upgrade invocation is
+recorded — secrets redacted — at **`/etc/elchi/install-command`** on M1;
+the upgrade entries are followed by the fully-resolved `install.sh`
+line upgrade.sh composed from `topology.full.yaml`, which is the
+complete answer to "how is this cluster configured".
 
 ```bash
 # Bump the UI only — backend / envoy / coredns are kept as-is.
@@ -548,6 +560,7 @@ different and why — read this if you're cross-checking against
 | ClickHouse query limits: chart defaults | `users.d` profile for the `elchi` user derived from the same budget: per-query memory = MemoryMax/2 (spill-to-disk at half that), `max_threads` = cores/2, `max_execution_time` = 60s (`ELCHI_CLICKHOUSE_QUERY_TIMEOUT`) | Boxes in ad-hoc analytics queries so they can't starve the collector's inserts; batched collector traffic sits far below every limit |
 | ClickHouse system log tables: chart defaults (unbounded) | `metric_log`/`asynchronous_metric_log`/`trace_log`/`query_thread_log`/`text_log`/`processors_profile_log`/`query_views_log` disabled; `query_log`+`part_log` TTL 14d (`ELCHI_CLICKHOUSE_SYSTEM_LOG_TTL_DAYS`); `background_schedule_pool_size` 64, `mark_cache_size` = MemoryMax/8 clamped [128M,512M]. `background_pool_size` intentionally left at default 16 — the 24.8+ startup sanity check aborts (BAD_ARGUMENTS) below 13 (`pool*2 ≥ number_of_free_entries_in_pool_to_execute_optimize_entire_partition=25`) | Per-second self-observability flushes are pure overhead on an ALS-ingest node — VictoriaMetrics/Grafana own the monitoring story; unbounded system tables eventually eat the data disk. `query_views_log` grows at ingest rate (every collector batch cascades through the rollup MVs) |
 | Collector `BATCH_FLUSH_INTERVAL` 1s | 10s default (`ELCHI_COLLECTOR_FLUSH_INTERVAL`) | Only matters at low traffic (size/bytes ceilings flush first under load): 10x bigger inserts → fewer parts/merges/rollup-MV runs. Cost: ~10s analytics lag + worst-case crash-loss |
+| Collector replication signaling: chart-side TBD | `CLICKHOUSE_REPLICATED=true` auto-set in `collector.env` on 3+ node clusters (override `ELCHI_CLICKHOUSE_REPLICATED`, normalized to `true`/`false`) | A ClickHouse `Replicated` DATABASE replicates DDL/metadata only — data replication needs `ReplicatedMergeTree` tables, which the collector creates when this flag is set. The 3+-node auto-enable is installer-computed; the Helm chart must set the equivalent env for its own HA mode. `verify` + `elchi-stack clickhouse-status` flag plain-MergeTree stragglers |
 | UI `config.js` `API_URL`: fixed `https://<main_address>` | `window.location.origin` (JS expression; `ELCHI_UI_API_URL=<url>` pins the old fixed-address form) | Every node's Envoy serves UI + API on the same listener, so same-origin works from ANY entry point. A fixed address funneled all API traffic into one node and made it a UI-wide SPOF; same-origin also removes CORS preflights. `main_address` still drives TLS SANs, Grafana `root_url`, the backend's client-facing address and verify probes |
 | TLS rotation: replace the k8s Secret | Operator-provided certs carry a `/etc/elchi/tls/.provided` marker: installed by `--tls=provided` / `elchi-stack set-cert`, shipped in the bundle, and honored by the self-signed regen logic (never overwritten by reruns/`add-node`; revert = rm marker on M1 + rerun). Cert/key content is folded into envoy's unit fingerprint and `ca.crt` into the controller/control-plane fingerprints, so a rotation or CA swap on rerun actually restarts the affected services. The bundle ships the REAL CA chain when one exists (not the leaf) | k8s reloads Secrets and restarts pods for us; systemd has no such linkage — the marker + fingerprint folding recreate it. Envoy loads static `tls_certificates` at startup only, and Go processes load the system cert pool once per process |
 

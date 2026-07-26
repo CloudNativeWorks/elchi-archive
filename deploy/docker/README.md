@@ -240,6 +240,22 @@ controller/cp/ui are replicable) scale the same way in both modes.
 ClickHouse cluster reports `Replicated` engine on all members with a healthy
 Keeper quorum.
 
+> **ClickHouse data replication — read this.** A `Replicated` DATABASE
+> replicates **DDL/metadata only** ("if the table is not replicated, the
+> data will not be replicated" — official docs). Actual data replication
+> requires the collector's tables to be `ReplicatedMergeTree`, which the
+> collector creates when `CLICKHOUSE_REPLICATED=true` is set in
+> `collector.env` (the installer sets it automatically in HA mode). With
+> a collector predating this flag, tables exist on every member but each
+> keeps an INDEPENDENT copy — check from any member with:
+> `docker exec $(docker ps -qf name=elchi-clickhouse) clickhouse-client
+> -q "SELECT count() FROM system.replicas"` (0 while tables exist in
+> `system.tables` = per-member data silos).
+>
+> **Reruns of an HA stack must re-pass `--nodes`** — replica count is
+> derived from it on every run; the installer now refuses a single-node
+> rerun against a live HA stack instead of silently degrading it.
+
 ### HA limitations / notes
 
 - **CoreDNS GSLB `node_ip`**: a Swarm overlay container can't learn its host's

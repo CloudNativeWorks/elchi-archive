@@ -147,6 +147,10 @@ Examples:
 EOF
 }
 
+# Preserved verbatim for invocation::record after the lock is acquired —
+# the loop below shifts through the positional args.
+_ELCHI_UPGRADE_ARGV=(${1+"$@"})
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --backend-version=*)                  NEW_BACKEND_VARIANTS=${1#*=} ;;
@@ -207,6 +211,16 @@ log::info "acquired upgrade lock at ${LOCK_FILE}"
 # ----- read current state ------------------------------------------------
 [ -f /etc/elchi/topology.full.yaml ] \
   || die "no existing install detected — run install.sh instead"
+
+# Record the operator's upgrade command line (secrets redacted) at
+# /etc/elchi/install-command — AFTER the existing-install gate above,
+# so running upgrade.sh on a wrong/virgin machine doesn't create
+# /etc/elchi just to log a run that immediately died. The install.sh
+# this script composes and execs below records ITSELF too — that second
+# line carries the fully resolved flag set reconstructed from
+# topology.full.yaml, the complete answer to "how is this cluster
+# configured".
+invocation::record "upgrade.sh" ${_ELCHI_UPGRADE_ARGV[@]+"${_ELCHI_UPGRADE_ARGV[@]}"}
 
 CUR_UI=$(awk '/^  ui:/{print $2; exit}' /etc/elchi/topology.full.yaml)
 CUR_ENVOY=$(awk '/^  envoy:/{print $2; exit}' /etc/elchi/topology.full.yaml)

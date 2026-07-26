@@ -770,11 +770,40 @@ cmd_clickhouse_status() {
                           queue_size, absolute_delay
                      FROM system.replicas FORMAT TabSeparated")
   if [ -z "$rep_out" ] || ! printf '%s' "$rep_out" | head -1 | grep -q .; then
-    printf '  (no replicated tables yet — the collector creates them on its first ALS write)\n'
+    printf '  (none listed — see the plain-table check below)\n'
   else
     printf '%s\n' "$rep_out" \
       | awk 'BEGIN { printf "  %-10s %-24s %-7s %-7s %-6s %s\n","db","table","total","active","queue","delay_s" }
              NF    { printf "  %-10s %-24s %-7s %-7s %-6s %s\n", $1, $2, $3, $4, $5, $6 }'
+  fi
+
+  # PLAIN-table silo check — runs UNCONDITIONALLY in the cluster path
+  # (not only when system.replicas is empty): a partially migrated
+  # cluster (some tables replicated, some still plain MergeTree) is the
+  # likeliest state right after a collector upgrade, and the replicas
+  # listing above looks healthy while the plain stragglers keep
+  # siloing data per node. `|| true`: a query failure here (server
+  # flapping between the two queries) must not kill the whole report
+  # under set -e. The db is read from collector.env so a custom
+  # --clickhouse-database install is checked in the RIGHT database.
+  local ch_db plain_cnt
+  ch_db=$(awk -F= '/^CLICKHOUSE_DATABASE=/{print $2; exit}' /etc/elchi/collector.env 2>/dev/null || true)
+  ch_db=${ch_db:-$db}
+  if grep -qs '^CLICKHOUSE_REPLICATED=false' /etc/elchi/collector.env; then
+    printf '  (replication intentionally disabled: CLICKHOUSE_REPLICATED=false in collector.env)\n'
+  else
+    plain_cnt=$(_ch_q "SELECT count() FROM system.tables WHERE database='${ch_db}' AND engine LIKE '%MergeTree%' AND engine NOT LIKE 'Replicated%'" || true)
+    if [[ "$plain_cnt" =~ ^[0-9]+$ ]] && [ "$plain_cnt" -gt 0 ]; then
+      printf '  %s[ERR ]%s %s PLAIN MergeTree table(s) in %s — their data SILOS per node\n' \
+        "$C_RED" "$C_RESET" "$plain_cnt" "$ch_db"
+      printf '        (queries return different results depending on which node answers).\n'
+      printf '        Fix: upgrade elchi-collector to a version honoring CLICKHOUSE_REPLICATED,\n'
+      printf '        then DROP those tables on ONE node (the Replicated DB fans the DDL out)\n'
+      printf '        and restart the collectors so migrations recreate them replicated.\n'
+      printf '        List them: SELECT name, engine FROM system.tables WHERE database='"'"'%s'"'"'\n' "$ch_db"
+    elif [ -z "$rep_out" ]; then
+      printf '  (no tables yet — the collector creates them on its first ALS write)\n'
+    fi
   fi
   printf '\n'
 }

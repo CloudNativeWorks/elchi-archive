@@ -904,10 +904,27 @@ EOF
 # ----- elchi-collector env file -------------------------------------------
 render::collector_env() {
   [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] || return 0
-  local mongo_uri clickhouse_uri hash_salt
+  local mongo_uri clickhouse_uri hash_salt ch_replicated=""
   mongo_uri=$(render::_mongo_uri)
   clickhouse_uri=$(render::_clickhouse_uri)
   hash_salt=$(sec ELCHI_COLLECTOR_HASH_SALT)
+  # TRI-state contract (mirrors standalone lib/collector.sh): local
+  # mode writes explicit true/false (HA → true: the Replicated DB
+  # replicates DDL/metadata ONLY, so the collector must create
+  # Replicated* tables); external mode OMITS the flag so the
+  # collector's auto-detect decides against the operator's own
+  # ClickHouse instead of being force-overridden to false.
+  if [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ]; then
+    ch_replicated=false
+    if render::_ha; then ch_replicated=true; fi
+  fi
+  # Normalize the override: the collector parses a strict boolean —
+  # shell idioms like 1/yes would land verbatim and parse wrong.
+  # Unrecognized values keep the computed default.
+  case "${ELCHI_CLICKHOUSE_REPLICATED:-}" in
+    true|True|TRUE|1|yes)   ch_replicated=true ;;
+    false|False|FALSE|0|no) ch_replicated=false ;;
+  esac
   cat > "${CONFIG_DIR}/collector.env" <<EOF
 # Managed by the elchi Docker Swarm installer. Sourced by elchi-collector.
 ELCHI_COLLECTOR_GRPC_ADDR=:${PORT_COLLECTOR_GRPC}
@@ -928,6 +945,7 @@ CLICKHOUSE_CONNECT_TIMEOUT=5s
 CLICKHOUSE_WRITE_TIMEOUT=10s
 CLICKHOUSE_MAX_OPEN_CONNS=20
 CLICKHOUSE_MAX_IDLE_CONNS=5
+${ch_replicated:+CLICKHOUSE_REPLICATED=${ch_replicated}}
 HASH_SALT=${hash_salt}
 # Ephemeral GeoIP MMDB cache. /tmp is writable by the collector image's
 # nonroot user; GeoIP DBs are re-pulled from MongoDB GridFS on restart, so

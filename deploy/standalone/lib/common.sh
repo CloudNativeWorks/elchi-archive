@@ -127,6 +127,62 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 }
 
+# ----- invocation history --------------------------------------------------
+# invocation::record <label> [argv...] — append this run's command line to
+# ${ELCHI_ETC}/install-command so operators can later recall exactly which
+# flags an install/upgrade was given (--gslb-zone, versions, --tls mode...).
+# Months later "what zone/versions did I install with?" has a durable,
+# greppable answer instead of shell-history archaeology.
+#
+# Secret-bearing values (passwords, secrets, tokens, bundle keys, URIs
+# with embedded credentials) are redacted — the file is meant to be
+# replayable, and redacted flags tell the operator exactly WHICH secrets
+# they must re-supply. Everything else is %q-quoted so a line can be
+# copy-pasted back into a shell verbatim.
+#
+# Called by install.sh (orchestrator path only — the remote
+# --skip-orchestration recursion is internal noise) and upgrade.sh.
+# upgrade.sh's internally composed install.sh line is recorded too,
+# deliberately: it captures the FULL flag set upgrade reconstructed from
+# topology.full.yaml — the most complete answer to "how is this cluster
+# configured".
+invocation::record() {
+  local label=$1; shift || true
+  # /etc/elchi may not exist yet on a virgin first install (dirs.sh runs
+  # later in the flow); dirs.sh re-asserts canonical perms afterwards.
+  install -d -m 0750 "$ELCHI_ETC" 2>/dev/null || true
+  local f="${ELCHI_ETC}/install-command"
+  if [ ! -f "$f" ]; then
+    cat > "$f" <<'EOF'
+# elchi-stack invocation history — one line per install/upgrade run,
+# most recent LAST. Lines record ATTEMPTS: a line does not by itself
+# mean that run completed successfully. Secret values are shown as
+# <redacted>; re-supply them if you replay a line verbatim.
+#
+# You rarely need to replay flags: upgrade.sh and `elchi-stack add-node`
+# re-read --main-address / --nodes / --gslb-* / versions from
+# /etc/elchi/topology.full.yaml automatically. Typical upgrade:
+#   sudo bash get.sh --upgrade --backend-version=<new> [--ui-version=<new> ...]
+EOF
+    chmod 0600 "$f"
+  fi
+  local ts line='' a
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  for a in "$@"; do
+    case "$a" in
+      # --*endpoint*: URLs can carry basic-auth userinfo
+      # (http://user:pass@host) — redact conservatively; the effective
+      # endpoint is recoverable from topology.full.yaml anyway.
+      --*password*=*|--*secret*=*|--*token*=*|--bundle-key=*|--*uri=*|--*endpoint*=*)
+        line+=" ${a%%=*}=<redacted>" ;;
+      *)
+        line+=" $(printf '%q' "$a")" ;;
+    esac
+  done
+  printf '%s  %s%s\n' "$ts" "$label" "$line" >> "$f"
+  chmod 0600 "$f" 2>/dev/null || true
+}
+
 # mongo_runtime_owner — echo "user:group" the mongod process runs as.
 # The Debian mongodb-org package creates the `mongodb` user+group; the
 # RHEL / Rocky / Alma / Oracle RPM creates `mongod`. Both packages name
@@ -376,7 +432,12 @@ readonly ELCHI_GROUP=elchi
 readonly ELCHI_OPT=/opt/elchi
 readonly ELCHI_BIN=/opt/elchi/bin
 readonly ELCHI_WEB=/opt/elchi/web
-readonly ELCHI_ETC=/etc/elchi
+# Honors a pre-set ELCHI_ETC (still readonly afterwards): --dry-run
+# re-execs install.sh with ELCHI_ETC pointed at a tmpdir BEFORE this
+# file is sourced — the only way to redirect it, since a mid-process
+# reassignment of a readonly dies under set -e (which is exactly how
+# the old in-place `export ELCHI_ETC=` dry-run branch broke).
+readonly ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
 readonly ELCHI_CONFIG=/etc/elchi/config
 readonly ELCHI_TLS=/etc/elchi/tls
 readonly ELCHI_MONGO=/etc/elchi/mongo

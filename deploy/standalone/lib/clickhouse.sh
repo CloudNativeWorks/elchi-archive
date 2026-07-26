@@ -14,11 +14,20 @@
 #                      ClickHouse server AND an embedded ClickHouse
 #                      Keeper (Raft coordination, the ZooKeeper
 #                      replacement). The `elchi` database is created with
-#                      ENGINE = Replicated, so every table the collector
-#                      creates inside it — even a plain `MergeTree` —
-#                      is transparently upgraded to ReplicatedMergeTree
-#                      and its DDL broadcast to all 3 replicas. The
-#                      collector itself stays cluster-unaware.
+#                      ENGINE = Replicated, which replicates DDL /
+#                      METADATA only — per the official docs, "if the
+#                      table is not replicated, the data will not be
+#                      replicated (the database is responsible only for
+#                      metadata)". Data replication therefore requires
+#                      the collector to create its tables with the
+#                      Replicated* engines (argless ReplicatedMergeTree
+#                      works: inside a Replicated DB the shared table
+#                      UUID derives the Keeper path automatically). The
+#                      installer signals this via CLICKHOUSE_REPLICATED
+#                      =true in collector.env on 3+ node clusters.
+#                      (An earlier revision wrongly assumed plain
+#                      MergeTree tables were auto-converted — they are
+#                      NOT; the result was per-node data silos.)
 #
 #   external           Operator-supplied URI / host list. No ClickHouse
 #                      install on this host; the URI is handed to the
@@ -632,10 +641,13 @@ clickhouse::create_database() {
     || die "failed to create ClickHouse database '${db}'"
 }
 
-# Cluster: a Replicated database. Every table created inside it — even a
-# plain MergeTree issued by the cluster-unaware collector — is
-# transparently turned into ReplicatedMergeTree and its DDL fanned out to
-# all 3 replicas. Each cluster member runs the identical statement; the
+# Cluster: a Replicated database. Its DDL log fans every CREATE out to
+# all 3 replicas, so tables EXIST everywhere — but ONLY tables the
+# collector creates as Replicated* engines actually replicate DATA
+# (plain MergeTree inside a Replicated DB stays plain: each node keeps
+# an independent, silently diverging copy). CLICKHOUSE_REPLICATED=true
+# in collector.env is what tells the collector to use Replicated
+# engines here. Each cluster member runs the identical statement; the
 # {shard}/{replica} macros (rendered into elchi-cluster.xml) make them
 # rendezvous on the same Keeper path.
 #

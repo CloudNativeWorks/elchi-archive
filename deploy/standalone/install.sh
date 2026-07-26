@@ -1239,13 +1239,20 @@ orchestrate() {
   # download, no /etc/hosts modification, no systemd unit installation,
   # no service start). The render output is dumped to a tmp directory
   # so the operator can inspect what would be installed.
-  if [ "${ELCHI_DRY_RUN:-0}" = "1" ]; then
+  if [ "${ELCHI_DRY_RUN:-0}" = "1" ] && [ "$ELCHI_ETC" = "/etc/elchi" ]; then
+    # ELCHI_ETC is readonly (common.sh) — it CANNOT be reassigned here;
+    # the old in-place `export ELCHI_ETC=` died on the readonly under
+    # set -e, which silently broke --dry-run entirely. Redirecting it
+    # requires re-entering the script with the tmpdir preset in the
+    # environment BEFORE common.sh's readonly declaration runs (which
+    # now honors a pre-set value). The [ = /etc/elchi ] guard makes the
+    # re-exec happen exactly once.
     log::warn "DRY-RUN mode: no side effects; rendered configs go to /tmp/elchi-dryrun-*"
     local dryrun_dir
     dryrun_dir=$(mktemp -d /tmp/elchi-dryrun-XXXXXX)
-    export ELCHI_ETC="${dryrun_dir}/etc-elchi"
-    install -d -m 0755 "$ELCHI_ETC"
-    log::info "rendered topology + ports go to ${ELCHI_ETC}"
+    log::info "rendered topology + ports go to ${dryrun_dir}/etc-elchi"
+    exec env ELCHI_ETC="${dryrun_dir}/etc-elchi" bash "$0" \
+      ${_ELCHI_INVOCATION_ARGV[@]+"${_ELCHI_INVOCATION_ARGV[@]}"}
   fi
 
   # Pre-flight every remote node before committing any local state.
@@ -1771,6 +1778,9 @@ _remote_install_cleanup() {
 
 # ----- entry point -------------------------------------------------------
 main() {
+  # Preserved verbatim (GLOBAL: orchestrate's --dry-run re-exec needs it
+  # too) — parse_args shifts its way through the positional args.
+  _ELCHI_INVOCATION_ARGV=(${1+"$@"})
   parse_args "$@"
   _load_secrets_from_file
   source_libs
@@ -1802,6 +1812,15 @@ main() {
     # secrets/TLS/topology; we only run local_install.
     local_install
   else
+    # Durable record of what the operator actually ran (secrets
+    # redacted) — months later "--gslb-zone neydi?" has an answer at
+    # /etc/elchi/install-command. Orchestrator path only: the remote
+    # --skip-orchestration recursion above is internal plumbing, and
+    # --dry-run must not pollute the real history (nor create
+    # /etc/elchi on a virgin box).
+    if [ "${ELCHI_DRY_RUN:-0}" != "1" ]; then
+      invocation::record "install.sh" ${_ELCHI_INVOCATION_ARGV[@]+"${_ELCHI_INVOCATION_ARGV[@]}"}
+    fi
     orchestrate
   fi
 }

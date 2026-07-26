@@ -62,6 +62,38 @@ verify::wait() {
     fi
   fi
 
+  # ClickHouse data-replication sanity (3+ node local clusters). The
+  # Replicated `elchi` DB replicates DDL/metadata ONLY — if the
+  # collector created its tables as plain MergeTree (versions predating
+  # the CLICKHOUSE_REPLICATED flag), every node silos its own data with
+  # no error anywhere; queries return different results per node.
+  # Surfaced loudly but deliberately NOT counted as a failure yet:
+  # pre-flag collectors would otherwise hard-fail every fresh 3+ node
+  # install. Flip to fails+1 once the fixed collector is the floor
+  # version in lib/versions.sh.
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] \
+     && [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ] \
+     && command -v clickhouse-server >/dev/null 2>&1 \
+     && [ "$(clickhouse::_cluster_size 2>/dev/null || echo 1)" -ge 3 ] 2>/dev/null \
+     && ! grep -qs '^CLICKHOUSE_REPLICATED=false' "${ELCHI_ETC}/collector.env"; then
+    # (The grep exempts a deliberate ELCHI_CLICKHOUSE_REPLICATED=false
+    # opt-out — flagging an intentional state as an error would train
+    # operators to ignore this check.)
+    # Count PLAIN MergeTree-family tables explicitly (NOT LIKE
+    # 'Replicated%'): a naive '%MergeTree%' match also counts
+    # ReplicatedMergeTree, which would green-light the half-migrated
+    # state (some tables replicated, some still siloing).
+    local ch_db=${ELCHI_CLICKHOUSE_DATABASE:-elchi} ch_rep ch_plain
+    ch_rep=$(clickhouse::query "SELECT count() FROM system.replicas WHERE database='${ch_db}'" 2>/dev/null || echo "")
+    ch_plain=$(clickhouse::query "SELECT count() FROM system.tables WHERE database='${ch_db}' AND engine LIKE '%MergeTree%' AND engine NOT LIKE 'Replicated%'" 2>/dev/null || echo "")
+    if [[ "$ch_plain" =~ ^[0-9]+$ ]] && [ "$ch_plain" -gt 0 ]; then
+      log::err "ClickHouse: ${ch_plain} PLAIN MergeTree table(s) in '${ch_db}' (replicated: ${ch_rep:-?}) — their data will SILO per node"
+      log::err "  fix: upgrade elchi-collector (CLICKHOUSE_REPLICATED support) + recreate those tables; inspect with: elchi-stack clickhouse-status"
+    elif [[ "$ch_rep" =~ ^[0-9]+$ ]] && [ "$ch_rep" -gt 0 ]; then
+      log::ok "ClickHouse: ${ch_rep} replicated table(s) in '${ch_db}', no plain stragglers"
+    fi
+  fi
+
   # Backend instances on this node (read from systemd). Skip
   # elchi-watchdog.service — it's a Type=oneshot driven by
   # elchi-watchdog.timer; outside the brief moment it's running, its
@@ -517,6 +549,11 @@ verify::print_summary() {
   printf '    elchi-stack net-test [--mesh] cross-node TCP+latency, ICMP loss, path-MTU\n'
   printf '    elchi-stack rotate-secret <jwt|gslb|grafana>\n'
   printf '    elchi-stack show-secret <name>\n'
+  printf '\n'
+  printf '  %bInstall flags record:%b /etc/elchi/install-command\n' "$C_CYAN" "$C_RESET"
+  printf '                     every install/upgrade command this cluster was\n'
+  printf '                     given, secrets redacted — check it when you\n'
+  printf '                     forget a flag (--gslb-zone, versions, ...)\n'
   printf '\n'
   printf '  %bPer-node audit:%b   sudo /etc/elchi/validate.sh\n' "$C_CYAN" "$C_RESET"
   printf '                     run on EACH machine to confirm topology, systemd,\n'

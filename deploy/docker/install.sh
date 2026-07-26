@@ -220,6 +220,16 @@ export ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-elchi.local}
 _nc=1; [ -n "${ELCHI_NODES:-}" ] && _nc=$(csv_split "$ELCHI_NODES" | grep -c .)
 if [ "${_nc:-1}" -ge 3 ] 2>/dev/null; then export ELCHI_STORAGE_REPLICAS=3
 else export ELCHI_STORAGE_REPLICAS=1; fi
+# Footgun guard: STORAGE_REPLICAS derives purely from --nodes on EVERY
+# run — a rerun of an HA stack that omits --nodes would silently render
+# the whole stateful tier single-node (no keeper set, no per-member
+# clickhouse services, CLICKHOUSE_REPLICATED=false) and redeploy it
+# that way. Detect the mismatch against the LIVE stack and refuse.
+if [ "${ELCHI_STORAGE_REPLICAS}" -le 1 ] 2>/dev/null \
+   && command -v docker >/dev/null 2>&1 \
+   && docker service inspect "${STACK_NAME}_elchi-clickhouse-2" >/dev/null 2>&1; then
+  die "stack '${STACK_NAME}' is currently HA (elchi-clickhouse-2 exists) but this rerun would render SINGLE-NODE — you omitted --nodes. Re-pass the full --nodes=<ip1,ip2,ip3,...> list."
+fi
 # M1 singletons (VictoriaMetrics + Grafana) and storage members are pinned by
 # --nodes hostname (the first node = M1; the first 3 nodes = the replica-set /
 # Keeper members when there are 3+ nodes), exactly like the standalone
