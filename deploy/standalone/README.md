@@ -48,7 +48,7 @@ sudo bash deploy/standalone/install.sh \
   --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
   --backend-version=elchi-1.6.14-v0.14.0-envoy1.38.3,elchi-1.6.14-v0.14.0-envoy1.39.0 \
-  --ui-version=v1.5.14 \
+  --ui-version=v1.5.15 \
   --envoy-version=v1.38.3 \
   --main-address=elchi.example.com \
   --hostnames=elchi.example.com,m1,m2,m3
@@ -70,7 +70,7 @@ to the others.
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
   --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0 \
-  --ui-version=v1.5.14 \
+  --ui-version=v1.5.15 \
   --envoy-version=v1.38.3 \
   --main-address=$(hostname -f)
 ```
@@ -87,7 +87,7 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
       --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0 \
-      --ui-version=v1.5.14 \
+      --ui-version=v1.5.15 \
       --envoy-version=v1.38.3 \
       --main-address=elchi.example.com
 ```
@@ -118,7 +118,7 @@ default:
 | Component        | Variable                         | Default |
 |------------------|----------------------------------|---------|
 | elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.14-v0.14.0-envoy1.38.3` |
-| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.14` |
+| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.15` |
 | Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.38.3` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
 | elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.11` |
@@ -241,6 +241,9 @@ canonical control point.
 elchi-stack status                  cluster-wide service summary
 elchi-stack logs <unit> [-f]        tail journalctl on every node
 elchi-stack reload-envoy            re-render bootstrap and restart Envoy on every node
+elchi-stack retune                  recompute ClickHouse's host-proportional sizing on
+                                    every CH node — run after a VM resize (grow or
+                                    shrink); per-node noop when nothing changed
 elchi-stack add-node <ip>           extend the cluster (M1 only)
 elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
 elchi-stack export-bundle <out>     re-package the encrypted cluster bundle
@@ -267,7 +270,7 @@ the version flags.
 
 ```bash
 # Bump the UI only — backend / envoy / coredns are kept as-is.
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.14
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.15
 
 # Replace the backend variant set (declarative — old variants not in
 # this list are AUTO-PRUNED by install.sh's stale-variants pass).
@@ -286,7 +289,7 @@ sudo bash deploy/standalone/upgrade.sh \
   --prune-version=elchi-1.6.14-v0.14.0-envoy1.38.3
 
 # Apply OS security patches as part of this upgrade (default: skipped).
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.14 --upgrade-os
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.15 --upgrade-os
 ```
 
 ### Bootstrap (curl | bash) for upgrade
@@ -296,7 +299,7 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.14 --upgrade-os
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
   | sudo bash -s -- --upgrade \
-      --ui-version=v1.5.14 \
+      --ui-version=v1.5.15 \
       --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0
 ```
 
@@ -525,7 +528,7 @@ different and why — read this if you're cross-checking against
 | `pullPolicy: Always` | Re-download triggered when remote sha256 differs from on-disk binary, or `--force-redownload` | Idempotent; same effect, no wasted bandwidth |
 | Helm hooks (`pre-install`, `post-upgrade`) | systemd unit lifecycle (`After=`, `Wants=`, `PartOf=`) + ordered install pipeline | Each does what's appropriate for its layer |
 | `global.envoy.service.type=NodePort` | Envoy binds 0.0.0.0:443 directly on every node | Removes a layer — operator's external LB or DNS round-robin is what fronts the cluster |
-| Helm chart's UI `image.tag: v1.0.0` | Default `--ui-version=v1.5.14` | Helm chart pin is older than the latest UI release; bare-metal default tracks the current release |
+| Helm chart's UI `image.tag: v1.0.0` | Default `--ui-version=v1.5.15` | Helm chart pin is older than the latest UI release; bare-metal default tracks the current release |
 | Registry metrics port hardcoded 9091 | No env override (`cmd/registry.go:129`) | Operator can't change it; OTel scrape config and preflight target 9091 |
 | `ToK8sServiceName` is k8s-only | Bare-metal returns `<id>:<port>` directly (`pkg/registry/identity.go:72-80`) | `ELCHI_NAMESPACE` is set but ignored in bare-metal; controller HTTP address resolves via /etc/hosts entries |
 | `CONTROL_PLANE_ID` override | Operator-set env (`pkg/config/model.go:55-62`) | Lets operator publish a custom control-plane name for multi-replica-per-host setups |

@@ -33,6 +33,10 @@ if [ -d "${ELCHI_INSTALLER_ROOT}/lib" ]; then
   . "${ELCHI_INSTALLER_ROOT}/lib/grafana.sh"
   # shellcheck source=lib/systemd.sh
   . "${ELCHI_INSTALLER_ROOT}/lib/systemd.sh"
+  # shellcheck source=lib/clickhouse.sh
+  # Sourced for cmd_retune (clickhouse::retune_local + _members) and its
+  # host-proportional sizing helpers.
+  . "${ELCHI_INSTALLER_ROOT}/lib/clickhouse.sh"
   # shellcheck source=lib/verify.sh
   # Sourced so cmd_verify can call verify::_mongo_rs_leader for M1-only
   # cluster-state probes (rs.status() needs root creds that only live
@@ -66,6 +70,13 @@ Usage:
   elchi-stack mongo-status            replica-set health snapshot (M1 only)
                                        — primary, per-member state / health /
                                        uptime / replication lag / heartbeat msg
+  elchi-stack retune                  recompute ClickHouse's host-proportional
+                                       sizing (MemoryMax/CPUQuota + query profile
+                                       + mark cache) on every CH node after a VM
+                                       resize; per-node noop when unchanged.
+                                       Pass ELCHI_CLICKHOUSE_MEMORY_MAX /
+                                       ELCHI_CLICKHOUSE_CPU_QUOTA env to pin
+                                       custom values instead of the defaults
   elchi-stack clickhouse-status       ClickHouse cluster health snapshot
                                        (run on any CH node — first 3 by topology)
                                        — version, Keeper quorum, elchi_cluster
@@ -588,6 +599,67 @@ cmd_mongo_status() {
       | sed -n 's/.*MEMBER|//p'
   )
   printf '\n'
+}
+
+# cmd_retune — recompute ClickHouse's host-proportional sizing on every
+# ClickHouse node. The sizing (systemd MemoryMax/CPUQuota, query profile,
+# mark cache) is baked into files at install time, so a VM resize leaves
+# ClickHouse boxed at the old machine's budget until re-rendered — even
+# across reboots. Per-node fast path: when the freshly computed values
+# match the drop-in on disk, nothing is touched (no reload, no restart).
+#
+# Remote nodes run the same clickhouse::retune_local out of the
+# installer tree shipped to /opt/elchi-installer at install time — the
+# reload-envoy precedent, except the render must happen ON the target
+# node (sizing derives from THAT host's RAM/cores, so rendering locally
+# and pushing, like reload-envoy does, would be wrong here).
+cmd_retune() {
+  case "${1:-}" in
+    -h|--help)
+      printf 'Usage: elchi-stack retune\n'
+      printf '  Recomputes ClickHouse MemoryMax/CPUQuota + query profile + mark cache\n'
+      printf '  from each CH node'"'"'s CURRENT RAM/cores. Per-node noop when unchanged;\n'
+      printf '  restarts clickhouse-server (one node at a time) where sizing changed.\n'
+      printf '  Pin custom values: ELCHI_CLICKHOUSE_MEMORY_MAX=8G ELCHI_CLICKHOUSE_CPU_QUOTA=400%%%% elchi-stack retune\n'
+      return 0
+      ;;
+  esac
+  export ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
+  [ -f "${ELCHI_ETC}/topology.full.yaml" ] || die "topology.full.yaml missing — is the stack installed?"
+  _ssh_setup
+
+  local size
+  size=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+size:/{print $2; exit}' \
+           "${ELCHI_ETC}/topology.full.yaml")
+  [ -n "$size" ] || die "could not read cluster size from topology.full.yaml"
+
+  # Operator pins forwarded verbatim so a remote recompute honors them
+  # (see the override NOTE on clickhouse::retune_local).
+  local envfwd=""
+  [ -n "${ELCHI_CLICKHOUSE_MEMORY_MAX:-}" ] \
+    && envfwd+="export ELCHI_CLICKHOUSE_MEMORY_MAX=$(printf '%q' "$ELCHI_CLICKHOUSE_MEMORY_MAX"); "
+  [ -n "${ELCHI_CLICKHOUSE_CPU_QUOTA:-}" ] \
+    && envfwd+="export ELCHI_CLICKHOUSE_CPU_QUOTA=$(printf '%q' "$ELCHI_CLICKHOUSE_CPU_QUOTA"); "
+
+  local idx ip hn
+  while IFS=$'\t' read -r idx ip hn; do
+    [ -z "$idx" ] && continue
+    # _members caps at the first 3 nodes, but on 1-2 VM topologies only
+    # M1 actually runs ClickHouse — skip the CH-less members instead of
+    # ssh-ing over just to hear "skipping".
+    topology::is_clickhouse_node "$idx" "$size" || continue
+    log::node "$ip" "retuning clickhouse sizing"
+    if ssh::is_local "$ip"; then
+      clickhouse::retune_local
+    else
+      # NOTE the explicit `bash -c`: ssh::run_sudo's contract is ARGV
+      # (its own %q layer + remote bash -c consume one level of quoting
+      # each). Passing a bare compound string instead makes the remote
+      # look up a command literally named "set -e; . ..." → exit 127.
+      ssh::run_sudo "$ip" bash -c "set -e; ${envfwd}. ${ELCHI_INSTALLER_ROOT}/lib/common.sh; . ${ELCHI_INSTALLER_ROOT}/lib/secrets.sh; . ${ELCHI_INSTALLER_ROOT}/lib/systemd.sh; . ${ELCHI_INSTALLER_ROOT}/lib/clickhouse.sh; clickhouse::retune_local"
+    fi
+  done < <(clickhouse::_members)
+  log::ok "retune complete"
 }
 
 # cmd_clickhouse_status — ClickHouse cluster health snapshot. Analogous
@@ -1875,6 +1947,7 @@ case "${1:-}" in
   add-node)          shift; cmd_add_node "$@" ;;
   init-replica-set)  shift; cmd_init_rs "$@" ;;
   mongo-status)      shift; cmd_mongo_status "$@" ;;
+  retune)            shift; cmd_retune "$@" ;;
   clickhouse-status) shift; cmd_clickhouse_status "$@" ;;
   mongosh)           shift; cmd_mongosh "$@" ;;
   ch-client)         shift; cmd_ch_client "$@" ;;

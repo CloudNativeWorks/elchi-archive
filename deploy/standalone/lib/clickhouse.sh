@@ -705,6 +705,77 @@ clickhouse::setup_cluster_member() {
   log::ok "ClickHouse cluster member ready (Keeper id=${ELCHI_NODE_INDEX})"
 }
 
+# ----- retune ------------------------------------------------------------
+# clickhouse::retune_local — recompute the host-proportional sizing
+# (systemd MemoryMax/MemoryHigh/CPUQuota, the per-query profile, the
+# mark cache) against the CURRENT host and apply it only if it changed.
+#
+# Why this exists: the sizing is computed at install time and BAKED INTO
+# FILES (drop-in + users.d profile + mark_cache in config.d). A VM
+# resize — grow or shrink — therefore leaves ClickHouse silently boxed
+# at the old machine's budget; even a reboot doesn't fix it. Invoked
+# per-node by `elchi-stack retune` (or directly on a node).
+#
+# Fast-path noop: the authoritative "has the host changed?" signal is
+# the drop-in's MemoryMax/CPUQuota vs the freshly computed values —
+# every other derived number (profile, mark cache, MemoryHigh) is a
+# pure function of the same two inputs. Equal → return without touching
+# anything (no re-render, no daemon-reload, no restart).
+#
+# NOTE on overrides: like a plain install.sh rerun, retune recomputes
+# DEFAULTS. An operator who pinned ELCHI_CLICKHOUSE_MEMORY_MAX /
+# ELCHI_CLICKHOUSE_CPU_QUOTA at install time must pass the same env to
+# retune, or their pin is replaced by the recomputed default.
+clickhouse::retune_local() {
+  export ELCHI_ETC=${ELCHI_ETC:-/etc/elchi}
+  local dropin=/etc/systemd/system/clickhouse-server.service.d/10-elchi.conf
+
+  # Not a ClickHouse host: a 4th+ cluster member, a 2-VM M2, or a
+  # --clickhouse=external install. Nothing to retune.
+  if [ ! -f "$dropin" ] || ! command -v clickhouse-server >/dev/null 2>&1; then
+    log::info "no local clickhouse-server install — skipping"
+    return 0
+  fi
+
+  local want_mem want_quota have_mem have_quota
+  want_mem=$(clickhouse::_mem_max_mb)
+  want_quota=$(clickhouse::_cpu_quota)
+  have_mem=$(sed -nE 's/^MemoryMax=([0-9]+)M$/\1/p' "$dropin" | head -n1)
+  have_quota=$(sed -nE 's/^CPUQuota=(.+)$/\1/p' "$dropin" | head -n1)
+
+  if [ "$want_mem" = "$have_mem" ] && [ "$want_quota" = "$have_quota" ]; then
+    log::ok "sizing unchanged (MemoryMax=${have_mem}M, CPUQuota=${have_quota}) — nothing to do"
+    return 0
+  fi
+
+  log::info "host resources changed: MemoryMax ${have_mem:-?}M → ${want_mem}M, CPUQuota ${have_quota:-?} → ${want_quota}"
+
+  # Guard BEFORE any render: render_users hashes the password from
+  # secrets.env. If that file were missing/unreadable here, the hash of
+  # an EMPTY string would be written as the elchi user's password —
+  # instantly locking out the collector and backend cluster-wide on
+  # this node. Refuse instead.
+  [ -n "$(secrets::value ELCHI_CLICKHOUSE_PASSWORD 2>/dev/null || true)" ] \
+    || die "ELCHI_CLICKHOUSE_PASSWORD not readable from ${ELCHI_ETC}/secrets.env — refusing to re-render users.d (would lock out the app user)"
+
+  # Port defaults: install.sh exports these during install, but retune
+  # runs from elchi-stack / a bare ssh shell where they may be unset
+  # (start_service waits on the HTTP port).
+  export ELCHI_PORT_CLICKHOUSE_HTTP=${ELCHI_PORT_CLICKHOUSE_HTTP:-8123}
+  export ELCHI_PORT_CLICKHOUSE_NATIVE=${ELCHI_PORT_CLICKHOUSE_NATIVE:-9000}
+
+  # Re-render exactly the sizing-derived files. The cluster-only
+  # overlays (keeper/cluster xml) are host-size independent and stay
+  # untouched; start_service's fingerprint still includes them, so the
+  # restart decision sees the full config set.
+  clickhouse::write_dropin
+  clickhouse::render_server
+  clickhouse::render_system_logs
+  clickhouse::render_users
+  clickhouse::start_service
+  log::ok "clickhouse retuned (MemoryMax=${want_mem}M, CPUQuota=${want_quota})"
+}
+
 # ----- URI resolver ------------------------------------------------------
 # clickhouse::resolve_uri — the clickhouse:// URI the collector + backend
 # connect with. Driver (clickhouse-go) accepts a comma-separated host

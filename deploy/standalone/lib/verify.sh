@@ -510,6 +510,7 @@ verify::print_summary() {
   printf '    elchi-stack status            cluster-wide service summary\n'
   printf '    elchi-stack mongo-status      mongo replica-set health (M1 only)\n'
   printf '    elchi-stack reload-envoy      re-render bootstrap on every node\n'
+  printf '    elchi-stack retune            re-size ClickHouse limits after a VM resize\n'
   printf '    elchi-stack add-node IP       extend the cluster (preview + confirm)\n'
   printf '    elchi-stack logs <unit>       tail journalctl on every node\n'
   printf '    elchi-stack verify            cluster-wide deep health check\n'
