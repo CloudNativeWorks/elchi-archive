@@ -38,7 +38,7 @@ ELCHI_DEFAULT_ENVOY_VERSION="v1.38.3"
 ELCHI_DEFAULT_COREDNS_VERSION="v0.1.4"
 
 # elchi-collector — Envoy ALS ingestion service.
-ELCHI_DEFAULT_COLLECTOR_VERSION="v0.1.11"
+ELCHI_DEFAULT_COLLECTOR_VERSION="v0.1.13"
 
 # VictoriaMetrics single-node (the metrics TSDB). Keep the leading "v".
 ELCHI_DEFAULT_VM_VERSION="v1.93.5"

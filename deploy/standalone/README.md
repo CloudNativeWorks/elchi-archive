@@ -121,7 +121,7 @@ default:
 | elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.21` |
 | Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.38.3` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
-| elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.11` |
+| elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.13` |
 | VictoriaMetrics  | `ELCHI_DEFAULT_VM_VERSION`       | `v1.93.5` |
 | OTel Collector   | `ELCHI_DEFAULT_OTEL_VERSION`     | `0.89.0` |
 

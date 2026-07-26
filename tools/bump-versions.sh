@@ -19,7 +19,7 @@ BACKEND="v1.6.14"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envo
                   #   part is kept; standalone's elchi- prefix too)
 UI="v1.5.21"             # UI image, e.g. v1.5.2
 COREDNS="v0.1.4"        # CoreDNS / GSLB image, e.g. v0.1.5
-COLLECTOR="v0.1.11"      # elchi-collector, e.g. v0.1.12
+COLLECTOR="v0.1.13"      # elchi-collector, e.g. v0.1.12
 
 SHIELD_OLD=""     # shield has NO canonical default → set BOTH old and new
 SHIELD_NEW=""     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
