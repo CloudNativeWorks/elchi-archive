@@ -12,7 +12,7 @@
 #         --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
 #         --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
 #         --main-address=elchi.example.com \
-#         --ui-version=v1.5.15 \
+#         --ui-version=v1.5.21 \
 #         --backend-version=elchi-1.6.14-v0.14.0-envoy1.38.3,elchi-1.6.14-v0.14.0-envoy1.39.0 \
 #         --envoy-version=v1.38.3
 #

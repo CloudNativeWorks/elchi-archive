@@ -26,13 +26,13 @@ name: Download Elchi UI
 #     THEN run this one.
 #
 # Trigger: Actions tab → "Download Elchi UI" → Run workflow →
-#          enter the version (e.g. v1.5.15).
+#          enter the version (e.g. v1.5.21).
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'elchi UI release version to mirror (e.g., v1.5.15)'
+        description: 'elchi UI release version to mirror (e.g., v1.5.21)'
         required: true
         type: string
 

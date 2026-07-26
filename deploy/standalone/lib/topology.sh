@@ -436,7 +436,7 @@ topology::compute() {
 # Layout:
 #   Cluster: 3 node(s)  main_address=...  port=443  TLS=true
 #   Versions:
-#     UI:                   v1.5.15
+#     UI:                   v1.5.21
 #     Envoy proxy:          v1.38.3
 #     CoreDNS GSLB plugin:  v0.1.1 (disabled)
 #     Backend variants:

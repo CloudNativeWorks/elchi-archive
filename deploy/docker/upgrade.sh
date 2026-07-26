@@ -7,7 +7,7 @@
 # every changed service. So an upgrade is just install.sh re-run with the new
 # --*-version flags.
 #
-#   upgrade.sh --main-address=elchi.example.com --ui-version=v1.5.15 \
+#   upgrade.sh --main-address=elchi.example.com --ui-version=v1.5.21 \
 #              --backend-version=v1.6.14-v0.14.0-envoy1.38.3
 #
 set -Eeuo pipefail
