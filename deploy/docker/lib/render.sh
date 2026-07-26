@@ -1165,11 +1165,19 @@ EOF
 
 # ----- UI config.js --------------------------------------------------------
 render::ui_config() {
-  local main=${ELCHI_MAIN_ADDRESS:-} port=${ELCHI_PORT:-443}
-  local proto; proto=$(render::_proto)
-  local api_url="${proto}://${main}"
-  if [ -n "$port" ] && [ "$port" != "80" ] && [ "$port" != "443" ]; then
-    api_url="${api_url}:${port}"
+  # API_URL: same-origin by default — every node's Envoy serves UI and
+  # REST API on the same listener, so the SPA calls back to whatever
+  # origin the browser loaded it from (window.location.origin is a JS
+  # expression; config.js is executed, not parsed). A fixed
+  # "https://<main_address>" funneled all API traffic into one node and
+  # made it a UI-wide SPOF. ELCHI_UI_API_URL=<full URL> pins the old
+  # fixed-address behavior. Mirrors the standalone installer's
+  # ui::render_config_js.
+  local api_url_js
+  if [ -n "${ELCHI_UI_API_URL:-}" ]; then
+    api_url_js="\"${ELCHI_UI_API_URL}\""
+  else
+    api_url_js="window.location.origin"
   fi
   local enable_demo
   case "${ELCHI_ENABLE_DEMO:-false}" in true|True|TRUE|1|yes) enable_demo=true ;; *) enable_demo=false ;; esac
@@ -1177,7 +1185,7 @@ render::ui_config() {
   local api_url_local=${ELCHI_API_URL_LOCAL:-http://localhost:65190}
   cat > "${CONFIG_DIR}/ui-config.js" <<EOF
 window.APP_CONFIG = {
-  API_URL: "${api_url}",
+  API_URL: ${api_url_js},
   API_URL_LOCAL: '${api_url_local}',
   ENABLE_DEMO: ${enable_demo},
   VERSION: "${ELCHI_UI_VERSION:-}",

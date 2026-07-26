@@ -108,37 +108,35 @@ ui::_prune_old_versions() {
 
 # Render /opt/elchi/web/elchi-<v>/config.js — the UI reads this at
 # load time to discover the API URL + available envoy versions.
-# Mirrors Helm's elchi/templates/configmap.yaml exactly:
-#   - proto chosen from `global.tlsEnabled` (NOT from port number — the
-#     `port=8010, tlsEnabled=false` case wants http://, not https://)
-#   - :port appended only when port is non-empty AND not 80/443
+# Mostly mirrors Helm's elchi/templates/configmap.yaml:
 #   - VERSION = the UI bundle tag (Helm uses `image.tag`, same value)
 #   - API_URL_LOCAL is a Helm-shipped dev hint pointing at port 65190;
 #     nothing on bare-metal listens there. We keep it for parity in
 #     case the SPA falls back to it during local dev. Override via
 #     ELCHI_API_URL_LOCAL.
+#   - API_URL deliberately DIVERGES from Helm (which writes a fixed
+#     absolute URL) — see below.
 ui::render_config_js() {
   local bundle_dir=$1
-  local main=${ELCHI_MAIN_ADDRESS:-}
-  local port=${ELCHI_PORT:-443}
 
-  # Proto from tlsEnabled (Helm parity). Only fall back to port-based
-  # inference when ELCHI_TLS_ENABLED is actually unset.
-  local tls_enabled=${ELCHI_TLS_ENABLED:-}
-  local proto
-  if [ -n "$tls_enabled" ]; then
-    case "$tls_enabled" in
-      true|True|TRUE|1|yes) proto=https ;;
-      *)                    proto=http  ;;
-    esac
+  # API_URL: same-origin by default. Every node's Envoy serves the UI
+  # AND the REST API on the same :443 listener with identical routes,
+  # so the SPA can call back to whatever origin the browser loaded it
+  # from — `window.location.origin` is a JS expression, legal because
+  # config.js is executed, not parsed as JSON. The old fixed
+  # "https://<main_address>" funneled EVERY user's API traffic into one
+  # node (even when the UI itself was loaded from another) and made
+  # that node a single point of failure for the whole UI; same-origin
+  # also eliminates cross-origin preflights. main_address remains in
+  # use everywhere else (TLS SANs, Grafana root_url, backend's
+  # client-facing address, verify probes).
+  # ELCHI_UI_API_URL=<full URL> pins a fixed address instead (the old
+  # behavior — for operators fronting the API somewhere else entirely).
+  local api_url_js
+  if [ -n "${ELCHI_UI_API_URL:-}" ]; then
+    api_url_js="\"${ELCHI_UI_API_URL}\""
   else
-    if [ "$port" = "80" ]; then proto=http; else proto=https; fi
-  fi
-
-  # :port suffix — Helm omits when port is empty OR 80 OR 443.
-  local api_url="${proto}://${main}"
-  if [ -n "$port" ] && [ "$port" != "80" ] && [ "$port" != "443" ]; then
-    api_url="${api_url}:${port}"
+    api_url_js="window.location.origin"
   fi
 
   # ENABLE_DEMO must be a JS boolean literal — coerce anything else.
@@ -171,7 +169,7 @@ ui::render_config_js() {
 
   cat > "${bundle_dir}/config.js.tmp" <<EOF
 window.APP_CONFIG = {
-  API_URL: "${api_url}",
+  API_URL: ${api_url_js},
   API_URL_LOCAL: '${api_url_local}',
   ENABLE_DEMO: ${enable_demo},
   VERSION: "${ELCHI_UI_VERSION}",
