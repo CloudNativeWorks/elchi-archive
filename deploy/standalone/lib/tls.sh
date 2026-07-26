@@ -295,9 +295,13 @@ tls::validate_pair() {
     || log::warn "certificate expires within 30 days"
   [ -n "$san_host" ] || return 0
 
-  local san covered=0 wc rest
+  local san covered=0 wc rest esc
   san=$(openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null || true)
-  if printf '%s' "$san" | grep -qE "(DNS|IP Address):${san_host}(,|\$| )"; then
+  # Escape ERE metacharacters in the hostname — unescaped dots match any
+  # character, so a superficially similar SAN entry could falsely
+  # suppress the warning.
+  esc=$(printf '%s' "$san_host" | sed -e 's/[][^$.*+?(){}|\\]/\\&/g')
+  if printf '%s' "$san" | grep -qE "(DNS|IP Address):${esc}(,|\$| )"; then
     covered=1
   else
     # RFC 6125: a wildcard covers exactly ONE left-most label —
@@ -323,11 +327,17 @@ tls::_provided() {
   # An operator whose mode IS provided naturally re-passes
   # --tls=provided on later reruns without re-supplying file paths;
   # dying here (the old behavior) aborted the whole install even
-  # though cert+key+marker were already on disk.
+  # though cert+key were already on disk. Deliberately NOT gated on
+  # the .provided marker: the operator asserting --tls=provided IS the
+  # mode signal, and installs from before the marker existed have real
+  # certs but no marker — stamping it here is their migration path
+  # (one rerun with --tls=provided protects them from regen forever).
   if [ -z "${ELCHI_TLS_CERT_PATH:-}" ] && [ -z "${ELCHI_TLS_KEY_PATH:-}" ] \
-     && [ -f "${ELCHI_TLS}/.provided" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+     && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
     log::info "reusing operator-provided TLS material at ${ELCHI_TLS} (pass --cert/--key to rotate)"
     tls::_finalize_perms
+    : > "${ELCHI_TLS}/.provided"
+    chmod 0644 "${ELCHI_TLS}/.provided"
     return 0
   fi
   [ -n "${ELCHI_TLS_CERT_PATH:-}" ] || die "--tls=provided requires --cert=<path>"
@@ -343,10 +353,24 @@ tls::_provided() {
   # rotation rerun that omits --ca must NOT clobber that chain with the
   # new leaf — bundle::build ships ca.crt as every future node's trust
   # anchor, and a CA:FALSE leaf can't anchor RHEL's p11-kit.
-  local keep_existing_ca=0
+  #
+  # EXCEPTION: when the NEW cert is SELF-SIGNED it is its own anchor —
+  # keeping the old chain would (re)trust a CA that has nothing to do
+  # with what envoy now serves, so ca.crt must become the new leaf.
+  local keep_existing_ca=0 new_issuer new_subject
+  new_issuer=$(openssl x509 -in "$ELCHI_TLS_CERT_PATH" -noout -issuer 2>/dev/null)
+  new_subject=$(openssl x509 -in "$ELCHI_TLS_CERT_PATH" -noout -subject 2>/dev/null)
   if [ -z "${ELCHI_TLS_CA_PATH:-}" ] && [ -f "$TLS_CA" ] && [ -f "$TLS_CERT" ] \
-     && ! cmp -s "$TLS_CA" "$TLS_CERT"; then
+     && ! cmp -s "$TLS_CA" "$TLS_CERT" \
+     && [ "${new_issuer#issuer=}" != "${new_subject#subject=}" ]; then
     keep_existing_ca=1
+    # Keeping the chain only makes sense if the new leaf actually
+    # chains to it — a rotation to a DIFFERENT private CA that forgot
+    # --ca would otherwise silently pin the old, unrelated anchor.
+    if ! openssl verify -CAfile "$TLS_CA" "$ELCHI_TLS_CERT_PATH" >/dev/null 2>&1; then
+      log::warn "new certificate does NOT verify against the kept CA chain at ${TLS_CA}"
+      log::warn "  if this cert comes from a DIFFERENT CA, rerun with --ca=<new-chain> — otherwise controllers and new nodes will reject it (x509: unknown authority)"
+    fi
   fi
 
   install -m 0644 -o root -g "$ELCHI_GROUP" "$ELCHI_TLS_CERT_PATH" "$TLS_CERT"

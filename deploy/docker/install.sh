@@ -430,11 +430,14 @@ tls_setup() {
     command -v openssl >/dev/null 2>&1 || die "openssl is required to validate --tls=provided material"
     # Validate BEFORE installing: these files are bind-mounted into the
     # GLOBAL envoy service — a bad pair (mismatched key, truncated PEM)
-    # would crashloop the edge on every node at once. Mirrors the
-    # standalone installer's `elchi-stack set-cert` checks. This branch
-    # runs on rerun too, so rerunning with --tls=provided --cert --key
-    # IS the cert-rotation path: the new files change the envoy
-    # service's cfghash label and `docker stack deploy` rolls it.
+    # would crashloop the edge on every node at once. This entire block
+    # is COPIED from the standalone installer's canonical checker,
+    # lib/tls.sh tls::validate_pair (per this layer's copy-not-source
+    # policy — see README "Editing configs"); fixes there must be
+    # mirrored here. This branch runs on rerun too, so rerunning with
+    # --tls=provided --cert --key IS the cert-rotation path: the new
+    # files change the envoy service's cfghash label and `docker stack
+    # deploy` rolls it.
     openssl x509 -in "$ELCHI_TLS_CERT" -noout 2>/dev/null \
       || die "--cert is not a valid PEM certificate: ${ELCHI_TLS_CERT}"
     local _cpub _kpub
@@ -447,9 +450,12 @@ tls_setup() {
     openssl x509 -in "$ELCHI_TLS_CERT" -noout -checkend $(( 30 * 86400 )) >/dev/null 2>&1 \
       || log::warn "--cert expires within 30 days"
     # SAN coverage of --main-address — warn-only, wildcard-aware.
-    local _san _covered=0 _wc
+    local _san _covered=0 _wc _esc
     _san=$(openssl x509 -in "$ELCHI_TLS_CERT" -noout -ext subjectAltName 2>/dev/null || true)
-    if printf '%s' "$_san" | grep -qE "(DNS|IP Address):${ELCHI_MAIN_ADDRESS}(,|\$| )"; then
+    # ERE-escape the address: unescaped dots match any character and a
+    # superficially similar SAN could falsely suppress the warning.
+    _esc=$(printf '%s' "$ELCHI_MAIN_ADDRESS" | sed -e 's/[][^$.*+?(){}|\\]/\\&/g')
+    if printf '%s' "$_san" | grep -qE "(DNS|IP Address):${_esc}(,|\$| )"; then
       _covered=1
     else
       # RFC 6125: a wildcard covers exactly ONE left-most label —

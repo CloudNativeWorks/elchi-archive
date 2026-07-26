@@ -249,7 +249,11 @@ elchi-stack envoy-clusters [ip]     per-node Envoy cluster dump: endpoints, heal
 elchi-stack set-cert <crt> <key> [ca]
                                     replace the cluster TLS cert (validates, distributes
                                     to every node, rolling envoy restart; .provided marker
-                                    keeps reruns/add-node from regenerating over it)
+                                    keeps reruns/add-node from regenerating over it).
+                                    NOTE for clusters installed with --tls=provided BEFORE
+                                    the marker existed: rerun install once with
+                                    --tls=provided (no --cert/--key needed) to stamp the
+                                    marker, or your cert is still exposed to regeneration
 elchi-stack add-node <ip>           extend the cluster (M1 only)
 elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
 elchi-stack export-bundle <out>     re-package the encrypted cluster bundle

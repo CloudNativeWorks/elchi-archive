@@ -200,9 +200,13 @@ ssh::run_sudo() {
       printf '%s\n' "$ELCHI_SUDO_PASSWORD" | sudo -S -p '' bash -c "$cmd"
       return $?
     fi
+    # NOTE: the heredoc feeds sudo's -S stdin, so it must be the SUDO
+    # password. An earlier revision piped ELCHI_SSH_PASSWORD here —
+    # wrong variable; with distinct SSH/sudo passwords every remote
+    # run_sudo failed sudo auth systematically.
     ssh::_wrap ssh "${_ELCHI_SSH_OPTS[@]}" "${ELCHI_SSH_USER}@${host}" \
       "sudo -S -p '' bash -c $(printf '%q' "$cmd")" \
-      <<<"$ELCHI_SSH_PASSWORD"
+      <<<"$ELCHI_SUDO_PASSWORD"
     return $?
   fi
 

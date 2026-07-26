@@ -979,8 +979,8 @@ cmd_set_cert() {
       printf '  Pass the CA chain when the cert is signed by a private/corporate CA —\n'
       printf '  it is added to each node'"'"'s system trust store (public CAs need no ca arg).\n'
       printf '  Revert to self-signed: rm /etc/elchi/tls/.provided on M1, rerun install.\n'
-      [ -n "${1:-}" ] && return 0
-      die "cert and key paths required"
+      if [ -z "${1:-}" ]; then die "cert and key paths required"; fi
+      return 0
       ;;
   esac
   local crt=$1 key=${2:-} ca=${3:-}
@@ -998,6 +998,10 @@ cmd_set_cert() {
   local main
   main=$(awk '/^cluster:/{f=1; next} f && /^[[:space:]]+main_address:/{print $2; exit}' \
            /etc/elchi/topology.full.yaml 2>/dev/null || true)
+  # Empty main silently SKIPS the SAN check inside validate_pair — say
+  # so out loud rather than letting the one pre-rollout name check
+  # vanish without a trace.
+  [ -n "$main" ] || log::warn "could not determine main_address from topology.full.yaml — SAN coverage will NOT be checked"
   tls::validate_pair "$crt" "$key" "$main"
   if [ -n "$ca" ]; then
     openssl verify -CAfile "$ca" "$crt" >/dev/null 2>&1 \
@@ -1023,41 +1027,43 @@ cmd_set_cert() {
   export ELCHI_OS_FAMILY=${ELCHI_OS_FAMILY:-$( [ -f /etc/debian_version ] && echo debian || echo rhel )}
 
   # Remote script — host-independent, so assembled ONCE. Files are
-  # transferred to staged .new paths and only moved into place HERE, so
-  # a failed transfer can never leave a node with a mismatched live
-  # crt/key pair. keep_ca mirrors tls::_provided: a pre-existing ca.crt
-  # DISTINCT from the old leaf is a real CA chain and must survive a
-  # leaf-only rotation; otherwise ca.crt tracks the new leaf so the
-  # bundle never ships a stale anchor. Explicit `bash -c` per
-  # ssh::run_sudo's argv contract (see cmd_reload_envoy).
+  # transferred to staged .new paths, then the remote sources the
+  # installer libs (shipped to /opt/elchi-installer on every node) and
+  # calls tls::_provided on them: ONE implementation of the
+  # install/keep-CA/marker policy for local and remote alike (an
+  # earlier revision re-implemented it as string-built shell and had
+  # already drifted once), plus the remote re-validation catches a
+  # transfer corrupted in flight before anything is installed. Staged
+  # .new paths mean a failed transfer never leaves a mismatched live
+  # crt/key pair. Explicit `bash -c` per ssh::run_sudo's argv contract
+  # (see cmd_reload_envoy).
   local rscript="set -e
-keep_ca=0
-if [ -f ${TLS_CA} ] && [ -f ${TLS_CERT} ] && ! cmp -s ${TLS_CA} ${TLS_CERT}; then keep_ca=1; fi
-install -m 0644 -o root -g ${ELCHI_GROUP} ${TLS_CERT}.new ${TLS_CERT}
-install -m 0640 -o root -g ${ELCHI_GROUP} ${TLS_KEY}.new ${TLS_KEY}
-rm -f ${TLS_CERT}.new ${TLS_KEY}.new"
-  if [ -n "$ca" ]; then
-    rscript+="
-install -m 0644 -o root -g ${ELCHI_GROUP} ${TLS_CA}.new ${TLS_CA}
-rm -f ${TLS_CA}.new"
-  else
-    rscript+="
-if [ \"\$keep_ca\" = 0 ]; then install -m 0644 -o root -g ${ELCHI_GROUP} ${TLS_CERT} ${TLS_CA}; fi"
-  fi
-  rscript+="
-: > ${ELCHI_TLS}/.provided && chmod 0644 ${ELCHI_TLS}/.provided"
-  if [ "$need_trust" = 1 ]; then
-    rscript+="
 . ${ELCHI_INSTALLER_ROOT}/lib/common.sh
 . ${ELCHI_INSTALLER_ROOT}/lib/tls.sh
+export ELCHI_TLS_CERT_PATH=${TLS_CERT}.new
+export ELCHI_TLS_KEY_PATH=${TLS_KEY}.new"
+  if [ -n "$ca" ]; then
+    rscript+="
+export ELCHI_TLS_CA_PATH=${TLS_CA}.new"
+  fi
+  rscript+="
+tls::_provided
+rm -f ${TLS_CERT}.new ${TLS_KEY}.new ${TLS_CA}.new"
+  if [ "$need_trust" = 1 ]; then
+    rscript+="
 export ELCHI_OS_FAMILY=\${ELCHI_OS_FAMILY:-\$( [ -f /etc/debian_version ] && echo debian || echo rhel )}
 tls::trust_ca_system_wide"
   fi
   rscript+="
 systemctl restart elchi-envoy.service"
   if [ "$need_trust" = 1 ]; then
+    # Controller restart is STRICT — the stale Go cert pool is exactly
+    # what this restart exists to fix, so a failed restart must fail
+    # the node instead of being swallowed. The control-plane glob stays
+    # tolerant (variant sets differ across clusters).
     rscript+="
-systemctl restart \"elchi-controller.service\" \"elchi-control-plane-*@*.service\" || true"
+systemctl restart elchi-controller.service
+systemctl restart \"elchi-control-plane-*@*.service\" || true"
   fi
 
   # ----- roll out, one node at a time; contain per-node failures -----
@@ -1072,18 +1078,30 @@ systemctl restart \"elchi-controller.service\" \"elchi-control-plane-*@*.service
     log::node "$host" "installing certificate + restarting envoy"
     rc=0
     if ssh::is_local "$host"; then
-      # Subshell: tls::_provided's die must fail THIS node, not the
-      # whole rollout. Reuses the exact install/perms/ca-coherence/
-      # marker logic of the install path (single source of truth).
+      # Subshell so a die fails THIS node, not the whole rollout —
+      # via the set +e / re-set -e dance, NOT `( ... ) || rc=$?`:
+      # inside an ||-tested subshell bash SUPPRESSES errexit for the
+      # whole body (verified empirically), so a failing systemctl or
+      # install would fall through and the last command's status would
+      # mask it as success. Dropping the ||-context and re-enabling -e
+      # inside restores fail-fast per node; common.sh's ERR trap stays
+      # silent in both states (subshell + set +e are its exemptions).
+      set +e
       (
+        set -e
         export ELCHI_TLS_CERT_PATH="$crt" ELCHI_TLS_KEY_PATH="$key" ELCHI_TLS_CA_PATH="$ca"
         tls::_provided
         if [ "$need_trust" = 1 ]; then tls::trust_ca_system_wide; fi
         systemctl restart elchi-envoy.service
         if [ "$need_trust" = 1 ]; then
-          systemctl restart "elchi-controller.service" "elchi-control-plane-*@*.service" 2>/dev/null || true
+          # Strict controller restart / tolerant control-plane glob —
+          # same rationale as the remote script above.
+          systemctl restart elchi-controller.service
+          systemctl restart "elchi-control-plane-*@*.service" || true
         fi
-      ) || rc=$?
+      )
+      rc=$?
+      set -e
     else
       # Explicit modes on scp: the destination must never inherit the
       # operator's local file mode (a 0644 privkey.pem would otherwise
@@ -1103,8 +1121,11 @@ systemctl restart \"elchi-controller.service\" \"elchi-control-plane-*@*.service
 
   if [ "${#failed[@]}" -gt 0 ]; then
     die "cert rollout INCOMPLETE — failed node(s): ${failed[*]}
-       Their live cert/key were NOT modified (only staged .new files may remain).
-       Fix connectivity and rerun the same 'elchi-stack set-cert' command; it is idempotent."
+       Transfer-stage failures leave that node's live cert/key untouched (staged
+       .new files at most). A node that failed at the install/restart stage may
+       already hold the new material with services not yet restarted. Either
+       way the remedy is the same: fix the error and rerun this exact
+       'elchi-stack set-cert' command — it is idempotent."
   fi
   log::ok "certificate rolled out cluster-wide"
   printf '  verify: elchi-stack tls-info\n'
@@ -1126,6 +1147,19 @@ cmd_tls_info() {
   issuer=$( openssl x509 -in "$crt" -noout -issuer  2>/dev/null | sed 's/^issuer=//')
   printf '  subject : %s\n' "$subject"
   printf '  issuer  : %s\n' "$issuer"
+
+  # Mode: the .provided marker is what protects operator certs from
+  # self-signed regeneration — surface it here so operators can tell
+  # WHY reruns/add-node do (or don't) regenerate, and how to rotate.
+  if [ -f /etc/elchi/tls/.provided ]; then
+    printf '  mode    : operator-provided (rotate: elchi-stack set-cert; revert: rm /etc/elchi/tls/.provided + rerun install)\n'
+  else
+    printf '  mode    : self-signed (installer-managed; SAN list auto-tracks topology)\n'
+  fi
+  if [ -f /etc/elchi/tls/ca.crt ] && ! cmp -s /etc/elchi/tls/ca.crt "$crt"; then
+    printf '  ca.crt  : distinct CA chain (%s)\n' \
+      "$(openssl x509 -in /etc/elchi/tls/ca.crt -noout -subject 2>/dev/null | sed 's/^subject=//')"
+  fi
 
   local not_before not_after exp_ts now_ts days color tag
   not_before=$(openssl x509 -in "$crt" -noout -startdate 2>/dev/null | cut -d= -f2)
