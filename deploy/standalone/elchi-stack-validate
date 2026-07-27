@@ -206,15 +206,27 @@ else
 fi
 
 # CoreDNS GSLB ports — only when topology says runs_coredns=true.
-# DNS uses both TCP and UDP on 53; ss -lntp catches the TCP listener.
-# UDP listener is checked separately via `ss -lnup`. 8053 is the
-# webhook (always TCP).
+# :53 must be checked ADDRESS-aware, not port-only: systemd-resolved's
+# loopback stub(s) — 127.0.0.53 and, on newer releases, 127.0.0.54 —
+# also listen on 53, so a port-only match would report a DEAD coredns
+# as healthy. CoreDNS binds the node IP → require a NON-loopback :53
+# listener on BOTH protocols. (Mirrors lib/preflight.sh + install.sh's
+# remote probe, which apply the same filter in the opposite direction:
+# loopback stubs are not a conflict there, and not proof of life here.)
+# 8053 is the webhook (always TCP, binds 0.0.0.0 — plain check is right).
 if [ "$runs_coredns" = "1" ]; then
-  for e in 53:coredns-tcp 8053:coredns-webhook; do check_port "$e" 1; done
-  if ss -H -lnup 2>/dev/null | awk '{ split($4,a,":"); print a[length(a)] }' | grep -qx 53; then
-    ok "53/udp (coredns-udp) listening"
+  if ss -H -ltn 2>/dev/null \
+       | awk '$4 ~ /[:.]53$/ && $4 !~ /^127\./ && $4 !~ /^\[::1\]/ {found=1} END{exit !found}'; then
+    ok "53/tcp (coredns-tcp) listening on a non-loopback address"
   else
-    fail "53/udp (coredns-udp) NOT listening"
+    fail "53/tcp (coredns-tcp) NOT listening (loopback resolver stubs do not count)"
+  fi
+  check_port "8053:coredns-webhook" 1
+  if ss -H -lnup 2>/dev/null \
+       | awk '$4 ~ /[:.]53$/ && $4 !~ /^127\./ && $4 !~ /^\[::1\]/ {found=1} END{exit !found}'; then
+    ok "53/udp (coredns-udp) listening on a non-loopback address"
+  else
+    fail "53/udp (coredns-udp) NOT listening (loopback resolver stubs do not count)"
   fi
 fi
 

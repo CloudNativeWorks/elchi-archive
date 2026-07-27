@@ -1118,7 +1118,23 @@ orchestrate_port_check() {
         echo "[skip] ss not installed; skipping port checks" >&2
         exit 0
       fi
-      holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\" {print; exit}")
+      case "$label" in
+        coredns)
+          # EXACT label match — coredns-webhook (8053) must NOT get this
+          # exemption: it binds 0.0.0.0, where a loopback listener IS a
+          # real collision.
+          # :53 is shared territory: systemd-resolved binds loopback
+          # stub(s) — 127.0.0.53 and, on newer releases, 127.0.0.54 —
+          # while CoreDNS binds the node IP. Loopback listeners never
+          # collide, so only a NON-loopback listener counts. Mirrors
+          # lib/preflight.sh cluster-port check; this remote probe is a
+          # separate code path and carried the same false-positive.
+          holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "(\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\") && \$4 !~ /^127\\./ && \$4 !~ /^\\[::1\\]/ {print; exit}")
+          ;;
+        *)
+          holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\" {print; exit}")
+          ;;
+      esac
       if [ -n "$holder" ]; then
         case "$holder" in
           *elchi*|*envoy*|*mongod*|*nginx*|*coredns*|*grafana*|*otelcol*|*victoria*|*clickhouse*) ;;
