@@ -1,0 +1,205 @@
+# Mirrors the elchi-ai-gateway supervisor from its PRIVATE source repo and
+# builds the upstream envoyproxy/ai-gateway extproc from a pinned tag, then
+# publishes both in one public elchi-archive release (the installer's and the
+# supervisor's unauthenticated download source) and records them in the root
+# index.json:
+#
+#   - elchi_ai_gateway_releases      → the supervisor binary (installer reads
+#                                      this, elchi-client/shield "files" style)
+#   - ai_gateway_extproc_releases    → the extproc binary (the supervisor's
+#                                      internal/binarymgr reads this at the
+#                                      edge, Envoy "binaries" style, plus the
+#                                      version_string its config gate needs)
+#
+# The extproc's version_string is what the binary's internal version package
+# reports; built from an exact tag with the upstream's own ldflags formula it
+# equals the tag itself.
+name: Build Elchi AI Gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'elchi-ai-gateway (supervisor) release tag to mirror (e.g., v0.1.0)'
+        required: true
+        type: string
+      extproc_version:
+        description: 'Upstream envoyproxy/ai-gateway tag to build the extproc from'
+        required: true
+        type: string
+        default: 'v1.1.0'
+
+env:
+  # Belt-and-suspenders: forces every JS action to run on Node.js 24 even
+  # if its action.yml still declares node20 (same setting as the sibling
+  # workflows).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "elchi-archive-publish"
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Normalize versions
+        id: ver
+        run: |
+          set -euo pipefail
+          V="${{ github.event.inputs.version }}"; case "$V" in v*) ;; *) V="v${V}" ;; esac
+          E="${{ github.event.inputs.extproc_version }}"; case "$E" in v*) ;; *) E="v${E}" ;; esac
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "extproc=${E}" >> "$GITHUB_OUTPUT"
+          echo "tag=elchi-ai-gateway-${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Download supervisor from the private source repo
+        env:
+          # The default GITHUB_TOKEN is scoped to elchi-archive only and
+          # cannot read the private elchi-ai-gateway repo — the cross-repo
+          # PAT is required (same secret the elchi-client mirror uses).
+          # Everything pulled here is re-published into the PUBLIC archive
+          # release below so unauthenticated installs work.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          mkdir -p "releases/${TAG}"
+          cd "releases/${TAG}"
+          gh release download "${{ steps.ver.outputs.version }}" \
+            --repo "CloudNativeWorks/elchi-ai-gateway" \
+            --pattern "elchi-ai-gateway-linux-amd64" \
+            --pattern "elchi-ai-gateway-linux-amd64.sha256"
+          sha256sum -c elchi-ai-gateway-linux-amd64.sha256
+
+      - name: Build extproc from the upstream tag
+        run: |
+          set -euo pipefail
+          E="${{ steps.ver.outputs.extproc }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          git clone --depth 1 --branch "$E" https://github.com/envoyproxy/ai-gateway.git upstream
+          cd upstream
+          # Same ldflags formula as the upstream release build; on an exact
+          # tag its version.Parse() reduces "vX.Y.Z-0-g<sha>" to "vX.Y.Z".
+          DESCRIBE="$(git describe --tags --long 2>/dev/null || echo "${E}-0-g$(git rev-parse --short HEAD)")"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X github.com/envoyproxy/ai-gateway/internal/version.version=${DESCRIBE}" \
+            -o "../releases/${TAG}/extproc-linux-amd64" ./cmd/extproc
+          cd "../releases/${TAG}"
+          sha256sum extproc-linux-amd64 > extproc-linux-amd64.sha256
+
+      - name: Update index.json
+        run: |
+          set -euo pipefail
+          RELDIR="releases/${{ steps.ver.outputs.tag }}"
+          SUPERVISOR_SHA256="$(cut -d' ' -f1 "${RELDIR}/elchi-ai-gateway-linux-amd64.sha256")"
+          EXTPROC_SHA256="$(cut -d' ' -f1 "${RELDIR}/extproc-linux-amd64.sha256")"
+          MIRROR_BASE_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          EXTPROC_VERSION="${{ steps.ver.outputs.extproc }}"
+          export SUPERVISOR_SHA256 EXTPROC_SHA256 MIRROR_BASE_URL VERSION EXTPROC_VERSION
+          python3 << 'EOF'
+          import datetime
+          import json
+          import os
+
+          now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+          base = os.environ['MIRROR_BASE_URL']
+          version = os.environ['VERSION']
+          extproc_version = os.environ['EXTPROC_VERSION']
+
+          with open('index.json') as f:
+              index = json.load(f)
+
+          def upsert(key, entry):
+              releases = index.setdefault(key, [])
+              for i, r in enumerate(releases):
+                  if r.get('version') == entry['version']:
+                      releases[i] = entry
+                      break
+              else:
+                  releases.append(entry)
+              releases.sort(key=lambda x: x['version'], reverse=True)
+
+          upsert('elchi_ai_gateway_releases', {
+              "version": version,
+              "date": now,
+              "extproc_version": extproc_version,
+              "files": [{
+                  "name": "elchi-ai-gateway-linux-amd64",
+                  "type": "binary",
+                  "description": "elchi-ai-gateway supervisor (manages the Envoy AI Gateway ext_proc) with extproc %s" % extproc_version,
+                  "download_url": "%s/elchi-ai-gateway-linux-amd64" % base,
+                  "sha256": os.environ['SUPERVISOR_SHA256'],
+              }],
+          })
+
+          upsert('ai_gateway_extproc_releases', {
+              "version": extproc_version,
+              "version_string": extproc_version,
+              "date": now,
+              "binaries": [{
+                  "arch": "linux-amd64",
+                  "download_url": "%s/extproc-linux-amd64" % base,
+                  "sha256": os.environ['EXTPROC_SHA256'],
+              }],
+          })
+
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+              f.write('\n')
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Elchi AI Gateway ${{ steps.ver.outputs.version }}
+          body: |
+            Elchi AI Gateway ${{ steps.ver.outputs.version }}
+
+            Supervisor mirrored from the private source repo release
+            `${{ steps.ver.outputs.version }}`; bundled upstream
+            envoyproxy/ai-gateway extproc `${{ steps.ver.outputs.extproc }}`
+            (linux-amd64, built from the exact tag — the edge supervisor
+            downloads it via the archive index at runtime).
+
+            ## Install
+
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/elchi-ai-gateway-linux-amd64
+            sudo install -m 0755 elchi-ai-gateway-linux-amd64 /etc/elchi/bin/elchi-ai-gateway
+            ```
+
+            (Normally done by elchi-ai-gateway's installer, which resolves
+            this release through https://archive.elchi.io/index.json.)
+          files: |
+            releases/${{ steps.ver.outputs.tag }}/elchi-ai-gateway-linux-amd64
+            releases/${{ steps.ver.outputs.tag }}/extproc-linux-amd64
+            releases/${{ steps.ver.outputs.tag }}/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi AI Gateway ${{ steps.ver.outputs.version }} (extproc ${{ steps.ver.outputs.extproc }})" || exit 0
+          for i in 1 2 3 4 5; do
+            git push && break
+            git pull --rebase
+          done
