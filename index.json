@@ -946,5 +946,35 @@
         }
       ]
     }
+  ],
+  "elchi_ai_gateway_releases": [
+    {
+      "version": "v0.1.0",
+      "date": "2026-08-26T17:20:21Z",
+      "extproc_version": "v1.1.0",
+      "files": [
+        {
+          "name": "elchi-ai-gateway-linux-amd64",
+          "type": "binary",
+          "description": "elchi-ai-gateway supervisor (manages the Envoy AI Gateway ext_proc) with extproc v1.1.0",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ai-gateway-v0.1.0/elchi-ai-gateway-linux-amd64",
+          "sha256": "5fd4da0e0ba49b400fe601fb8b0fd97266d9060280b4de263a154689c7be0c85"
+        }
+      ]
+    }
+  ],
+  "ai_gateway_extproc_releases": [
+    {
+      "version": "v1.1.0",
+      "version_string": "v1.1.0",
+      "date": "2026-08-26T17:20:21Z",
+      "binaries": [
+        {
+          "arch": "linux-amd64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ai-gateway-v0.1.0/extproc-linux-amd64",
+          "sha256": "74708fd56ab97da0e4a35e15c31267b61518fee9f5c50f1359a383dd28f6fbdc"
+        }
+      ]
+    }
   ]
 }
