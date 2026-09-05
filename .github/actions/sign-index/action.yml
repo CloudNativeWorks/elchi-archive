@@ -1,0 +1,37 @@
+name: Sign index.json
+description: >
+  Detach-sign index.json with the Elchi release signing key so consumers
+  (elchi-os's component bump, customers) can verify the manifest itself, not
+  just the artifacts it points at. Without this, index.json was the unsigned
+  trust root of every Elchi OS build: a tampered mirror at bump time would have
+  had its checksums copied into versions.env and then signed by the legitimate
+  OS release key.
+inputs:
+  gpg_private_key:
+    description: ASCII-armored private key (secrets.GPG_PRIVATE_KEY)
+    required: true
+  gpg_passphrase:
+    description: passphrase for the key (secrets.GPG_PASSPHRASE)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Sign index.json
+      shell: bash
+      env:
+        GPG_PRIVATE_KEY: ${{ inputs.gpg_private_key }}
+        GPG_PASSPHRASE: ${{ inputs.gpg_passphrase }}
+      run: |
+        set -euo pipefail
+        [[ -f index.json ]] || { echo "index.json missing" >&2; exit 1; }
+        python3 -c 'import json; json.load(open("index.json"))'
+        export GNUPGHOME; GNUPGHOME=$(mktemp -d); chmod 700 "$GNUPGHOME"
+        trap 'rm -rf "$GNUPGHOME"' EXIT
+        printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+        gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --armor --detach-sign --output index.json.asc index.json
+        gpg --verify index.json.asc index.json
+        # The public key travels with the site too, but it is NOT the trust
+        # anchor: verifiers pin the fingerprint (SECURITY.md in elchi-os).
+        gpg --armor --export release@elchi.io > elchi-release-signing.asc
+        echo "signed index.json ($(sha256sum index.json | cut -c1-16)…)"

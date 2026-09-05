@@ -1,0 +1,287 @@
+name: Download Elchi OS
+
+# Mirrors an Elchi OS appliance release from its PRIVATE source repo
+# (CloudNativeWorks/elchi-os) into THIS public elchi-archive mirror, the same
+# pattern as build-elchi-collector.yml / build-elchi-client.yml.
+#
+# Why this exists: customers download the appliance images anonymously, and the
+# elchi-os repo is private. Re-publishing the ISO/OVA/qcow2 here makes them
+# reachable and lists them in index.json (key: elchi_os_releases) alongside the
+# component versions each image carries.
+#
+# ── PREREQUISITES ───────────────────────────────────────────────────
+#  1. Secret `GH_PAT` (organization secret on CloudNativeWorks is best) with
+#     read access to CloudNativeWorks/elchi-os:
+#       • classic PAT  → `repo` scope, OR
+#       • fine-grained → repo CloudNativeWorks/elchi-os, Contents: Read-only.
+#     elchi-os's own release.yml calls this workflow with the same token, so it
+#     additionally needs `workflow` scope there.
+#  2. The elchi-os release must exist first (tag v<X.Y.Z> in that repo).
+#
+# NOTE: the assets are large (ISO ~0.9 GB, OVA/qcow2 ~0.8 GB). They are handled
+# in ONE job so they are never round-tripped through upload/download-artifact.
+# GitHub's per-file release asset limit is 2 GB.
+#
+# Trigger: Actions tab → "Download Elchi OS" → Run workflow → version (e.g. v0.2.0).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Elchi OS version to mirror (e.g., v0.2.0)'
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-archive-publish"
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h /
+
+      - name: Download the release from the private repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          RAW="${VERSION#v}"
+          SRC_REPO="CloudNativeWorks/elchi-os"
+
+          mkdir -p "releases/${VERSION}"
+          cd "releases/${VERSION}"
+
+          gh release download "${VERSION}" --repo "${SRC_REPO}" \
+            --pattern "elchi-os-${RAW}.iso" \
+            --pattern "elchi-os-${RAW}.ova" \
+            --pattern "elchi-os_${RAW}.qcow2" \
+            --pattern "elchi-os_${RAW}.update.tar" \
+            --pattern "SHA256SUMS" \
+            --pattern "SHA256SUMS.asc" \
+            --pattern "elchi-release-signing.asc"
+
+          # The publisher signed SHA256SUMS with the Elchi release key; verify
+          # both the signature and the images before re-publishing them.
+          gpg --import elchi-release-signing.asc
+          gpg --verify SHA256SUMS.asc SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ls -la
+
+      - name: Update index.json
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          RAW="${VERSION#v}"
+          DIR="releases/${VERSION}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/elchi-os-${VERSION}"
+
+          sha() { grep " $1\$" "${DIR}/SHA256SUMS" | cut -d' ' -f1; }
+
+          # Component versions are recorded in the release notes of the source
+          # release; read them from the manifest the image ships instead when
+          # present. Falls back to empty strings.
+          CLIENT_VERSION=$(gh release view "${VERSION}" --repo CloudNativeWorks/elchi-os --json body -q .body 2>/dev/null | sed -nE 's/.*elchi-client[: ]+(v[0-9][^ ,)]*).*/\1/p' | head -1 || true)
+          SHIELD_VERSION=$(gh release view "${VERSION}" --repo CloudNativeWorks/elchi-os --json body -q .body 2>/dev/null | sed -nE 's/.*elchi-shield[: ]+(v[0-9][^ ,)]*).*/\1/p' | head -1 || true)
+
+          cat > temp_elchi_os_release.json << EOF
+          {
+            "version": "${VERSION}",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "client_version": "${CLIENT_VERSION}",
+            "shield_version": "${SHIELD_VERSION}",
+            "files": [
+              {
+                "name": "elchi-os-${RAW}.iso",
+                "type": "iso",
+                "arch": "linux-amd64",
+                "description": "Elchi OS ${RAW} installation image (BIOS + UEFI, bare metal and virtual)",
+                "download_url": "${BASE}/elchi-os-${RAW}.iso",
+                "sha256": "$(sha "elchi-os-${RAW}.iso")"
+              },
+              {
+                "name": "elchi-os-${RAW}.ova",
+                "type": "ova",
+                "arch": "linux-amd64",
+                "description": "Elchi OS ${RAW} appliance for VMware vSphere / Workstation",
+                "download_url": "${BASE}/elchi-os-${RAW}.ova",
+                "sha256": "$(sha "elchi-os-${RAW}.ova")"
+              },
+              {
+                "name": "elchi-os_${RAW}.qcow2",
+                "type": "image",
+                "arch": "linux-amd64",
+                "description": "Elchi OS ${RAW} disk image for KVM / Proxmox / OpenStack",
+                "download_url": "${BASE}/elchi-os_${RAW}.qcow2",
+                "sha256": "$(sha "elchi-os_${RAW}.qcow2")"
+              },
+              {
+                "name": "elchi-os_${RAW}.update.tar",
+                "type": "update",
+                "arch": "linux-amd64",
+                "description": "Elchi OS ${RAW} in-place upgrade bundle, applied with `system upgrade` on an existing appliance",
+                "download_url": "${BASE}/elchi-os_${RAW}.update.tar",
+                "sha256": "$(sha "elchi-os_${RAW}.update.tar")"
+              },
+              {
+                "name": "SHA256SUMS",
+                "type": "checksums",
+                "description": "Checksums for the Elchi OS ${RAW} images",
+                "download_url": "${BASE}/SHA256SUMS",
+                "sha256": "$(sha256sum "${DIR}/SHA256SUMS" | cut -d' ' -f1)"
+              },
+              {
+                "name": "SHA256SUMS.asc",
+                "type": "signature",
+                "description": "Detached signature of SHA256SUMS (Elchi release signing key)",
+                "download_url": "${BASE}/SHA256SUMS.asc",
+                "sha256": "$(sha256sum "${DIR}/SHA256SUMS.asc" | cut -d' ' -f1)"
+              }
+            ]
+          }
+          EOF
+
+          python3 << 'EOF'
+          import json
+
+          try:
+              with open('index.json', 'r') as f:
+                  index = json.load(f)
+          except Exception:
+              index = {"releases": []}
+
+          if 'elchi_os_releases' not in index:
+              index['elchi_os_releases'] = []
+
+          with open('temp_elchi_os_release.json', 'r') as f:
+              new_release = json.load(f)
+
+          existing = False
+          for i, release in enumerate(index['elchi_os_releases']):
+              if release['version'] == new_release['version']:
+                  index['elchi_os_releases'][i] = new_release
+                  existing = True
+                  break
+
+          if not existing:
+              index['elchi_os_releases'].append(new_release)
+
+          index['elchi_os_releases'].sort(key=lambda x: x['version'], reverse=True)
+
+          with open('index.json', 'w') as f:
+              json.dump(index, f, indent=2)
+          EOF
+
+          rm -f temp_elchi_os_release.json
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Remove existing release (allow same-version re-publish)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "elchi-os-${{ github.event.inputs.version }}" --yes 2>/dev/null || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: elchi-os-${{ github.event.inputs.version }}
+          name: Elchi OS ${{ github.event.inputs.version }}
+          body: |
+            ## Elchi OS ${{ github.event.inputs.version }}
+
+            The Elchi Load Balancer Appliance: a self-contained system image
+            that boots, asks for its network and control-plane settings, and
+            registers itself with Elchi.
+
+            | Download | Use it for |
+            |---|---|
+            | `.iso` | bare metal and any hypervisor (BIOS + UEFI) |
+            | `.ova` | VMware vSphere / Workstation (settings are asked in the deployment wizard) |
+            | `.qcow2` | KVM, Proxmox, OpenStack |
+            | `.update.tar` | in-place upgrade of an existing appliance (`system upgrade` on the console) |
+
+            ### Verifying a download
+
+            ```bash
+            gpg --import elchi-release-signing.asc
+            gpg --verify SHA256SUMS.asc SHA256SUMS
+            sha256sum -c SHA256SUMS
+            ```
+
+            ### First boot
+
+            The console user is `admin` / `admin` and the password must be
+            changed at first login. Everything else — management address,
+            control-plane address and token — is asked by the setup wizard, or
+            supplied in advance through the OVA properties, cloud-init, or an
+            answer file on the installation medium.
+          files: |
+            releases/${{ github.event.inputs.version }}/elchi-os-*.iso
+            releases/${{ github.event.inputs.version }}/elchi-os-*.ova
+            releases/${{ github.event.inputs.version }}/elchi-os_*.qcow2
+            releases/${{ github.event.inputs.version }}/elchi-os_*.update.tar
+            releases/${{ github.event.inputs.version }}/SHA256SUMS
+            releases/${{ github.event.inputs.version }}/SHA256SUMS.asc
+            releases/${{ github.event.inputs.version }}/elchi-release-signing.asc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add Elchi OS ${{ github.event.inputs.version }}" || exit 0
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
+            echo "Push rejected (attempt $i/5), retrying after rebase..."
+            sleep $((RANDOM % 5 + 1))
+          done
+          echo "Failed to push after 5 attempts" >&2
+          exit 1
+
+  deploy:
+    needs: mirror
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Sign index.json
+        uses: ./.github/actions/sign-index
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

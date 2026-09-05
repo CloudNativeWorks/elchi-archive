@@ -228,6 +228,12 @@ jobs:
         with:
           ref: main
 
+      - name: Sign index.json
+        uses: ./.github/actions/sign-index
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 

@@ -2336,6 +2336,7 @@
             <button class="tab" onclick="switchTab('ui', event)">Elchi UI</button>
             <button class="tab" onclick="switchTab('coroza', event)">Coraza WASM</button>
             <button class="tab" onclick="switchTab('elchi', event)">Elchi Client</button>
+            <button class="tab" onclick="switchTab('os', event)">Elchi OS</button>
             <button class="tab" onclick="switchTab('gslb', event)">Elchi GSLB</button>
             <button class="tab" onclick="switchTab('collector', event)">Elchi Collector</button>
             <button class="tab" onclick="switchTab('shield', event)">Elchi Shield</button>
@@ -2371,6 +2372,18 @@
             <h2>Elchi Client</h2>
             <p>Pre-built Elchi Client binaries and installation scripts.</p>
             <div id="elchi-releases" class="loading">Loading Elchi Client releases...</div>
+        </div>
+
+        <div id="os-content" class="tab-content">
+            <h2>Elchi OS</h2>
+            <p>The Elchi Load Balancer Appliance: a Debian-based system image with
+            elchi-client, elchi-shield and the proxy preinstalled. <code>.iso</code> for
+            bare metal and any hypervisor (BIOS + UEFI), <code>.ova</code> for VMware,
+            <code>.qcow2</code> for KVM / Proxmox, <code>.update.tar</code> for in-place upgrades
+            from the appliance console. Verify downloads with <code>SHA256SUMS.asc</code>
+            (Elchi release signing key, fingerprint
+            <code>D822 FA7D 843D 531B 0BB7 2517 E0CD 8557 2DDF 1ACE</code>).</p>
+            <div id="os-releases" class="loading">Loading Elchi OS releases...</div>
         </div>
 
         <div id="gslb-content" class="tab-content">
@@ -2448,6 +2461,34 @@
                         <div class="binary">
                             <div>
                                 <div class="arch">${item.arch || item.name}</div>
+                                <div class="hash">SHA256: ${item.sha256}</div>
+                            </div>
+                            <a href="${item.download_url}" class="download">Download</a>
+                        </div>
+                    `).join('')}
+                </div>
+            `).join('');
+        }
+
+        // Elchi OS ships several delivery formats per release rather than one
+        // binary per architecture, so show the file name and its purpose.
+        function renderOsReleases(releases, containerId) {
+            const container = document.getElementById(containerId);
+            if (!releases || releases.length === 0) {
+                container.innerHTML = '<p>No releases available yet.</p>';
+                return;
+            }
+            container.innerHTML = releases.map(release => `
+                <div class="release">
+                    <div class="version">${release.version}
+                        ${release.client_version ? `<span style="font-weight:normal;color:#656d76;font-size:0.85em;"> · elchi-client ${release.client_version}${release.shield_version ? `, elchi-shield ${release.shield_version}` : ''}</span>` : ''}
+                    </div>
+                    <div class="date">Released: ${new Date(release.date).toLocaleDateString()}</div>
+                    ${(release.files || []).map(item => `
+                        <div class="binary">
+                            <div>
+                                <div class="arch">${item.name}</div>
+                                ${item.description ? `<div class="hash">${item.description}</div>` : ''}
                                 <div class="hash">SHA256: ${item.sha256}</div>
                             </div>
                             <a href="${item.download_url}" class="download">Download</a>
@@ -2584,6 +2625,7 @@
                 renderReleases(data.ui_releases, 'ui-releases', 'ui');
                 renderReleases(data.coroza_releases, 'coroza-releases', 'coroza');
                 renderReleases(data.elchi_client_releases, 'elchi-releases', 'elchi');
+                renderOsReleases(data.elchi_os_releases, 'os-releases');
                 renderReleases(data.elchi_gslb_releases, 'gslb-releases', 'gslb');
                 renderReleases(data.elchi_collector_releases, 'collector-releases', 'collector');
                 renderReleases(data.elchi_shield_releases, 'shield-releases', 'shield');

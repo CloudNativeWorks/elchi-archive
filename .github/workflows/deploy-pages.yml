@@ -44,6 +44,15 @@ jobs:
         with:
           ref: main
 
+      # index.json is the trust root for component versions in Elchi OS builds;
+      # publish it signed so the bump job there can refuse an unsigned or
+      # tampered manifest. The signature is regenerated on every publish.
+      - name: Sign index.json
+        uses: ./.github/actions/sign-index
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
