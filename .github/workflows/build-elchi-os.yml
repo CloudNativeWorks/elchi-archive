@@ -81,9 +81,14 @@ jobs:
             --pattern "elchi-release-signing.asc"
 
           # The publisher signed SHA256SUMS with the Elchi release key; verify
-          # both the signature and the images before re-publishing them.
+          # both the signature and the images before re-publishing them — and
+          # verify against the PINNED fingerprint, not the key that travelled
+          # with the release (a re-signed release with its own key would
+          # otherwise pass).
           gpg --import elchi-release-signing.asc
-          gpg --verify SHA256SUMS.asc SHA256SUMS
+          status=$(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null || true)
+          echo "$status" | grep -q "^\[GNUPG:\] VALIDSIG .* D822FA7D843D531B0BB72517E0CD85572DDF1ACE$" \
+            || { echo "SHA256SUMS.asc is not signed by the Elchi release key (D822FA7D843D531B0BB72517E0CD85572DDF1ACE)" >&2; exit 1; }
           sha256sum -c SHA256SUMS
           ls -la
 
