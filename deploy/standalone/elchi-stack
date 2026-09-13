@@ -1444,7 +1444,7 @@ _nt_targets_for_peer() {
     p=''
     [ "$have_jq" = 1 ] && { p=$(jq -r --arg v "$v" --arg h "$host" '.control_plane[$v][$h] // empty' "$pj" 2>/dev/null) || p=''; }
     [ -n "$p" ] || p=$(( ${ELCHI_PORT_CONTROL_PLANE_BASE:-1990} + pos ))
-    label=${v##*envoy}                       # elchi-vX-vY-envoy1.38.3 → 1.38.3
+    label=${v##*envoy}                       # elchi-vX-vY-envoy1.39.0 → 1.39.0
     printf 'control-plane[%s]\t%s\n' "${label:-$pos}" "$p"
     pos=$(( pos + 1 ))
   done

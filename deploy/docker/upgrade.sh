@@ -8,7 +8,7 @@
 # --*-version flags.
 #
 #   upgrade.sh --main-address=elchi.example.com --ui-version=v1.5.21 \
-#              --backend-version=v1.6.14-v0.14.0-envoy1.38.3
+#              --backend-version=v1.6.14-v0.14.0-envoy1.39.0
 #
 set -Eeuo pipefail
 ELCHI_DOCKER_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)

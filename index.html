@@ -833,7 +833,7 @@
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0,elchi-1.6.14-v0.14.0-envoy1.38.3</div>
+                    --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0,elchi-1.6.14-v0.14.0-envoy1.39.0</div>
 
                 <h5>Replace a variant + drop the old one (declarative)</h5>
                 <div class="stdl-cmd">curl -fsSL
@@ -1587,7 +1587,7 @@
                     --main-address=&lt;your-dns-or-ip&gt;</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
                     Image tags default from <code>versions.env</code>: UI <code>v1.5.21</code>, backend
-                    <code>v1.6.14-v0.14.0-envoy1.38.3</code>, coredns <code>v0.1.4</code>, collector
+                    <code>v1.6.14-v0.14.0-envoy1.39.0</code>, coredns <code>v0.1.4</code>, collector
                     <code>v0.1.13</code>, plus official <code>mongo:8.0</code> /
                     <code>clickhouse/clickhouse-server</code> / <code>victoriametrics</code> /
                     <code>grafana</code> / <code>otel-collector-contrib</code> / <code>envoyproxy/envoy</code>.
@@ -1999,7 +1999,7 @@
                     | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
                     --ui-version=v1.5.21 \
-                    --backend-version=v1.6.14-v0.14.0-envoy1.38.3</div>
+                    --backend-version=v1.6.14-v0.14.0-envoy1.39.0</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
                 <div class="stdl-cmd"># remove the stack, keep data volumes
@@ -2377,13 +2377,14 @@
         <div id="os-content" class="tab-content">
             <h2>Elchi OS</h2>
             <p>The Elchi Load Balancer Appliance as a ready-to-run image.
-            <code>.iso</code> installs on bare metal and any hypervisor (BIOS or UEFI),
-            <code>.ova</code> is for VMware, <code>.qcow2</code> for KVM and Proxmox;
-            <code>.update.tar</code> is the signed in-place upgrade bundle (the console
-            command that applies it is not in 0.1.x yet). The proxy is not bundled:
-            install it onto the appliance from the Elchi UI. Verify downloads with
-            <code>SHA256SUMS.asc</code> — signing key fingerprint
-            <code>D822 FA7D 843D 531B 0BB7 2517 E0CD 8557 2DDF 1ACE</code>.</p>
+                <code>.iso</code> installs on bare metal and any hypervisor (BIOS or UEFI),
+                <code>.ova</code> is for VMware, <code>.qcow2</code> for KVM and Proxmox;
+                <code>.update.tar</code> is the signed in-place upgrade bundle (the console
+                command that applies it is not in 0.1.x yet). The proxy is not bundled:
+                install it onto the appliance from the Elchi UI. Verify downloads with
+                <code>SHA256SUMS.asc</code> — signing key fingerprint
+                <code>D822 FA7D 843D 531B 0BB7 2517 E0CD 8557 2DDF 1ACE</code>.
+            </p>
             <div id="os-releases" class="loading">Loading Elchi OS releases...</div>
         </div>
 

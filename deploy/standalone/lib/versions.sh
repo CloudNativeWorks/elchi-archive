@@ -26,13 +26,13 @@
 # elchi-backend — one or more full variant asset tags, comma-separated.
 # Each tag is the release-asset basename; the GitHub release tag is
 # derived per-variant (e.g. elchi-1.6.14-... → release v1.2.5).
-ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.6.14-v0.14.0-envoy1.38.3"
+ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.6.14-v0.14.0-envoy1.39.0"
 
 # elchi UI bundle (static web assets served by nginx).
 ELCHI_DEFAULT_UI_VERSION="v1.5.21"
 
 # Envoy proxy binary (served from the elchi-archive release mirror).
-ELCHI_DEFAULT_ENVOY_VERSION="v1.38.3"
+ELCHI_DEFAULT_ENVOY_VERSION="v1.39.0"
 
 # CoreDNS build carrying the elchi GSLB plugin.
 ELCHI_DEFAULT_COREDNS_VERSION="v0.1.4"
