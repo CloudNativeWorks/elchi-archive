@@ -129,36 +129,8 @@ jobs:
           EOF
 
           # Update index.json with a ui_releases section.
-          python3 << PYEOF
-          import json
-
-          try:
-              with open('index.json', 'r') as f:
-                  index = json.load(f)
-          except Exception:
-              index = {"releases": []}
-
-          if 'ui_releases' not in index:
-              index['ui_releases'] = []
-
-          with open('temp_elchi_ui_release.json', 'r') as f:
-              new_release = json.load(f)
-
-          existing = False
-          for i, release in enumerate(index['ui_releases']):
-              if release['version'] == new_release['version']:
-                  index['ui_releases'][i] = new_release
-                  existing = True
-                  break
-
-          if not existing:
-              index['ui_releases'].append(new_release)
-
-          index['ui_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-          PYEOF
+          python3 tools/index-upsert.py --key ui_releases --entry temp_elchi_ui_release.json
+          rm -f temp_elchi_ui_release.json
 
       - name: Remove existing release (allow same-version re-publish)
         env:

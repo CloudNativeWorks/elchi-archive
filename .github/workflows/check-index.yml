@@ -1,0 +1,39 @@
+# Guards index.json, the manifest every installer and the appliance's upgrade
+# path read: every release list must be sorted newest-first by SEMANTIC
+# version, with no duplicate or version-less entries. The mirror workflows
+# once sorted by string, which put v0.4.8 above v0.4.12 and made "[0] is the
+# latest" consumers pin old builds (EF-60). tools/index-upsert.py is the only
+# writer now; this job makes sure nothing else — a hand edit, a merge — undoes
+# that.
+name: Check index.json
+
+on:
+  pull_request:
+    paths:
+      - 'index.json'
+      - 'tools/index-upsert.py'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'index.json'
+      - 'tools/index-upsert.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release lists sorted newest-first, versions unique
+        run: python3 tools/index-upsert.py --check
+      - name: No shell substitution leaked into the manifest (EF-64)
+        run: |
+          # An unquoted heredoc ran `...` inside a description once; the text
+          # that survives such a run has a double space where the command was
+          # (backticks themselves are fine — they are what we want to keep).
+          ! grep -nE '"description": ".*(  |\$\()' index.json || {
+            echo "::error::index.json has a description with a leftover shell substitution" >&2; exit 1; }

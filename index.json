@@ -320,20 +320,6 @@
   ],
   "elchi_collector_releases": [
     {
-      "version": "v0.1.9",
-      "date": "2026-06-01T18:26:10Z",
-      "files": [
-        {
-          "name": "elchi-collector-linux-amd64",
-          "type": "binary",
-          "arch": "linux-amd64",
-          "description": "elchi-collector \u2014 Envoy ALS ingestion service \u2014 for Linux AMD64",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-collector-v0.1.9/elchi-collector-linux-amd64",
-          "sha256": "00efa115d9473addd996e6d0b6453ea5de18eb77fe86af5b9b16bbd84ef94857"
-        }
-      ]
-    },
-    {
       "version": "v0.1.13",
       "date": "2026-07-26T22:07:00Z",
       "files": [
@@ -360,9 +346,36 @@
           "sha256": "cae2fdf8e528e475af54be25aa96f6babd3de57bd3125d235f2f88f6dc4c898f"
         }
       ]
+    },
+    {
+      "version": "v0.1.9",
+      "date": "2026-06-01T18:26:10Z",
+      "files": [
+        {
+          "name": "elchi-collector-linux-amd64",
+          "type": "binary",
+          "arch": "linux-amd64",
+          "description": "elchi-collector \u2014 Envoy ALS ingestion service \u2014 for Linux AMD64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-collector-v0.1.9/elchi-collector-linux-amd64",
+          "sha256": "00efa115d9473addd996e6d0b6453ea5de18eb77fe86af5b9b16bbd84ef94857"
+        }
+      ]
     }
   ],
   "elchi_shield_releases": [
+    {
+      "version": "v0.4.12",
+      "date": "2026-07-26T22:27:54Z",
+      "files": [
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.3",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.3/elchi-shield-linux-amd64",
+          "sha256": "bf13bddfece8d151f3c0ab16af62ef3a5e1432519f72203e097da9e248b04c30"
+        }
+      ]
+    },
     {
       "version": "v0.4.8",
       "date": "2026-07-08T10:19:18Z",
@@ -455,19 +468,6 @@
       ]
     },
     {
-      "version": "v0.4.12",
-      "date": "2026-07-26T22:27:54Z",
-      "files": [
-        {
-          "name": "elchi-shield-linux-amd64",
-          "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.3",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.3/elchi-shield-linux-amd64",
-          "sha256": "bf13bddfece8d151f3c0ab16af62ef3a5e1432519f72203e097da9e248b04c30"
-        }
-      ]
-    },
-    {
       "version": "v0.4.1",
       "date": "2026-06-29T19:26:55Z",
       "files": [
@@ -508,6 +508,58 @@
     }
   ],
   "ui_releases": [
+    {
+      "version": "v1.5.21",
+      "date": "2026-07-26T10:19:59Z",
+      "files": [
+        {
+          "name": "elchi-dist-v1.5.21.tar.gz",
+          "type": "bundle",
+          "description": "elchi UI static distribution bundle (index.html + assets)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.21/elchi-dist-v1.5.21.tar.gz",
+          "sha256": "479492696ec37bb79b95e705973856ca56214bfd3c5c0515a0adfb8447e1d608"
+        }
+      ]
+    },
+    {
+      "version": "v1.5.14",
+      "date": "2026-07-25T11:28:17Z",
+      "files": [
+        {
+          "name": "elchi-dist-v1.5.14.tar.gz",
+          "type": "bundle",
+          "description": "elchi UI static distribution bundle (index.html + assets)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.14/elchi-dist-v1.5.14.tar.gz",
+          "sha256": "fd19a62eb05f28e0ddf25637bc31fa0dead2190ad79ec9a496ff1ea8a1e83d50"
+        }
+      ]
+    },
+    {
+      "version": "v1.5.12",
+      "date": "2026-07-22T08:28:19Z",
+      "files": [
+        {
+          "name": "elchi-dist-v1.5.12.tar.gz",
+          "type": "bundle",
+          "description": "elchi UI static distribution bundle (index.html + assets)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.12/elchi-dist-v1.5.12.tar.gz",
+          "sha256": "3db102d8da8d5e8cfad14cb13977e0aeb00861419ec082d35eb5e97fc75c77f2"
+        }
+      ]
+    },
+    {
+      "version": "v1.5.11",
+      "date": "2026-07-22T07:45:24Z",
+      "files": [
+        {
+          "name": "elchi-dist-v1.5.11.tar.gz",
+          "type": "bundle",
+          "description": "elchi UI static distribution bundle (index.html + assets)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.11/elchi-dist-v1.5.11.tar.gz",
+          "sha256": "d86b4eeb9410e5e9200e166cf81a70a311f7d22968a705b4c8fd555e383df580"
+        }
+      ]
+    },
     {
       "version": "v1.5.8",
       "date": "2026-07-08T10:14:48Z",
@@ -587,19 +639,6 @@
       ]
     },
     {
-      "version": "v1.5.21",
-      "date": "2026-07-26T10:19:59Z",
-      "files": [
-        {
-          "name": "elchi-dist-v1.5.21.tar.gz",
-          "type": "bundle",
-          "description": "elchi UI static distribution bundle (index.html + assets)",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.21/elchi-dist-v1.5.21.tar.gz",
-          "sha256": "479492696ec37bb79b95e705973856ca56214bfd3c5c0515a0adfb8447e1d608"
-        }
-      ]
-    },
-    {
       "version": "v1.5.2",
       "date": "2026-06-28T15:45:09Z",
       "files": [
@@ -609,45 +648,6 @@
           "description": "elchi UI static distribution bundle (index.html + assets)",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.2/elchi-dist-v1.5.2.tar.gz",
           "sha256": "3a7e23e2a3d67fc0852038a864902729a958b5429f3c701baed5da060128bfbd"
-        }
-      ]
-    },
-    {
-      "version": "v1.5.14",
-      "date": "2026-07-25T11:28:17Z",
-      "files": [
-        {
-          "name": "elchi-dist-v1.5.14.tar.gz",
-          "type": "bundle",
-          "description": "elchi UI static distribution bundle (index.html + assets)",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.14/elchi-dist-v1.5.14.tar.gz",
-          "sha256": "fd19a62eb05f28e0ddf25637bc31fa0dead2190ad79ec9a496ff1ea8a1e83d50"
-        }
-      ]
-    },
-    {
-      "version": "v1.5.12",
-      "date": "2026-07-22T08:28:19Z",
-      "files": [
-        {
-          "name": "elchi-dist-v1.5.12.tar.gz",
-          "type": "bundle",
-          "description": "elchi UI static distribution bundle (index.html + assets)",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.12/elchi-dist-v1.5.12.tar.gz",
-          "sha256": "3db102d8da8d5e8cfad14cb13977e0aeb00861419ec082d35eb5e97fc75c77f2"
-        }
-      ]
-    },
-    {
-      "version": "v1.5.11",
-      "date": "2026-07-22T07:45:24Z",
-      "files": [
-        {
-          "name": "elchi-dist-v1.5.11.tar.gz",
-          "type": "bundle",
-          "description": "elchi UI static distribution bundle (index.html + assets)",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-ui-v1.5.11/elchi-dist-v1.5.11.tar.gz",
-          "sha256": "d86b4eeb9410e5e9200e166cf81a70a311f7d22968a705b4c8fd555e383df580"
         }
       ]
     },
@@ -705,6 +705,26 @@
     }
   ],
   "backend_releases": [
+    {
+      "version": "v1.6.14",
+      "date": "2026-07-25T11:29:33Z",
+      "binaries": [
+        {
+          "name": "elchi-v1.6.14-v0.14.0-envoy1.38.3",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.14-v0.14.0-envoy1.38.3",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.14/elchi-v1.6.14-v0.14.0-envoy1.38.3",
+          "sha256": "b606bd6b1d2e288266d633e65674239be7028050c0d81241ebf8c834bff5e458"
+        },
+        {
+          "name": "elchi-v1.6.14-v0.14.0-envoy1.39.0",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.14-v0.14.0-envoy1.39.0",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.14/elchi-v1.6.14-v0.14.0-envoy1.39.0",
+          "sha256": "9a87c261bd67bdcdbe66538db20dc07a955d18f36d96e6cea894b9f074f9d5c0"
+        }
+      ]
+    },
     {
       "version": "v1.6.9",
       "date": "2026-07-22T07:42:36Z",
@@ -822,26 +842,6 @@
           "description": "elchi-backend control-plane variant elchi-v1.6.4-v0.14.0-envoy1.38.3",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.4/elchi-v1.6.4-v0.14.0-envoy1.38.3",
           "sha256": "8881e1621f8ceb0bd3ad8242d318d55abde76c89d2c1c969612d1126d95ea635"
-        }
-      ]
-    },
-    {
-      "version": "v1.6.14",
-      "date": "2026-07-25T11:29:33Z",
-      "binaries": [
-        {
-          "name": "elchi-v1.6.14-v0.14.0-envoy1.38.3",
-          "type": "binary",
-          "description": "elchi-backend control-plane variant elchi-v1.6.14-v0.14.0-envoy1.38.3",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.14/elchi-v1.6.14-v0.14.0-envoy1.38.3",
-          "sha256": "b606bd6b1d2e288266d633e65674239be7028050c0d81241ebf8c834bff5e458"
-        },
-        {
-          "name": "elchi-v1.6.14-v0.14.0-envoy1.39.0",
-          "type": "binary",
-          "description": "elchi-backend control-plane variant elchi-v1.6.14-v0.14.0-envoy1.39.0",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.14/elchi-v1.6.14-v0.14.0-envoy1.39.0",
-          "sha256": "9a87c261bd67bdcdbe66538db20dc07a955d18f36d96e6cea894b9f074f9d5c0"
         }
       ]
     },
@@ -1012,7 +1012,7 @@
           "name": "elchi-os_0.4.2.update.tar",
           "type": "update",
           "arch": "linux-amd64",
-          "description": "Elchi OS 0.4.2 in-place upgrade bundle, applied with  on an existing appliance",
+          "description": "Elchi OS 0.4.2 in-place upgrade bundle, applied with `system upgrade` on an existing appliance",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.4.2/elchi-os_0.4.2.update.tar",
           "sha256": "150de0766b9f33e63b258f96577d33ba7174b671945fb4ed99b497ccae0bc2b7"
         },
@@ -1066,7 +1066,7 @@
           "name": "elchi-os_0.4.1.update.tar",
           "type": "update",
           "arch": "linux-amd64",
-          "description": "Elchi OS 0.4.1 in-place upgrade bundle, applied with  on an existing appliance",
+          "description": "Elchi OS 0.4.1 in-place upgrade bundle, applied with `system upgrade` on an existing appliance",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.4.1/elchi-os_0.4.1.update.tar",
           "sha256": "9766ecc66fedc1d8aa2ef09d6a828583902ff0d42861f3071e809c43e1a75521"
         },

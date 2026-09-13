@@ -112,42 +112,8 @@ jobs:
           EOF
 
           # Update index.json with Elchi GSLB releases section
-          python3 << 'EOF'
-          import json
-
-          # Read existing index
-          try:
-              with open('index.json', 'r') as f:
-                  index = json.load(f)
-          except:
-              index = {"releases": []}
-
-          # Ensure elchi_gslb_releases key exists
-          if 'elchi_gslb_releases' not in index:
-              index['elchi_gslb_releases'] = []
-
-          # Read new Elchi GSLB release
-          with open('temp_elchi_gslb_release.json', 'r') as f:
-              new_release = json.load(f)
-
-          # Update if same version exists, otherwise add
-          existing = False
-          for i, release in enumerate(index['elchi_gslb_releases']):
-              if release['version'] == new_release['version']:
-                  index['elchi_gslb_releases'][i] = new_release
-                  existing = True
-                  break
-
-          if not existing:
-              index['elchi_gslb_releases'].append(new_release)
-
-          # Sort by version (newest to oldest)
-          index['elchi_gslb_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          # Save
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-          EOF
+          python3 tools/index-upsert.py --key elchi_gslb_releases --entry temp_elchi_gslb_release.json
+          rm -f temp_elchi_gslb_release.json
 
       - name: Remove existing release (allow same-version re-publish)
         env:

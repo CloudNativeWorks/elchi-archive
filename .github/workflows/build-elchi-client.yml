@@ -206,60 +206,13 @@ jobs:
           fi
 
           # Update index.json with separate Elchi Client releases section
-          python3 << 'EOF'
-          import json
-
-          # Read existing index
-          try:
-              with open('index.json', 'r') as f:
-                  index = json.load(f)
-          except:
-              index = {"releases": []}
-
-          # Ensure elchi_client_releases key exists
-          if 'elchi_client_releases' not in index:
-              index['elchi_client_releases'] = []
-
-          # Read new Elchi Client release
-          with open('temp_elchi_release.json', 'r') as f:
-              new_release = json.load(f)
-
-          # Update if same version exists, otherwise add
-          existing = False
-          for i, release in enumerate(index['elchi_client_releases']):
-              if release['version'] == new_release['version']:
-                  index['elchi_client_releases'][i] = new_release
-                  existing = True
-                  break
-
-          if not existing:
-              index['elchi_client_releases'].append(new_release)
-
-          # Sort by version (newest to oldest)
-          index['elchi_client_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          # Elchi Shield release (separate download card) — only when one was bundled.
-          import os
-          if os.path.exists('temp_shield_release.json'):
-              if 'elchi_shield_releases' not in index:
-                  index['elchi_shield_releases'] = []
-              with open('temp_shield_release.json', 'r') as f:
-                  shield_release = json.load(f)
-              if shield_release.get('version'):
-                  sh_existing = False
-                  for i, release in enumerate(index['elchi_shield_releases']):
-                      if release['version'] == shield_release['version']:
-                          index['elchi_shield_releases'][i] = shield_release
-                          sh_existing = True
-                          break
-                  if not sh_existing:
-                      index['elchi_shield_releases'].append(shield_release)
-                  index['elchi_shield_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          # Save
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-          EOF
+          args=(--key elchi_client_releases --entry temp_elchi_release.json)
+          # The shield card only when a shield binary was bundled (temp file written above).
+          if [[ -s temp_shield_release.json ]]; then
+            args+=(--key elchi_shield_releases --entry temp_shield_release.json)
+          fi
+          python3 tools/index-upsert.py "${args[@]}"
+          rm -f temp_elchi_release.json temp_shield_release.json
 
       - name: Remove existing release (allow same-version re-publish)
         env:

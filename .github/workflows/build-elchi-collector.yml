@@ -149,38 +149,8 @@ jobs:
           EOF
 
           # Update index.json with an elchi_collector_releases section.
-          python3 << 'EOF'
-          import json
-
-          try:
-              with open('index.json', 'r') as f:
-                  index = json.load(f)
-          except Exception:
-              index = {"releases": []}
-
-          if 'elchi_collector_releases' not in index:
-              index['elchi_collector_releases'] = []
-
-          with open('temp_elchi_collector_release.json', 'r') as f:
-              new_release = json.load(f)
-
-          # Update if the same version exists, otherwise append.
-          existing = False
-          for i, release in enumerate(index['elchi_collector_releases']):
-              if release['version'] == new_release['version']:
-                  index['elchi_collector_releases'][i] = new_release
-                  existing = True
-                  break
-
-          if not existing:
-              index['elchi_collector_releases'].append(new_release)
-
-          # Sort by version (newest to oldest).
-          index['elchi_collector_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-          EOF
+          python3 tools/index-upsert.py --key elchi_collector_releases --entry temp_elchi_collector_release.json
+          rm -f temp_elchi_collector_release.json
 
       - name: Remove existing release (allow same-version re-publish)
         env:

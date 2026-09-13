@@ -121,20 +121,13 @@ jobs:
           version = os.environ['VERSION']
           extproc_version = os.environ['EXTPROC_VERSION']
 
-          with open('index.json') as f:
-              index = json.load(f)
+          # Entries go to files; tools/index-upsert.py merges and sorts them
+          # (semver, newest-first — EF-60).
+          def write(path, entry):
+              with open(path, 'w') as f:
+                  json.dump(entry, f, indent=2)
 
-          def upsert(key, entry):
-              releases = index.setdefault(key, [])
-              for i, r in enumerate(releases):
-                  if r.get('version') == entry['version']:
-                      releases[i] = entry
-                      break
-              else:
-                  releases.append(entry)
-              releases.sort(key=lambda x: x['version'], reverse=True)
-
-          upsert('elchi_ai_gateway_releases', {
+          write('temp_ai_gateway_release.json', {
               "version": version,
               "date": now,
               "extproc_version": extproc_version,
@@ -147,7 +140,7 @@ jobs:
               }],
           })
 
-          upsert('ai_gateway_extproc_releases', {
+          write('temp_ai_gateway_extproc_release.json', {
               "version": extproc_version,
               "version_string": extproc_version,
               "date": now,
@@ -157,11 +150,12 @@ jobs:
                   "sha256": os.environ['EXTPROC_SHA256'],
               }],
           })
-
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-              f.write('\n')
           EOF
+
+          python3 tools/index-upsert.py \
+            --key elchi_ai_gateway_releases --entry temp_ai_gateway_release.json \
+            --key ai_gateway_extproc_releases --entry temp_ai_gateway_extproc_release.json
+          rm -f temp_ai_gateway_release.json temp_ai_gateway_extproc_release.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1

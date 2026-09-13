@@ -170,26 +170,12 @@ jobs:
               "binaries": binaries,
           }
 
-          try:
-              with open('index.json') as f:
-                  index = json.load(f)
-          except Exception:
-              index = {"releases": []}
-
-          index.setdefault('backend_releases', [])
-
-          for i, r in enumerate(index['backend_releases']):
-              if r['version'] == version:
-                  index['backend_releases'][i] = new_release
-                  break
-          else:
-              index['backend_releases'].append(new_release)
-
-          index['backend_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
+          with open('temp_backend_release.json', 'w') as f:
+              json.dump(new_release, f, indent=2)
           EOF
+
+          python3 tools/index-upsert.py --key backend_releases --entry temp_backend_release.json
+          rm -f temp_backend_release.json
 
       - name: Remove existing release (allow same-version re-publish)
         env:

@@ -154,39 +154,10 @@ jobs:
           }
           EOF
           
-          # Update existing index.json
-          python3 << 'EOF'
-          import json
-          
-          # Read existing index
-          try:
-              with open('index.json', 'r') as f:
-                  index = json.load(f)
-          except:
-              index = {"releases": []}
-          
-          # Read new release
-          with open('temp_release.json', 'r') as f:
-              new_release = json.load(f)
-          
-          # Update if same version exists, otherwise add
-          existing = False
-          for i, release in enumerate(index['releases']):
-              if release['version'] == new_release['version']:
-                  index['releases'][i] = new_release
-                  existing = True
-                  break
-          
-          if not existing:
-              index['releases'].append(new_release)
-          
-          # Sort by version (newest to oldest)
-          index['releases'].sort(key=lambda x: x['version'], reverse=True)
-          
-          # Save
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-          EOF
+          # Upsert + semver sort live in tools/index-upsert.py (EF-60: every
+          # workflow used to string-sort, so v1.39.0 could sit under v1.9.x).
+          python3 tools/index-upsert.py --key releases --entry temp_release.json
+          rm -f temp_release.json
 
       - name: Remove existing release (allow same-version re-publish)
         env:

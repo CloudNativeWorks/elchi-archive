@@ -47,6 +47,10 @@ jobs:
       # index.json is the trust root for component versions in Elchi OS builds;
       # publish it signed so the bump job there can refuse an unsigned or
       # tampered manifest. The signature is regenerated on every publish.
+      # Never publish a manifest whose lists are out of order (EF-60).
+      - name: Check index.json
+        run: python3 tools/index-upsert.py --check
+
       - name: Sign index.json
         uses: ./.github/actions/sign-index
         with:

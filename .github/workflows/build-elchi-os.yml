@@ -100,102 +100,77 @@ jobs:
           DIR="releases/${VERSION}"
           BASE="https://github.com/${{ github.repository }}/releases/download/elchi-os-${VERSION}"
 
-          sha() { grep " $1\$" "${DIR}/SHA256SUMS" | cut -d' ' -f1; }
-
           # Component versions are recorded in the release notes of the source
           # release; read them from the manifest the image ships instead when
           # present. Falls back to empty strings.
           CLIENT_VERSION=$(gh release view "${VERSION}" --repo CloudNativeWorks/elchi-os --json body -q .body 2>/dev/null | sed -nE 's/.*elchi-client[: ]+(v[0-9][^ ,)]*).*/\1/p' | head -1 || true)
           SHIELD_VERSION=$(gh release view "${VERSION}" --repo CloudNativeWorks/elchi-os --json body -q .body 2>/dev/null | sed -nE 's/.*elchi-shield[: ]+(v[0-9][^ ,)]*).*/\1/p' | head -1 || true)
 
-          cat > temp_elchi_os_release.json << EOF
-          {
-            "version": "${VERSION}",
-            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "client_version": "${CLIENT_VERSION}",
-            "shield_version": "${SHIELD_VERSION}",
-            "files": [
-              {
-                "name": "elchi-os-${RAW}.iso",
-                "type": "iso",
-                "arch": "linux-amd64",
-                "description": "Elchi OS ${RAW} installation image (BIOS + UEFI, bare metal and virtual)",
-                "download_url": "${BASE}/elchi-os-${RAW}.iso",
-                "sha256": "$(sha "elchi-os-${RAW}.iso")"
-              },
-              {
-                "name": "elchi-os-${RAW}.ova",
-                "type": "ova",
-                "arch": "linux-amd64",
-                "description": "Elchi OS ${RAW} appliance for VMware vSphere / Workstation",
-                "download_url": "${BASE}/elchi-os-${RAW}.ova",
-                "sha256": "$(sha "elchi-os-${RAW}.ova")"
-              },
-              {
-                "name": "elchi-os_${RAW}.qcow2",
-                "type": "image",
-                "arch": "linux-amd64",
-                "description": "Elchi OS ${RAW} disk image for KVM / Proxmox / OpenStack",
-                "download_url": "${BASE}/elchi-os_${RAW}.qcow2",
-                "sha256": "$(sha "elchi-os_${RAW}.qcow2")"
-              },
-              {
-                "name": "elchi-os_${RAW}.update.tar",
-                "type": "update",
-                "arch": "linux-amd64",
-                "description": "Elchi OS ${RAW} in-place upgrade bundle, applied with `system upgrade` on an existing appliance",
-                "download_url": "${BASE}/elchi-os_${RAW}.update.tar",
-                "sha256": "$(sha "elchi-os_${RAW}.update.tar")"
-              },
-              {
-                "name": "SHA256SUMS",
-                "type": "checksums",
-                "description": "Checksums for the Elchi OS ${RAW} images",
-                "download_url": "${BASE}/SHA256SUMS",
-                "sha256": "$(sha256sum "${DIR}/SHA256SUMS" | cut -d' ' -f1)"
-              },
-              {
-                "name": "SHA256SUMS.asc",
-                "type": "signature",
-                "description": "Detached signature of SHA256SUMS (Elchi release signing key)",
-                "download_url": "${BASE}/SHA256SUMS.asc",
-                "sha256": "$(sha256sum "${DIR}/SHA256SUMS.asc" | cut -d' ' -f1)"
-              }
-            ]
+          # The entry is built in Python, not in an unquoted shell heredoc: a
+          # heredoc runs `...` and $(...) inside the text, which is how the
+          # update bundle's description lost its "`system upgrade`" (EF-64 —
+          # the mirror said "applied with  on an existing appliance").
+          # tools/index-upsert.py then merges it and keeps the list sorted
+          # newest-first by semver (EF-60).
+          VERSION="$VERSION" RAW="$RAW" DIR="$DIR" BASE="$BASE" \
+          CLIENT_VERSION="$CLIENT_VERSION" SHIELD_VERSION="$SHIELD_VERSION" \
+          python3 - << 'PY'
+          import datetime, hashlib, json, os
+
+          version, raw, d, base = (os.environ[k] for k in ("VERSION", "RAW", "DIR", "BASE"))
+
+          sums = {}
+          with open(f"{d}/SHA256SUMS") as f:
+              for line in f:
+                  parts = line.split()
+                  if len(parts) == 2:
+                      sums[parts[1].lstrip("*")] = parts[0]
+
+          def sha(name):
+              if name not in sums:
+                  raise SystemExit(f"{name} is not in {d}/SHA256SUMS")
+              return sums[name]
+
+          def filesum(name):
+              with open(f"{d}/{name}", "rb") as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+
+          def entry(name, typ, description, digest, arch="linux-amd64"):
+              e = {"name": name, "type": typ}
+              if arch:
+                  e["arch"] = arch
+              e.update({"description": description, "download_url": f"{base}/{name}", "sha256": digest})
+              return e
+
+          release = {
+              "version": version,
+              "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "client_version": os.environ.get("CLIENT_VERSION", ""),
+              "shield_version": os.environ.get("SHIELD_VERSION", ""),
+              "files": [
+                  entry(f"elchi-os-{raw}.iso", "iso",
+                        f"Elchi OS {raw} installation image (BIOS + UEFI, bare metal and virtual)",
+                        sha(f"elchi-os-{raw}.iso")),
+                  entry(f"elchi-os-{raw}.ova", "ova",
+                        f"Elchi OS {raw} appliance for VMware vSphere / Workstation",
+                        sha(f"elchi-os-{raw}.ova")),
+                  entry(f"elchi-os_{raw}.qcow2", "image",
+                        f"Elchi OS {raw} disk image for KVM / Proxmox / OpenStack",
+                        sha(f"elchi-os_{raw}.qcow2")),
+                  entry(f"elchi-os_{raw}.update.tar", "update",
+                        f"Elchi OS {raw} in-place upgrade bundle, applied with `system upgrade` on an existing appliance",
+                        sha(f"elchi-os_{raw}.update.tar")),
+                  entry("SHA256SUMS", "checksums",
+                        f"Checksums for the Elchi OS {raw} images", filesum("SHA256SUMS"), arch=None),
+                  entry("SHA256SUMS.asc", "signature",
+                        "Detached signature of SHA256SUMS (Elchi release signing key)", filesum("SHA256SUMS.asc"), arch=None),
+              ],
           }
-          EOF
+          with open("temp_elchi_os_release.json", "w") as f:
+              json.dump(release, f, indent=2)
+          PY
 
-          python3 << 'EOF'
-          import json
-
-          try:
-              with open('index.json', 'r') as f:
-                  index = json.load(f)
-          except Exception:
-              index = {"releases": []}
-
-          if 'elchi_os_releases' not in index:
-              index['elchi_os_releases'] = []
-
-          with open('temp_elchi_os_release.json', 'r') as f:
-              new_release = json.load(f)
-
-          existing = False
-          for i, release in enumerate(index['elchi_os_releases']):
-              if release['version'] == new_release['version']:
-                  index['elchi_os_releases'][i] = new_release
-                  existing = True
-                  break
-
-          if not existing:
-              index['elchi_os_releases'].append(new_release)
-
-          index['elchi_os_releases'].sort(key=lambda x: x['version'], reverse=True)
-
-          with open('index.json', 'w') as f:
-              json.dump(index, f, indent=2)
-          EOF
-
+          python3 tools/index-upsert.py --key elchi_os_releases --entry temp_elchi_os_release.json
           rm -f temp_elchi_os_release.json
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
