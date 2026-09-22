@@ -47,9 +47,9 @@ shipped to every other node, and applied via a recursive
 sudo bash deploy/standalone/install.sh \
   --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-  --backend-version=elchi-1.6.14-v0.14.0-envoy1.38.3,elchi-1.6.14-v0.14.0-envoy1.39.0 \
+  --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0,elchi-v1.6.15-v0.14.0-envoy1.39.1 \
   --ui-version=v1.5.22 \
-  --envoy-version=v1.38.3 \
+  --envoy-version=v1.39.0 \
   --main-address=elchi.example.com \
   --hostnames=elchi.example.com,m1,m2,m3
 ```
@@ -69,9 +69,9 @@ to the others.
 ```bash
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
-  --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0 \
+  --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0 \
   --ui-version=v1.5.22 \
-  --envoy-version=v1.38.3 \
+  --envoy-version=v1.39.0 \
   --main-address=$(hostname -f)
 ```
 
@@ -86,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
   | sudo bash -s -- \
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-      --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0 \
+      --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0 \
       --ui-version=v1.5.22 \
       --envoy-version=v1.38.3 \
       --main-address=elchi.example.com
@@ -297,18 +297,18 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.22
 # Replace the backend variant set (declarative — old variants not in
 # this list are AUTO-PRUNED by install.sh's stale-variants pass).
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0
+  --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0
 
 # Additive shortcut — append a variant without re-listing existing ones.
 # Useful when you want N versions live at once.
 sudo bash deploy/standalone/upgrade.sh \
-  --add-backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0
+  --add-backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.1
 
 # Explicit prune — same effect as dropping it from --backend-version,
 # but more visible in the plan banner.
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0 \
-  --prune-version=elchi-1.6.14-v0.14.0-envoy1.38.3
+  --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0 \
+  --prune-version=elchi-v1.6.14-v0.14.0-envoy1.38.3
 
 # Apply OS security patches as part of this upgrade (default: skipped).
 sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.22 --upgrade-os
@@ -322,7 +322,7 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.22 --upgrade-os
 curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
   | sudo bash -s -- --upgrade \
       --ui-version=v1.5.22 \
-      --backend-version=elchi-1.6.14-v0.14.0-envoy1.39.0
+      --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0
 ```
 
 ### Behaviour notes
@@ -360,7 +360,7 @@ plan banner instead of relying on auto-prune):
 ```bash
 # Replace the entire variant set + prune anything missing
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-1.6.14-v0.14.0-envoy1.38.0,elchi-1.6.14-v0.14.0-envoy1.40.0 \
+  --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0,elchi-v1.6.15-v0.14.0-envoy1.39.1 \
   --prune-missing
 ```
 

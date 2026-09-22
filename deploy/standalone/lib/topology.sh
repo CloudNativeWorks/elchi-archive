@@ -107,7 +107,7 @@ topology::extract_envoy_version() {
 # under, and that the registry emits in `x-target-cluster`. Envoy's
 # bootstrap matches the same string as a cluster name.
 #
-# Example: elchi-1.6.14-v0.14.0-envoy1.39.0 → 1.39.0
+# Example: elchi-v1.6.15-v0.14.0-envoy1.39.0 → 1.39.0
 topology::extract_envoy_full() {
   local tag=$1
   local match
@@ -123,7 +123,7 @@ topology::extract_envoy_full() {
 #   https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-<release-tag>/<asset>.sha256
 #
 # Asset basename = the variant tag itself (unchanged from upstream), e.g.
-#   elchi-1.6.14-v0.14.0-envoy1.35.3
+#   elchi-v1.6.15-v0.14.0-envoy1.39.0
 #
 # `topology::backend_asset_basename` takes a variant tag and returns the
 # asset basename (currently identity, but kept as a function so we can
@@ -137,7 +137,7 @@ topology::backend_asset_basename() {
 # tag. Format expected: "elchi-vX.Y.Z-vA.B.C-envoyP.Q.R" where the first
 # vN.N.N segment after "elchi-" is the release.
 #
-# Example: elchi-1.6.14-v0.14.0-envoy1.39.0 → v1.2.3
+# Example: elchi-v1.6.15-v0.14.0-envoy1.39.0 → v1.6.15
 topology::backend_release_from_tag() {
   local tag=$1
   # Strip the "elchi-" prefix if present.
@@ -260,7 +260,7 @@ topology::compute() {
   # envoy semver only (`<host>-controlplane-<X.Y.Z>` — see lib/envoy.sh's
   # control-plane block + backend's identity.go ResolveControlPlaneID),
   # so two variants like elchi-v1.2.4-...envoy1.39.0 and
-  # elchi-1.6.14-...envoy1.39.0 both render to `<host>-controlplane-1.39.0`.
+  # elchi-v1.6.15-...envoy1.39.0 both render to `<host>-controlplane-1.39.0`.
   # Envoy refuses to start with two clusters sharing a name (1273-line
   # config that fails to bind :443 is the visible symptom). Operators
   # picking one envoy version per node is the only sensible mode anyway —
@@ -437,20 +437,20 @@ topology::compute() {
 #   Cluster: 3 node(s)  main_address=...  port=443  TLS=true
 #   Versions:
 #     UI:                   v1.5.22
-#     Envoy proxy:          v1.38.3
+#     Envoy proxy:          v1.39.0
 #     CoreDNS GSLB plugin:  v0.1.1 (disabled)
 #     Backend variants:
-#       - elchi-1.6.14-v0.14.0-envoy1.38.3
-#       - elchi-1.6.14-v0.14.0-envoy1.39.0
+#       - elchi-v1.6.15-v0.14.0-envoy1.39.0
+#       - elchi-v1.6.15-v0.14.0-envoy1.39.1
 #   Plan:
 #     Node 1 (10.0.0.10) — M1
 #       mongo:         standalone (or RS member, primary)
 #       registry:      :9090
 #       envoy:         :443 (public, TLS), :8080 (internal, plaintext)
 #       nginx (UI):    127.0.0.1:8081
-#       controller × 2 (elchi-1.6.14-v0.14.0-envoy1.38.3) ports 18001/19001, 18002/19002
-#       control-plane × 2 (elchi-1.6.14-v0.14.0-envoy1.38.3) ports 28001, 28002
-#       control-plane × 2 (elchi-1.6.14-v0.14.0-envoy1.39.0) ports 28003, 28004
+#       controller × 2 (elchi-v1.6.15-v0.14.0-envoy1.39.0) ports 18001/19001, 18002/19002
+#       control-plane × 2 (elchi-v1.6.15-v0.14.0-envoy1.39.0) ports 28001, 28002
+#       control-plane × 2 (elchi-v1.6.15-v0.14.0-envoy1.39.1) ports 28003, 28004
 #       ...
 #     Node 2 (10.0.0.11)
 #       ...

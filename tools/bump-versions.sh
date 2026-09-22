@@ -4,6 +4,10 @@
 #
 # HOW TO USE: edit the versions in the block below, then run the script.
 #   bash tools/bump-versions.sh
+# ALWAYS read the diff: the replacement is textual and global, so it also hits
+# prose that names a version ON PURPOSE (a changelog line, or a comment
+# recording which versions a past defect involved). Clear the one-shot
+# *_OLD/*_NEW pairs again once the bump has landed.
 # It is a DRY RUN by default (prints a diff of what would change). When the
 # preview looks right, set APPLY=1 (below) and run again to write the files.
 #
@@ -21,13 +25,13 @@ UI="v1.5.22"             # UI image, e.g. v1.5.2
 COREDNS="v0.1.4"        # CoreDNS / GSLB image, e.g. v0.1.5
 COLLECTOR="v0.1.13"      # elchi-collector, e.g. v0.1.12
 
-SHIELD_OLD="v0.4.12"     # shield has NO canonical default → set BOTH old and new
-SHIELD_NEW="v0.4.13"     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
+SHIELD_OLD=""     # shield has NO canonical default → set BOTH old and new
+SHIELD_NEW=""     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
 
-CLIENT_OLD="v1.6.3"     # agent release TAG in the portal's download links
-CLIENT_NEW="v1.7.0"     #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
+CLIENT_OLD=""     # agent release TAG in the portal's download links
+CLIENT_NEW=""     #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
 
-APPLY=1           # 0 = preview (dry-run) · 1 = write the files
+APPLY=0           # 0 = preview (dry-run) · 1 = write the files
 # ╚════════════════════════════════════════════════════════╝
 
 set -Eeuo pipefail
@@ -120,6 +124,25 @@ while IFS= read -r f; do
     diff -u "$f" - <<<"$new" | sed '1,2d' | grep -E '^[+-]' | grep -vE '^[+-]{3}' || true
   fi
 done < <(list_files)
+
+# ---- guard: variant tags that this script can never bump -------------------
+# Every replacement above is keyed on the CURRENT value read from versions.env,
+# which always carries the leading `v` (elchi-v1.6.15-...). A doc that wrote the
+# variant WITHOUT it (elchi-1.6.14-...) was therefore invisible to every bump —
+# and it is not merely stale: topology::backend_release_from_tag requires
+# ^v[0-9]+\.[0-9]+\.[0-9]+ and calls die() otherwise, so an operator copying
+# such an example cannot start the installer at all. Twenty-two of them sat in
+# the standalone README, get.sh, install.sh, upgrade.sh --help and the portal
+# until 2026-09-22. Fail loudly if the shape ever comes back.
+stray=$(grep -rnE 'elchi-[0-9]+\.[0-9]+\.[0-9]+-v[0-9]' \
+          --include='*.sh' --include='*.md' --include='*.html' \
+          --include='*.env' --include='*.yml' --include='*.yaml' \
+          "$ROOT" 2>/dev/null | grep -v '/node_modules/' || true)
+if [ -n "$stray" ]; then
+  info ""
+  info "${c_red}Backend variant tags are missing their leading 'v' (the installer rejects these):${c_rst}"
+  printf '%s\n' "$stray" | sed "s|^${ROOT}/||" >&2
+fi
 
 info ""
 if [ "$APPLY" = "1" ]; then
