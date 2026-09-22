@@ -69,7 +69,7 @@ readonly ELCHI_PORT_COLLECTOR_HTTP=18091           # health / readiness / metric
 # Helm formula:
 #   regexReplaceAll "-arm64$" .tag "" | replace "." "-"
 #
-# Example: "v1.6.14-v0.14.0-envoy1.39.0-arm64" → "v1-6-14-v0-14-0-envoy1-39-0"
+# Example: "v1.6.15-v0.14.0-envoy1.39.0-arm64" → "v1-6-15-v0-14-0-envoy1-39-0"
 #
 # This is the canonical "safe" form used in:
 #   * systemd unit names (dots not allowed)
@@ -87,7 +87,7 @@ topology::sanitize_version() {
 # Helm formula:
 #   regexFind "envoy[0-9]+\.[0-9]+\.[0-9]+" .tag | replace "envoy" "v"
 #
-# Example: "v1.6.14-v0.14.0-envoy1.39.0" → "v1.39.0"
+# Example: "v1.6.15-v0.14.0-envoy1.39.0" → "v1.39.0"
 #
 # This is what backend's ELCHI_VERSIONS and UI's AVAILABLE_VERSIONS list
 # contain. Pure semantic envoy version, no envoy/ prefix.

@@ -214,6 +214,41 @@ jobs:
           python3 tools/index-upsert.py "${args[@]}"
           rm -f temp_elchi_release.json temp_shield_release.json
 
+          # A client release carries exactly ONE elchi-shield-linux-amd64 asset, so
+          # re-publishing this tag with a newer shield OVERWRITES it. Every older
+          # elchi_shield_releases entry that points at this same tag therefore
+          # advertises a download that now serves a different binary — its sha256
+          # can never match again (index.json listed v0.4.7 and v0.4.8 under
+          # elchi-client-v1.6.3 long after that asset had become v0.4.12). Drop
+          # those stale cards; the versions themselves stay published in the
+          # private source repo, they are simply no longer mirrored here.
+          TAG="$TAG" SHIELD_VERSION="$SHIELD_VERSION" python3 - <<'PY'
+          import json, os
+
+          tag, keep = os.environ["TAG"], os.environ["SHIELD_VERSION"]
+          needle = f"/releases/download/{tag}/"
+
+          with open("index.json") as f:
+              index = json.load(f)
+
+          entries = index.get("elchi_shield_releases", [])
+          kept = []
+          for entry in entries:
+              points_here = any(needle in (f.get("download_url") or "")
+                                for f in entry.get("files", []))
+              if points_here and entry.get("version") != keep:
+                  print(f"pruning stale shield card {entry.get('version')} -> {tag}")
+                  continue
+              kept.append(entry)
+
+          if len(kept) != len(entries):
+              index["elchi_shield_releases"] = kept
+              with open("index.json", "w") as f:
+                  json.dump(index, f, indent=2)
+                  f.write("\n")
+          PY
+          python3 tools/index-upsert.py --check
+
       - name: Remove existing release (allow same-version re-publish)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

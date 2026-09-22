@@ -393,32 +393,6 @@
       ]
     },
     {
-      "version": "v0.4.8",
-      "date": "2026-07-08T10:19:18Z",
-      "files": [
-        {
-          "name": "elchi-shield-linux-amd64",
-          "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.3",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.3/elchi-shield-linux-amd64",
-          "sha256": "2268ee52a8f4f34246a1a6d2a60c9b64096c6328c2ef0917676d386ba9ef4e3c"
-        }
-      ]
-    },
-    {
-      "version": "v0.4.7",
-      "date": "2026-07-08T09:39:06Z",
-      "files": [
-        {
-          "name": "elchi-shield-linux-amd64",
-          "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.3",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.3/elchi-shield-linux-amd64",
-          "sha256": "18fea18ba6e08e447d416159de5c58c029bcab52517bc748fb298718aaad97b7"
-        }
-      ]
-    },
-    {
       "version": "v0.4.6",
       "date": "2026-07-07T22:18:09Z",
       "files": [
@@ -428,32 +402,6 @@
           "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.2",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.2/elchi-shield-linux-amd64",
           "sha256": "679c96bc364c131006045f6cd4241f29547b8d4c4e7a27015276ab539c5ed2d5"
-        }
-      ]
-    },
-    {
-      "version": "v0.4.5",
-      "date": "2026-07-02T19:20:10Z",
-      "files": [
-        {
-          "name": "elchi-shield-linux-amd64",
-          "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.2",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.2/elchi-shield-linux-amd64",
-          "sha256": "b529eace69ecf570a88d0515f93286dacc8645876d781131685a70e8c58efa56"
-        }
-      ]
-    },
-    {
-      "version": "v0.4.4",
-      "date": "2026-07-02T18:09:22Z",
-      "files": [
-        {
-          "name": "elchi-shield-linux-amd64",
-          "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v1.6.2",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.6.2/elchi-shield-linux-amd64",
-          "sha256": "6ff78e3a7bf8a643b3ce93cef9800f4ce3cdb64861e8a091e2d5fb1888c869eb"
         }
       ]
     },

@@ -15,7 +15,7 @@
 # Each version is read fresh from deploy/docker/versions.env as the OLD value,
 # so a stale/equal value here is just a no-op (never a downgrade).
 
-BACKEND="v1.6.14"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envoy1.39.0
+BACKEND="v1.6.15"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envoy1.39.0
                   #   part is kept; standalone's elchi- prefix too)
 UI="v1.5.21"             # UI image, e.g. v1.5.2
 COREDNS="v0.1.4"        # CoreDNS / GSLB image, e.g. v0.1.5
