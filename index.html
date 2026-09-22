@@ -2279,9 +2279,11 @@
                             <span class="default">Installed by default</span> next to the client.
                         </div>
                         <code>--shield-version=&lt;vX.Y.Z&gt;</code>
-                        <div class="desc">Pin the elchi-shield release. <span class="default">Default: the
-                                version bundled with this client release</span> (fetched from the public
-                            elchi-archive mirror, not a private repo).</div>
+                        <div class="desc">Only for running <code>elchi-install.sh</code> from a source
+                            checkout. A release install always takes the shield <strong>bundled with that
+                            client release</strong> (one release = one consistent pair, fetched from this
+                            public mirror). <span class="default">To move the pair, pin
+                                <code>--client-version=</code> on get.sh instead.</span></div>
                         <code>--shield-audit-dsn=&lt;DSN&gt;</code>
                         <div class="desc">Send shield audit events to a central ClickHouse
                             (<code>clickhouse://user:pass@host:9000/elchi</code>).
