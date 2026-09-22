@@ -17,15 +17,15 @@
 
 BACKEND="v1.6.15"        # backend SEGMENT only, e.g. v1.6.1  (the -v0.14.0-envoy1.39.0
                   #   part is kept; standalone's elchi- prefix too)
-UI="v1.5.21"             # UI image, e.g. v1.5.2
+UI="v1.5.22"             # UI image, e.g. v1.5.2
 COREDNS="v0.1.4"        # CoreDNS / GSLB image, e.g. v0.1.5
 COLLECTOR="v0.1.13"      # elchi-collector, e.g. v0.1.12
 
-SHIELD_OLD=""     # shield has NO canonical default → set BOTH old and new
-SHIELD_NEW=""     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
+SHIELD_OLD="v0.4.12"     # shield has NO canonical default → set BOTH old and new
+SHIELD_NEW="v0.4.13"     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
 
-CLIENT_OLD=""     # agent release TAG in the portal's download links
-CLIENT_NEW=""     #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
+CLIENT_OLD="v1.6.3"     # agent release TAG in the portal's download links
+CLIENT_NEW="v1.7.0"     #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
 
 APPLY=1           # 0 = preview (dry-run) · 1 = write the files
 # ╚════════════════════════════════════════════════════════╝

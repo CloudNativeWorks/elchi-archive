@@ -29,7 +29,7 @@
 ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.6.15-v0.14.0-envoy1.39.0"
 
 # elchi UI bundle (static web assets served by nginx).
-ELCHI_DEFAULT_UI_VERSION="v1.5.21"
+ELCHI_DEFAULT_UI_VERSION="v1.5.22"
 
 # Envoy proxy binary (served from the elchi-archive release mirror).
 ELCHI_DEFAULT_ENVOY_VERSION="v1.39.0"
