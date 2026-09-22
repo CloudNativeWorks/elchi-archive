@@ -291,21 +291,21 @@
   ],
   "install_script_releases": [
     {
-      "version": "v2026.06.01",
-      "date": "2026-06-01T18:03:24Z",
+      "version": "v2026.09.22",
+      "date": "2026-09-22T20:02:15Z",
       "files": [
         {
           "name": "install.sh",
           "type": "script",
           "description": "Elchi Stack installation script for Ubuntu 24.04",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/install-script-v2026.06.01/install.sh",
-          "sha256": "ff82cfc1d0e74760c179b8703cc5403ab2a0048d914056f3c8885fe5c6570559"
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/install-script-v2026.09.22/install.sh",
+          "sha256": "7253ef5daded1930324309e2a3386013aaecf5d063bb5844956f76c9324b950f"
         },
         {
           "name": "uninstall.sh",
           "type": "script",
           "description": "Elchi Stack uninstallation script",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/install-script-v2026.06.01/uninstall.sh",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/install-script-v2026.09.22/uninstall.sh",
           "sha256": "f582722cd6c765a993fb290bcc0e205e1509e44d8e56520e2bdd550a6624723b"
         }
       ]
