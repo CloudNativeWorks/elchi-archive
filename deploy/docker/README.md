@@ -122,6 +122,11 @@ is never touched. It mirrors the config *shapes* of
 `deploy/standalone/lib/{backend,envoy,coredns,otel,collector,clickhouse,
 grafana,ui}.sh`, but with these deliberate Docker divergences:
 
+- **Appliance downloads** are routed by the `/api/download/` prefix, like
+  `/dns/`, because a browser download carries no `from-elchi` header. It is
+  the one unauthenticated edge path; the single-use 60-second ticket in the
+  URL authorizes it. Without the route the request would reach the UI and
+  return index.html with HTTP 200.
 - **Service discovery** is Swarm DNS, not `/etc/hosts`. Envoy clusters are
   `STRICT_DNS` over `tasks.<service>`; the getaddrinfo resolver block is dropped.
 - **Backend identity** (`CONTROLLER_ID` / `CONTROL_PLANE_ID`) is pinned in

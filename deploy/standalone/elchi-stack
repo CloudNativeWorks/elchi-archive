@@ -1335,6 +1335,12 @@ cmd_endpoint_test() {
   _probe "UI (nginx via envoy)"      "/"                          200
   _probe "VictoriaMetrics /api/v1"   "/api/v1/query?query=up"     200
   _probe "Grafana health"            "/grafana/api/health"        200
+  # Appliance downloads are a plain browser GET, so they cannot carry the
+  # from-elchi header that routes everything else to the controller: they
+  # need their own prefix. Without it the request falls through to the UI
+  # and returns 200 index.html, which looks like success — an invented
+  # ticket reaching the controller must be refused with 404.
+  _probe "appliance download route"  "/api/download/appliance/no-such-ticket" 404
   _probe "internal :8080 root"       "/"                          200 http "127.0.0.1:8080"
   printf '\n'
 }

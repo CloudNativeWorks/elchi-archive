@@ -12,9 +12,9 @@ name: Download Elchi Backend
 #   github.com/CloudNativeWorks/elchi-archive/releases/download/
 #     elchi-backend-<version>/<variant-tag>
 #
-# A single source release (e.g. 1.6.14) carries ONE binary per
+# A single source release (e.g. v1.6.15) carries ONE binary per
 # control-plane / Envoy variant, each asset named after the full variant
-# tag (elchi-1.6.14-v0.14.0-envoy1.39.0) plus a matching .sha256. This
+# tag (elchi-v1.6.15-v0.14.0-envoy1.39.0) plus a matching .sha256. This
 # workflow mirrors ALL of them into one elchi-archive release tagged
 # `elchi-backend-<version>`, keeping the asset names byte-for-byte
 # identical so lib/topology.sh::backend_asset_basename needs no change.
@@ -31,13 +31,13 @@ name: Download Elchi Backend
 #     repo, THEN run this one.
 #
 # Trigger: Actions tab → "Download Elchi Backend" → Run workflow →
-#          enter the version (e.g. 1.6.14).
+#          enter the version (e.g. v1.6.15).
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'elchi-backend release version to mirror (e.g., 1.6.14)'
+        description: 'elchi-backend release version to mirror (e.g., v1.6.15)'
         required: true
         type: string
 
@@ -46,6 +46,13 @@ env:
   # if its action.yml still declares node20. Drop this block once every
   # action used here ships a native Node 24 manifest.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+  # elchi-backend tags its releases `vX.Y.Z` and names its assets
+  # `elchi-vX.Y.Z-<cp>-envoy<ver>`, so EVERY use of the version here needs the
+  # leading `v`. A dispatch that typed `1.6.15` used to die on the first
+  # command with `release not found` (gh looked for a tag `1.6.15`), so the
+  # input is normalised once, here, and nothing below reads the raw input.
+  VERSION: ${{ startsWith(github.event.inputs.version, 'v') && github.event.inputs.version || format('v{0}', github.event.inputs.version) }}
 
 permissions:
   contents: write
@@ -73,7 +80,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          VERSION="${{ github.event.inputs.version }}"
           SRC_REPO="CloudNativeWorks/elchi-backend"
 
           mkdir -p "releases/elchi-backend-${VERSION}"
@@ -108,8 +114,8 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: elchi-backend-${{ github.event.inputs.version }}
-          path: releases/elchi-backend-${{ github.event.inputs.version }}/*
+          name: elchi-backend-${{ env.VERSION }}
+          path: releases/elchi-backend-${{ env.VERSION }}/*
 
   update-index:
     needs: download-files
@@ -123,12 +129,11 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v5
         with:
-          name: elchi-backend-${{ github.event.inputs.version }}
-          path: releases/elchi-backend-${{ github.event.inputs.version }}
+          name: elchi-backend-${{ env.VERSION }}
+          path: releases/elchi-backend-${{ env.VERSION }}
 
       - name: Update index.json
         env:
-          VERSION: ${{ github.event.inputs.version }}
           REPO: ${{ github.repository }}
         run: |
           # Build the backend_releases entry by scanning every mirrored
@@ -180,22 +185,22 @@ jobs:
       - name: Remove existing release (allow same-version re-publish)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "elchi-backend-${{ github.event.inputs.version }}" --yes 2>/dev/null || true
+        run: gh release delete "elchi-backend-${{ env.VERSION }}" --yes 2>/dev/null || true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: elchi-backend-${{ github.event.inputs.version }}
-          name: Elchi Backend ${{ github.event.inputs.version }}
+          tag_name: elchi-backend-${{ env.VERSION }}
+          name: Elchi Backend ${{ env.VERSION }}
           body: |
-            ## elchi-backend ${{ github.event.inputs.version }}
+            ## elchi-backend ${{ env.VERSION }}
 
             elchi-backend variant binaries — one per control-plane / Envoy
             version. The same Go binary serves registry, controller and
             control-plane via subcommands.
 
             Mirrored from the private source repo
-            `CloudNativeWorks/elchi-backend@${{ github.event.inputs.version }}`
+            `CloudNativeWorks/elchi-backend@${{ env.VERSION }}`
             so the standalone installer's unauthenticated download works.
             Asset names are identical to upstream (the full variant tag).
 
@@ -203,13 +208,13 @@ jobs:
 
             ```bash
             # Pick the variant that matches your Envoy fleet.
-            VARIANT=elchi-${{ github.event.inputs.version }}-v0.14.0-envoy1.39.0
+            VARIANT=elchi-${{ env.VERSION }}-v0.14.0-envoy1.39.0
             curl -fL -o elchi-backend \
-              https://github.com/${{ github.repository }}/releases/download/elchi-backend-${{ github.event.inputs.version }}/${VARIANT}
+              https://github.com/${{ github.repository }}/releases/download/elchi-backend-${{ env.VERSION }}/${VARIANT}
             chmod +x elchi-backend
             ```
           files: |
-            releases/elchi-backend-${{ github.event.inputs.version }}/*
+            releases/elchi-backend-${{ env.VERSION }}/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -218,7 +223,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add index.json
-          git commit -m "Add Elchi Backend ${{ github.event.inputs.version }}" || exit 0
+          git commit -m "Add Elchi Backend ${{ env.VERSION }}" || exit 0
           for i in 1 2 3 4 5; do
             git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
             echo "Push rejected (attempt $i/5), retrying after rebase..."

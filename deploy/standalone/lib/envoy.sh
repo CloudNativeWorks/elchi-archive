@@ -462,6 +462,14 @@ EOF
                   cluster: controller-rest-cluster
                   timeout: 0s
                   idle_timeout: 0s
+              # Appliance downloads: a browser download is a plain GET that
+              # cannot carry from-elchi; the one-time ticket in the path is
+              # its authorization.
+              - match: {prefix: "/api/download/"}
+                route:
+                  cluster: controller-rest-cluster
+                  timeout: 0s
+                  idle_timeout: 0s
               - match:
                   prefix: "/"
                   headers:

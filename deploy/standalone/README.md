@@ -486,6 +486,18 @@ specific control-plane pod a request lands on by setting the
 definition. Adding/removing a node or variant is a re-render of the
 bootstrap on every node — `elchi-stack reload-envoy` handles it.
 
+Requests reach the controller's REST API when they carry the UI's
+`from-elchi: yes` header, and on two prefixes that cannot: `/dns/` (the
+GSLB snapshot a resolver fetches) and **`/api/download/`** (an appliance
+support bundle or configuration archive, saved by the browser itself, so
+no header can be added). `/api/download/` is therefore the one path the
+edge forwards unauthenticated: what authorizes it is the single-use,
+60-second ticket in the URL, which the control plane issues to an admin
+and destroys on first use. A missing route does not fail loudly — the
+request falls through to the UI and returns index.html with HTTP 200 —
+so `elchi-stack endpoint-test` probes it with an invented ticket and
+expects the controller's 404.
+
 ---
 
 ## Open verification points

@@ -598,6 +598,13 @@ install_elchi_stack() {
     log_success "Elchi stack installation initiated"
     log_info "Helm chart deployed. Pods are starting in the background..."
     log_info "Use 'kubectl get pods -n ${CLUSTER_NAMESPACE} -w' to monitor pod status"
+    echo
+    # Chart >= 2.0.0 ships no built-in credential: it generated them on this
+    # install and keeps them in one Secret that survives `helm uninstall`.
+    log_info "Credentials (JWT secret, database passwords, Grafana admin password) were generated"
+    log_info "and stored in the Secret 'elchi-stack-secrets' in namespace '${CLUSTER_NAMESPACE}'. Read one with:"
+    log_info "  kubectl -n ${CLUSTER_NAMESPACE} get secret elchi-stack-secrets -o jsonpath='{.data.GRAFANA_PASSWORD}' | base64 -d"
+    log_info "Keys: ELCHI_JWT_SECRET MONGODB_PASSWORD CLICKHOUSE_PASSWORD HASH_SALT GRAFANA_PASSWORD (GSLB_SECRET when GSLB is enabled)."
 }
 
 # Verify installation

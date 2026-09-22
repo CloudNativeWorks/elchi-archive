@@ -24,6 +24,9 @@ COLLECTOR="v0.1.13"      # elchi-collector, e.g. v0.1.12
 SHIELD_OLD=""     # shield has NO canonical default → set BOTH old and new
 SHIELD_NEW=""     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
 
+CLIENT_OLD=""     # agent release TAG in the portal's download links
+CLIENT_NEW=""     #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
+
 APPLY=1           # 0 = preview (dry-run) · 1 = write the files
 # ╚════════════════════════════════════════════════════════╝
 
@@ -75,6 +78,13 @@ if [ -n "$SHIELD_NEW" ] || [ -n "$SHIELD_OLD" ]; then
   [ -n "$SHIELD_OLD" ] && [ -n "$SHIELD_NEW" ] || die "shield: set BOTH SHIELD_OLD and SHIELD_NEW"
   add shield "$SHIELD_OLD" "$SHIELD_NEW"
 fi
+# The agent's own release tag (elchi-client-vX.Y.Z in the portal's download
+# links). It is not a component default, and the guard below keeps every
+# other bump away from it, so it is bumped only when named here.
+if [ -n "$CLIENT_NEW" ] || [ -n "$CLIENT_OLD" ]; then
+  [ -n "$CLIENT_OLD" ] && [ -n "$CLIENT_NEW" ] || die "client: set BOTH CLIENT_OLD and CLIENT_NEW"
+  add client "elchi-client-$CLIENT_OLD" "elchi-client-$CLIENT_NEW"
+fi
 
 [ "${#PAIRS[@]}" -gt 0 ] || die "nothing to bump — edit the version block at the top of this script."
 
@@ -86,9 +96,18 @@ BUMP=$(printf '%s\n' "${PAIRS[@]}"); export BUMP   # OLD<TAB>NEW pairs for perl
 
 changed=0
 while IFS= read -r f; do
+  # A version is replaced only where it stands on its own: never right after
+  # elchi-client- / elchi-shield- / elchi-os-, which are RELEASE TAGS of other
+  # components that happen to carry a version of the same shape. Without this
+  # guard a UI bump (v1.5.15 → v1.5.21) also rewrote the portal's agent
+  # download links to a release that does not exist.
   new=$(perl -0777 -pe '
     BEGIN { @P = map { [split /\t/, $_, 2] } grep { length } split /\n/, $ENV{BUMP} }
-    for my $p (@P) { my ($o,$n) = @$p; s/\Q$o\E/$n/g }
+    for my $p (@P) {
+      my ($o,$n) = @$p;
+      if ($o =~ /^elchi-(client|shield|os)-/) { s/\Q$o\E/$n/g; next }
+      s/(?<!elchi-client-)(?<!elchi-shield-)(?<!elchi-os-)\Q$o\E/$n/g;
+    }
   ' "$f")
   [ "$new" = "$(cat "$f")" ] && continue
   changed=$((changed + 1)) || true
