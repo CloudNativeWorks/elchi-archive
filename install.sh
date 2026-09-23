@@ -219,12 +219,12 @@ Usage: $0 <mainAddress> <port>
 
 Arguments:
   mainAddress    The main address/domain for Elchi (e.g., elchi.example.com or 192.168.1.100)
-  port           The port number to expose Elchi service (e.g., 80, 8080, 30080)
+  port           NodePort to expose Elchi on — must be 30000-32767 (e.g., 30080)
 
 Examples:
-  $0 elchi.example.com 80
-  $0 192.168.1.100 8080
-  $0 elchi-test.hepsi.io 30080
+  $0 elchi.example.com 30080
+  $0 192.168.1.100 30080
+  $0 elchi-test.hepsi.io 31443
 
 EOF
         exit 1
@@ -237,6 +237,14 @@ EOF
     if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
         error_exit "Invalid port number: $PORT (must be between 1-65535)"
     fi
+    # The value goes straight to global.envoy.service.httpNodePort, and the
+    # chart's values.schema.json enforces the Kubernetes NodePort range. Catch
+    # it HERE: otherwise the run builds the whole kind cluster first and then
+    # dies at step 11/14 with a raw Helm schema dump. Two of this script's own
+    # documented examples (80, 8080) failed exactly that way.
+    if [ "$PORT" -lt 30000 ] || [ "$PORT" -gt 32767 ]; then
+        error_exit "Port $PORT is outside the Kubernetes NodePort range (30000-32767). Elchi is exposed as a NodePort service — pick e.g. 30080."
+    fi
 
     log_info "Installation Configuration:"
     log_info "  Main Address: ${COLOR_GREEN}$MAIN_ADDRESS${COLOR_RESET}"
@@ -248,8 +256,8 @@ EOF
 update_system() {
     log_step "Updating System Packages"
 
-    log_info "Running apt-get update..."
-    sudo apt-get update -qq || error_exit "Failed to update package lists"
+    log_info "Running apt-get -o DPkg::Lock::Timeout=600 update..."
+    sudo apt-get -o DPkg::Lock::Timeout=600 update -qq || error_exit "Failed to update package lists"
 
     log_success "System packages updated successfully"
 }
@@ -270,7 +278,7 @@ install_package() {
 
     case "$install_method" in
         apt)
-            sudo apt-get install -y -qq "$package_name" || error_exit "Failed to install $package_name"
+            sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq "$package_name" || error_exit "Failed to install $package_name"
             ;;
         custom)
             return 1  # Signal that custom installation is needed
@@ -293,7 +301,7 @@ install_docker() {
     log_info "Installing Docker from official repository..."
 
     # Install prerequisites
-    sudo apt-get install -y -qq ca-certificates curl gnupg lsb-release
+    sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq ca-certificates curl gnupg lsb-release
 
     # Add Docker's official GPG key
     sudo install -m 0755 -d /etc/apt/keyrings
@@ -309,8 +317,8 @@ install_docker() {
       sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     # Install Docker Engine
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+    sudo apt-get -o DPkg::Lock::Timeout=600 update -qq
+    sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin || \
         error_exit "Failed to install Docker"
 
@@ -444,7 +452,7 @@ install_network_tools() {
     # Check and install ping (iputils-ping)
     if ! command -v ping &>/dev/null; then
         log_info "Installing iputils-ping..."
-        sudo apt-get install -y -qq iputils-ping || error_exit "Failed to install iputils-ping"
+        sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq iputils-ping || error_exit "Failed to install iputils-ping"
         log_success "iputils-ping installed successfully"
     else
         log_success "ping already installed"
@@ -453,7 +461,7 @@ install_network_tools() {
     # Check and install DNS utilities
     if ! command -v nslookup &>/dev/null; then
         log_info "Installing dnsutils..."
-        sudo apt-get install -y -qq dnsutils || error_exit "Failed to install dnsutils"
+        sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq dnsutils || error_exit "Failed to install dnsutils"
         log_success "dnsutils installed successfully"
     else
         log_success "nslookup already installed"

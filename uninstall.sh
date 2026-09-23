@@ -75,6 +75,19 @@ EOF
 }
 
 # Confirm uninstallation
+ASSUME_YES=${ELCHI_ASSUME_YES:-0}
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes) ASSUME_YES=1 ;;
+        -h|--help)
+            printf 'Usage: %s [--yes]\n\n  --yes, -y   do not prompt (also: ELCHI_ASSUME_YES=1)\n' "$0"
+            exit 0
+            ;;
+        *) printf 'unknown flag: %s\n' "$1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
 confirm_uninstall() {
     echo -e "${COLOR_YELLOW}WARNING: This will remove the following:${COLOR_RESET}"
     echo "  • kind cluster: $CLUSTER_NAME"
@@ -85,6 +98,21 @@ confirm_uninstall() {
     echo ""
     echo -e "${COLOR_GREEN}Docker itself and other system packages will be preserved.${COLOR_RESET}"
     echo ""
+
+    # Scripted teardown: --yes/-y, or ELCHI_ASSUME_YES=1. Without one of those
+    # this used to run `read` against a closed stdin in any non-TTY context
+    # (CI, nohup, `curl … | bash`), print the banner and exit 1 having done
+    # nothing — with no flag to reach for, since the script parsed no
+    # arguments at all. The other two installers both take --yes-i-mean-it.
+    if [ "$ASSUME_YES" = "1" ]; then
+        log_info "proceeding without prompt (--yes)"
+        echo
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        log_error "no terminal to confirm on — re-run with --yes (or ELCHI_ASSUME_YES=1) to uninstall non-interactively"
+        exit 1
+    fi
 
     read -p "Are you sure you want to continue? (y/N): " -n 1 -r
     echo

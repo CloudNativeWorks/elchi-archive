@@ -217,7 +217,7 @@ export ELCHI_GSLB_ZONE=${ELCHI_GSLB_ZONE:-elchi.local}
 #               FIRST 3 nodes ONLY. Extra nodes (4th, 5th, …) run the elchi
 #               tier and connect to that cluster over the overlay — they do
 #               NOT run mongo/clickhouse. The cluster is always exactly 3.
-_nc=1; [ -n "${ELCHI_NODES:-}" ] && _nc=$(csv_split "$ELCHI_NODES" | grep -c .)
+_nc=1; [ -n "${ELCHI_NODES:-}" ] && _nc=$(csv_split "$ELCHI_NODES" | awk 'NF{n++} END{print n+0}')
 if [ "${_nc:-1}" -ge 3 ] 2>/dev/null; then export ELCHI_STORAGE_REPLICAS=3
 else export ELCHI_STORAGE_REPLICAS=1; fi
 # Footgun guard: STORAGE_REPLICAS derives purely from --nodes on EVERY
@@ -358,7 +358,7 @@ orchestrate_swarm() {
       die "SSH to ${node} failed"
     fi
     log::node "$node" "ensuring Docker Engine"
-    ssh::run_root "$node" 'if ! command -v curl >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl; elif command -v dnf >/dev/null 2>&1; then dnf install -y curl; elif command -v yum >/dev/null 2>&1; then yum install -y curl; elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install curl; fi; fi; if ! command -v docker >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; fi; command -v systemctl >/dev/null 2>&1 && systemctl enable --now docker >/dev/null 2>&1 || true; docker version >/dev/null 2>&1' \
+    ssh::run_root "$node" 'if ! command -v curl >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then apt-get -o DPkg::Lock::Timeout=600 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq curl; elif command -v dnf >/dev/null 2>&1; then dnf install -y curl; elif command -v yum >/dev/null 2>&1; then yum install -y curl; elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install curl; fi; fi; if ! command -v docker >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; fi; command -v systemctl >/dev/null 2>&1 && systemctl enable --now docker >/dev/null 2>&1 || true; docker version >/dev/null 2>&1' \
       || die "Docker install/start failed on ${node}"
     log::node "$node" "joining Swarm → ${mgr}"
     ssh::run_root "$node" "docker swarm join --token ${tok} ${mgr}" \
@@ -589,10 +589,16 @@ health_wait() {
   local last="" lastbeat=0
   while [ $SECONDS -lt $deadline ]; do
     local lines pending total ready
-    lines=$(docker stack services --format '{{.Name}} {{.Replicas}}' "$STACK_NAME" 2>/dev/null)
+    lines=$(docker stack services --format '{{.Name}} {{.Replicas}}' "$STACK_NAME" 2>/dev/null) || lines=""
     pending=$(printf '%s\n' "$lines" | awk 'NF{split($2,a,"/"); if (a[1]+0 < a[2]+0 || a[2]+0==0) print $1}')
-    total=$(printf '%s\n' "$lines" | grep -c .)
-    ready=$(( total - $(printf '%s\n' "$pending" | grep -c .) ))
+    # `grep -c .` EXITS 1 when it counts zero, and under `set -e` that killed
+    # this loop silently at the exact moment the stack became healthy: pending
+    # goes empty on the successful iteration, so the script died one line
+    # before it could print "all N services converged" — every successful
+    # multi-node deploy ended with a truncated log and a non-zero exit while
+    # the stack was, in fact, fully up. awk counts without the exit status.
+    total=$(printf '%s\n' "$lines" | awk 'NF{n++} END{print n+0}')
+    ready=$(( total - $(printf '%s\n' "$pending" | awk 'NF{n++} END{print n+0}') ))
     if [ -z "$pending" ] && [ "$total" -gt 0 ]; then
       log::ok "all ${total} services converged"
       docker stack services "$STACK_NAME" 2>/dev/null || true

@@ -175,6 +175,11 @@ while [ "$#" -gt 0 ]; do
     --ssh-key=*)                          ELCHI_SSH_KEY=${1#*=};  _ELCHI_SSH_KEY_EXPLICIT=1  ;;
     --ssh-port=*)                         ELCHI_SSH_PORT=${1#*=}; _ELCHI_SSH_PORT_EXPLICIT=1 ;;
     --skip-health-gate)                   SKIP_HEALTH_GATE=1 ;;
+    # Accepted and ignored: an upgrade never prompts (this script always
+    # passes --non-interactive down to install.sh itself), but install.sh
+    # takes the flag, so anyone scripting both reached for it here too and
+    # got a hard `unknown flag` + exit 2.
+    --non-interactive)                    : ;;
     --upgrade-os)                         UPGRADE_OS=1 ;;
     --no-upgrade-os)                      UPGRADE_OS=0 ;;
     -h|--help)                            print_usage; exit 0 ;;

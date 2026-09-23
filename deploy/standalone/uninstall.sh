@@ -167,6 +167,40 @@ uninstall::preview_and_confirm() {
 
 uninstall::preview_and_confirm
 
+# remove_admin_user <user> — delete the orchestration account, deferred.
+#
+# The orchestrator SSHes into every remote node AS this user (install flips
+# ELCHI_SSH_USER onto it and records that in orchestrator.env). Deleting it
+# from inside its own session ends the session, so this has to happen after we
+# disconnect — otherwise the node's remaining purge steps (mongo, nginx,
+# clickhouse packages and data) never run and the orchestrator sees rc=255 and
+# aborts the whole cluster teardown.
+#
+# Measured, before this was deferred: the blanket `pkill -KILL -u` killed the
+# script outright and the account SURVIVED; forcing `userdel -f -r` inline did
+# delete it but still dropped the connection, leaving mongod and nginx running
+# on every remote node while the summary said "no nodes succeeded".
+#
+# systemd-run schedules it a few seconds out as a transient unit, which
+# outlives our session. Without systemd-run we fall back to inline removal —
+# the old behaviour, still better than leaving a privileged account behind.
+remove_admin_user() {
+  local user=$1
+  [ -n "$user" ] || return 0
+  id "$user" >/dev/null 2>&1 || return 0
+
+  if command -v systemd-run >/dev/null 2>&1; then
+    if systemd-run --quiet --unit=elchi-admin-cleanup --on-active=5 \
+         /bin/bash -c "userdel -f -r '$user' 2>/dev/null || userdel -f '$user' 2>/dev/null || true; rm -f /etc/sudoers.d/10-elchi-admin" 2>/dev/null; then
+      log::info "admin user '${user}' scheduled for removal once this session closes"
+      return 0
+    fi
+  fi
+
+  log::warn "systemd-run unavailable — removing admin user '${user}' inline; this session may drop"
+  userdel -f -r "$user" 2>/dev/null || userdel -f "$user" 2>/dev/null || true
+}
+
 # ----- stop + disable every elchi-* service ------------------------------
 stop_all_units() {
   log::step "Stopping elchi-* services"
@@ -300,17 +334,7 @@ purge_data() {
   # the same host then layers a new admin user on top, accumulating
   # privileged identities across rerun cycles.
   rm -f /etc/sudoers.d/10-elchi-admin
-  if id "$admin_user" >/dev/null 2>&1; then
-    pkill -KILL -u "$admin_user" 2>/dev/null || true
-    sleep 1
-    if userdel -r "$admin_user" 2>/dev/null; then
-      log::info "removed admin user '${admin_user}' (and home directory)"
-    else
-      userdel "$admin_user" 2>/dev/null \
-        && log::info "removed admin user '${admin_user}' (home was already gone)" \
-        || log::warn "userdel ${admin_user} failed — manual cleanup may be needed"
-    fi
-  fi
+  remove_admin_user "$admin_user"
   # System trust store anchors
   rm -f /usr/local/share/ca-certificates/elchi-stack.crt \
         /etc/pki/ca-trust/source/anchors/elchi-stack.crt
@@ -440,13 +464,7 @@ purge_ssh_bootstrap() {
   # Custom-named admin accounts can't be discovered here without the
   # env file, so this is best-effort fallback only.
   rm -f /etc/sudoers.d/10-elchi-admin
-  if id elchi-cluster-admin >/dev/null 2>&1; then
-    pkill -KILL -u elchi-cluster-admin 2>/dev/null || true
-    sleep 1
-    userdel -r elchi-cluster-admin 2>/dev/null \
-      || userdel elchi-cluster-admin 2>/dev/null \
-      || true
-  fi
+  remove_admin_user elchi-cluster-admin
 }
 
 purge_nginx() {

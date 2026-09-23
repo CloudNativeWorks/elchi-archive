@@ -370,13 +370,13 @@ preflight::upgrade_os() {
 
   case "$ELCHI_OS_FAMILY" in
     debian)
-      DEBIAN_FRONTEND=noninteractive apt-get update -qq \
-        || die "apt-get update failed during OS security upgrade"
+      DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -qq \
+        || die "apt-get -o DPkg::Lock::Timeout=600 update failed during OS security upgrade"
       # unattended-upgrades is in main on Ubuntu / Debian; ensure it's
       # present (minimal cloud images sometimes drop it). The package
       # ships the distro's security-only origins config out of the box.
       if ! command -v unattended-upgrade >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades \
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq unattended-upgrades \
           || die "failed to install unattended-upgrades for security-only patching"
       fi
       # Run the security-only upgrade. -v emits per-package decisions
@@ -459,7 +459,7 @@ preflight::install_tools() {
   case "$ELCHI_OS_FAMILY" in
     debian)
       preflight::wait_apt_lock 600 || true
-      apt-get update -qq
+      apt-get -o DPkg::Lock::Timeout=600 update -qq
       # Map binary-name → debian-package-name where they differ.
       local pkgs=()
       for cmd in "${missing[@]}"; do
@@ -471,7 +471,7 @@ preflight::install_tools() {
           *)           pkgs+=("$cmd") ;;
         esac
       done
-      apt-get install -y -qq "${pkgs[@]}" ca-certificates \
+      apt-get -o DPkg::Lock::Timeout=600 install -y -qq "${pkgs[@]}" ca-certificates \
         || die "failed to install required tools via apt-get"
       ;;
     rhel)
@@ -584,9 +584,10 @@ preflight::check_port() {
   # privileges to see it (root-only on Linux; non-root sees just `*`).
   local holder='' pid=''
   if command -v ss >/dev/null 2>&1; then
+    # `|| true`: awk exits early, ss takes SIGPIPE, pipefail would abort.
     holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" '
       $4 ~ ":"p"$" || $4 ~ "]:"p"$" { print; exit }
-    ')
+    ') || true
     # First pid=N in the row; multiple workers (nginx master + workers)
     # share the same cgroup, so probing the first is sufficient.
     pid=$(printf '%s' "$holder" | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
@@ -778,7 +779,7 @@ preflight::check_cluster_ports() {
       local _tcp53
       _tcp53=$(ss -ltnp 2>/dev/null | awk -v p="$_p53" '
         $4 ~ "[:.]"p"$" && $4 !~ /^127\./ && $4 !~ /^\[::1\]/ { print; exit }
-      ')
+      ') || true
       if [ -n "$_tcp53" ]; then
         local _tcp53_pid
         _tcp53_pid=$(printf '%s' "$_tcp53" | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
@@ -796,7 +797,7 @@ preflight::check_cluster_ports() {
       local _udp53
       _udp53=$(ss -lunp 2>/dev/null | awk -v p="$_p53" '
         $4 ~ "[:.]"p"$" && $4 !~ /^127\./ && $4 !~ /^\[::1\]/ { print; exit }
-      ')
+      ') || true
       if [ -n "$_udp53" ]; then
         log::warn "UDP port ${_p53} has a non-loopback listener; CoreDNS may fail to bind on the cluster IP"
         log::warn "  listener: ${_udp53}"

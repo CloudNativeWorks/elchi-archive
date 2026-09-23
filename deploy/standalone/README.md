@@ -58,6 +58,12 @@ The first node in `--nodes` is treated as M1; if it matches a local
 hostname/IP, `install.sh` runs the M1 install in-process and SSHes only
 to the others.
 
+`--ssh-key` needs its **public half next to it** (`/root/.ssh/cluster_key.pub`
+above): the installer copies that key into the admin user's
+`authorized_keys` on every node, and aborts immediately if it is missing.
+Derive one from the private key with
+`ssh-keygen -y -f /root/.ssh/cluster_key > /root/.ssh/cluster_key.pub`.
+
 > **Note on OS patches.** `install.sh` does NOT touch the host OS by
 > default. Add `--upgrade-os` if you want it to apply published security
 > advisories (`unattended-upgrade` on debian, `dnf upgrade-minimal

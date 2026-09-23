@@ -76,7 +76,9 @@ worker_cleanup() {
     fi
     if [ "$PURGE_DATA" = "1" ]; then
       log::node "$node" "removing data volumes"
-      ssh::run_root "$node" "docker volume ls -q --filter name=${STACK_NAME}_ | xargs -r docker volume rm >/dev/null 2>&1 || true"
+      # Same race as the manager-local sweep below: retry, then report what
+      # survived instead of reporting success regardless.
+      ssh::run_root "$node" "for _ in 1 2 3 4 5 6; do left=\$(docker volume ls -q --filter name=${STACK_NAME}_); [ -z \"\$left\" ] && break; printf '%s\\n' \$left | xargs -r docker volume rm >/dev/null 2>&1; sleep 2; done; left=\$(docker volume ls -q --filter name=${STACK_NAME}_); [ -n \"\$left\" ] && echo \"WARN: volumes still present: \$left\" || true" 
     fi
     if [ "$PURGE" = "1" ]; then
       log::node "$node" "removing ${ELCHI_ETC} + host tuning"
@@ -94,8 +96,19 @@ worker_cleanup
 # ----- manager-local cleanup -----
 if [ "$PURGE_DATA" = "1" ]; then
   log::step "Removing data volumes (this node)"
+  # `docker stack ps` going empty only means the MANAGER has dropped the tasks;
+  # the worker daemons can still be tearing containers down, and a volume that
+  # is momentarily in use fails to remove. Swallowing that (the old `|| true`)
+  # left a Mongo data volume behind on one node of a 3-node teardown with no
+  # hint to the operator, who had asked for --purge-data. Retry, then say so.
   docker volume ls -q --filter "name=${STACK_NAME}_" 2>/dev/null | while read -r v; do
-    docker volume rm "$v" >/dev/null 2>&1 && log::info "removed volume ${v}" || true
+    for _ in 1 2 3 4 5 6; do
+      docker volume rm "$v" >/dev/null 2>&1 && { log::info "removed volume ${v}"; break; }
+      sleep 2
+    done
+    if docker volume inspect "$v" >/dev/null 2>&1; then
+      log::warn "volume ${v} still present — remove it once its container is gone: docker volume rm ${v}"
+    fi
   done
 fi
 

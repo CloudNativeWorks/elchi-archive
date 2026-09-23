@@ -45,8 +45,8 @@ fi
 # _pkg_install <pkgs...> — best-effort package install across distros.
 _pkg_install() {
   if   command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -qq || true
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq "$@"
   elif command -v dnf     >/dev/null 2>&1; then dnf install -y "$@"
   elif command -v yum     >/dev/null 2>&1; then yum install -y "$@"
   elif command -v zypper  >/dev/null 2>&1; then zypper --non-interactive install "$@"

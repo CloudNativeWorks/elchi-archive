@@ -314,7 +314,7 @@ ssh::scp_dir() {
 # ssh::run_sudo.
 ssh::_ensure_remote_extract_tools() {
   local host=$1
-  ssh::run_sudo "$host" bash -c 'command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1 || { if command -v dnf >/dev/null 2>&1; then dnf install -y tar gzip; elif command -v yum >/dev/null 2>&1; then yum install -y tar gzip; elif command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq tar gzip; elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install tar gzip; fi; }; command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1'
+  ssh::run_sudo "$host" bash -c 'command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1 || { if command -v dnf >/dev/null 2>&1; then dnf install -y tar gzip; elif command -v yum >/dev/null 2>&1; then yum install -y tar gzip; elif command -v apt-get >/dev/null 2>&1; then apt-get -o DPkg::Lock::Timeout=600 update -qq && apt-get -o DPkg::Lock::Timeout=600 install -y -qq tar gzip; elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install tar gzip; fi; }; command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1'
 }
 
 # ssh::test_login <host> — cheap "can I reach this node and run
@@ -495,7 +495,7 @@ ssh::ensure_admin_user_everywhere() {
 
   [ -n "$admin_user" ] || die "ssh::ensure_admin_user_everywhere: admin_user required"
   [ -n "${ELCHI_SSH_KEY:-}" ] || die "ssh::ensure_admin_user_everywhere: ELCHI_SSH_KEY not set (run bootstrap first or supply --ssh-key)"
-  [ -f "${ELCHI_SSH_KEY}.pub" ] || die "no public key at ${ELCHI_SSH_KEY}.pub"
+  [ -f "${ELCHI_SSH_KEY}.pub" ] || die "no public key at ${ELCHI_SSH_KEY}.pub — --ssh-key needs its matching .pub alongside it (it is installed into the admin user's authorized_keys on every node); generate one with: ssh-keygen -y -f ${ELCHI_SSH_KEY} > ${ELCHI_SSH_KEY}.pub"
 
   local pub_key
   pub_key=$(cat "${ELCHI_SSH_KEY}.pub")

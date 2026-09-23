@@ -273,7 +273,11 @@ Topology
                                        non-loopback IPv4 (single-VM install).
   --ssh-user=<user>                   default: root
   --ssh-port=<port>                   default: 22
-  --ssh-key=<path>                    SSH private key (recommended)
+  --ssh-key=<path>                    SSH private key (recommended). The
+                                       matching <path>.pub must sit next to
+                                       it — the installer copies it into the
+                                       admin user's authorized_keys on every
+                                       node.
   --ssh-password=<pwd>                fallback (uses sshpass)
   --ssh-bootstrap                     mint an ed25519 key on M1 and copy it
                                        to every remote node. The installer
@@ -906,6 +910,13 @@ local_install_phase1() {
   elif topology::is_mongo_node "$ELCHI_NODE_INDEX" "$cluster_size"; then
     if [ "$cluster_size" -ge 3 ] 2>/dev/null; then
       mongodb::setup_replica_member
+      # Open 27017 NOW (phase 1), for the same reason ClickHouse opens its
+      # ports below: the orchestrator initiates the replica set BETWEEN the
+      # phases, and firewall::open only runs at the end of phase 2. With
+      # firewalld active (the RHEL default) the gate could never reach the
+      # other members — "M2 (…:27017) mongod not reachable" — and the whole
+      # cluster install died there.
+      firewall::open_mongo
     else
       mongodb::setup_local_standalone
     fi
@@ -1129,10 +1140,11 @@ orchestrate_port_check() {
           # collide, so only a NON-loopback listener counts. Mirrors
           # lib/preflight.sh cluster-port check; this remote probe is a
           # separate code path and carried the same false-positive.
-          holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "(\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\") && \$4 !~ /^127\\./ && \$4 !~ /^\\[::1\\]/ {print; exit}")
+          # `|| true`: awk exits early, ss takes SIGPIPE, pipefail would abort.
+          holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "(\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\") && \$4 !~ /^127\\./ && \$4 !~ /^\\[::1\\]/ {print; exit}") || true
           ;;
         *)
-          holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\" {print; exit}")
+          holder=$(ss -ltnp 2>/dev/null | awk -v p="$port" "\$4 ~ \":\"p\"$\" || \$4 ~ \"]:\"p\"$\" {print; exit}") || true
           ;;
       esac
       if [ -n "$holder" ]; then

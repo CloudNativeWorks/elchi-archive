@@ -96,7 +96,7 @@ ssh::test() {
 ssh::ensure_sshpass() {
   command -v sshpass >/dev/null 2>&1 && return 0
   log::info "installing sshpass (for one-time SSH password key copy)"
-  if   command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get update -qq || true; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sshpass
+  if   command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -qq || true; DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq sshpass
   elif command -v dnf     >/dev/null 2>&1; then dnf install -y sshpass
   elif command -v yum     >/dev/null 2>&1; then yum install -y epel-release 2>/dev/null; yum install -y sshpass
   elif command -v zypper  >/dev/null 2>&1; then zypper --non-interactive install sshpass

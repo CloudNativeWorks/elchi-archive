@@ -179,6 +179,31 @@ firewall::_open_ufw() {
 # mid-gate has already proven inter-node connectivity, but an external
 # mongo skips that gate. Idempotent — phase 2's firewall::open re-applies
 # the very same rules.
+# firewall::open_mongo — open 27017 during phase 1.
+#
+# The replica set is initiated by the orchestrator BETWEEN phase 1 and phase
+# 2, while firewall::open (which also opens 27017) only runs at the end of
+# phase 2. On a host with firewalld active that ordering is fatal: every
+# member is up and listening, but M1 cannot reach them and the install stops
+# at "mongod not reachable". Opening it early is idempotent — firewall::open
+# re-applies the same rule later.
+firewall::open_mongo() {
+  if [ "${ELCHI_NO_FIREWALL:-0}" = "1" ]; then
+    return 0
+  fi
+  local backend
+  backend=$(firewall::detect_backend)
+  case "$backend" in
+    firewalld)
+      firewall-cmd --quiet --zone=public --add-port=27017/tcp --permanent 2>/dev/null || true
+      firewall-cmd --quiet --reload 2>/dev/null || true
+      ;;
+    ufw)
+      ufw allow 27017/tcp >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
 firewall::open_clickhouse() {
   if [ "${ELCHI_NO_FIREWALL:-0}" = "1" ]; then
     return 0

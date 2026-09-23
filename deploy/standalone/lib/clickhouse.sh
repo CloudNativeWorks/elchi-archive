@@ -89,7 +89,7 @@ clickhouse::install_package() {
 clickhouse::_install_debian() {
   log::info "installing clickhouse-server from packages.clickhouse.com"
   preflight::wait_apt_lock 600 || true
-  apt-get install -y -qq apt-transport-https ca-certificates curl gnupg
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq apt-transport-https ca-certificates curl gnupg
 
   install -d -m 0755 /usr/share/keyrings
   # packages.clickhouse.com publishes one ASCII-armored key (served from
@@ -104,7 +104,7 @@ deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] https://packages.clic
 EOF
 
   preflight::wait_apt_lock 600 || true
-  apt-get update -qq || die "apt-get update failed after adding the ClickHouse repo"
+  apt-get -o DPkg::Lock::Timeout=600 update -qq || die "apt-get -o DPkg::Lock::Timeout=600 update failed after adding the ClickHouse repo"
   local v=$ELCHI_CLICKHOUSE_VERSION_RESOLVED
   # Exact pin only when the operator supplied a fully-qualified version
   # (>=3 dots, e.g. 24.8.14.39). The repo carries one `stable` channel,
@@ -112,11 +112,11 @@ EOF
   preflight::wait_apt_lock 600 || true
   if [ "$v" != "stable" ] && [ "$(printf '%s' "$v" | tr -cd '.' | wc -c)" -ge 3 ]; then
     log::info "pinning clickhouse packages to ${v}"
-    apt-get install -y -qq \
+    apt-get -o DPkg::Lock::Timeout=600 install -y -qq \
       "clickhouse-server=${v}" "clickhouse-client=${v}" "clickhouse-common-static=${v}" \
       || die "ClickHouse ${v} not available in the stable repo — drop --clickhouse-version to install current stable"
   else
-    apt-get install -y -qq clickhouse-server clickhouse-client \
+    apt-get -o DPkg::Lock::Timeout=600 install -y -qq clickhouse-server clickhouse-client \
       || die "failed to install clickhouse-server / clickhouse-client via apt-get"
   fi
 }

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # nginx.sh — install nginx as the local UI server.
 #
-# nginx binds 127.0.0.1:8081 only. Envoy fronts public 443 and proxies
-# the UI route to this loopback listener. Cluster-wide UI scaling: each
-# node runs its own nginx; Envoy's elchi-cluster lists every node's
-# 8081 and round-robins (per the user's requirement that "each node's
-# Envoy can serve UI from any other node's nginx").
+# nginx listens on 8081 on ALL interfaces, not just loopback: Envoy fronts
+# public 443 and proxies the UI route there, and cluster-wide UI scaling
+# needs it reachable across nodes — each node runs its own nginx and every
+# node's Envoy lists every node's 8081 and round-robins (per the user's
+# requirement that "each node's Envoy can serve UI from any other node's
+# nginx"). The port is therefore closed at the firewall, not at the bind
+# address; `firewall::open` never opens 8081 to the outside.
 #
 # Marker file pattern matches certautopilot: a `.installed-by-elchi`
 # tag tells uninstall whether to also remove the package.
@@ -26,8 +28,9 @@ nginx::setup() {
 
   nginx::render_vhost
   # Drop the default site/server block so it doesn't shadow ours on :80
-  # (we listen on 127.0.0.1:8081 anyway, but keep the host clean).
+  # (we listen on 8081 anyway, but keep the host clean).
   nginx::_disable_default_site
+  nginx::_selinux_allow_port
 
   nginx -t >/dev/null 2>&1 || die "nginx config test failed; check ${NGINX_VHOST_DEBIAN}${NGINX_VHOST_RHEL}"
   # Reconcile against our vhost only — package's other configs are not
@@ -47,6 +50,37 @@ nginx::setup() {
   log::ok "nginx serving UI on 127.0.0.1:${ELCHI_PORT_NGINX_UI}"
 }
 
+# SELinux only lets nginx bind ports labelled http_port_t, and the default
+# label set is 80, 81, 443, 488, 8008, 8009, 8443, 9000 — our 8081 is NOT in
+# it. On a stock RHEL (Enforcing is the default) nginx therefore dies with
+#   nginx: [emerg] bind() to 0.0.0.0:8081 failed (13: Permission denied)
+# even though `nginx -t` passes, and the whole install aborts. Label the port
+# instead of asking the operator to turn SELinux off.
+nginx::_selinux_allow_port() {
+  [ "$ELCHI_OS_FAMILY" = rhel ] || return 0
+  command -v getenforce >/dev/null 2>&1 || return 0
+  [ "$(getenforce 2>/dev/null)" = "Enforcing" ] || return 0
+
+  if ! command -v semanage >/dev/null 2>&1; then
+    local pm
+    pm=$(command -v dnf || command -v yum) || true
+    [ -n "$pm" ] && "$pm" install -y policycoreutils-python-utils >/dev/null 2>&1 || true
+  fi
+  command -v semanage >/dev/null 2>&1 || {
+    log::warn "semanage not available — if nginx cannot bind ${ELCHI_PORT_NGINX_UI}, run: semanage port -a -t http_port_t -p tcp ${ELCHI_PORT_NGINX_UI}"
+    return 0
+  }
+
+  # -a fails when the port is already defined (under any type), so fall back
+  # to -m, which re-types an existing definition.
+  if semanage port -a -t http_port_t -p tcp "$ELCHI_PORT_NGINX_UI" 2>/dev/null \
+     || semanage port -m -t http_port_t -p tcp "$ELCHI_PORT_NGINX_UI" 2>/dev/null; then
+    log::ok "SELinux: tcp/${ELCHI_PORT_NGINX_UI} labelled http_port_t"
+  else
+    log::warn "SELinux: could not label tcp/${ELCHI_PORT_NGINX_UI} as http_port_t — nginx may fail to bind"
+  fi
+}
+
 nginx::_install() {
   case "$ELCHI_OS_FAMILY" in
     debian)
@@ -55,7 +89,7 @@ nginx::_install() {
       # running 5+ minutes after first boot, and racing them turns into
       # "Could not get lock /var/lib/dpkg/lock-frontend" mid-install.
       preflight::wait_apt_lock 600 || true
-      apt-get install -y -qq nginx-light || apt-get install -y -qq nginx \
+      apt-get -o DPkg::Lock::Timeout=600 install -y -qq nginx-light || apt-get -o DPkg::Lock::Timeout=600 install -y -qq nginx \
         || die "failed to install nginx via apt"
       ;;
     rhel)

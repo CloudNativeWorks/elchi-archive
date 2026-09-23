@@ -116,7 +116,7 @@ mongodb::_install_debian() {
   local v=$ELCHI_MONGO_VERSION_RESOLVED
   log::info "installing mongodb-org ${v} from official repo"
   preflight::wait_apt_lock 600 || true
-  apt-get install -y -qq gnupg ca-certificates curl
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq gnupg ca-certificates curl
   install -d -m 0755 /etc/apt/keyrings
 
   local codename=$ELCHI_OS_CODENAME
@@ -145,9 +145,9 @@ deb [ signed-by=${keyring} ] https://repo.mongodb.org/apt/${ELCHI_OS_ID} ${coden
 EOF
 
   preflight::wait_apt_lock 600 || true
-  apt-get update -qq
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
   preflight::wait_apt_lock 600 || true
-  apt-get install -y -qq mongodb-org
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq mongodb-org
 }
 
 mongodb::_install_rhel() {

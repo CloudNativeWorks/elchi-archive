@@ -93,8 +93,8 @@ _ensure_extract_tools() {
   if   command -v dnf     >/dev/null 2>&1; then dnf install -y "${need[@]}"
   elif command -v yum     >/dev/null 2>&1; then yum install -y "${need[@]}"
   elif command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}"
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -qq || true
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq "${need[@]}"
   elif command -v zypper  >/dev/null 2>&1; then zypper --non-interactive install "${need[@]}"
   else
     printf '[ERR] need %s to unpack the installer but no supported package manager was found.\n' "${need[*]}" >&2
