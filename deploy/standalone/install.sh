@@ -93,7 +93,7 @@ ELCHI_ADMIN_USER=${ELCHI_ADMIN_USER:-elchi-cluster-admin}
 ELCHI_CREATE_ADMIN_USER=${ELCHI_CREATE_ADMIN_USER:-1}
 
 # Backend variants. Each entry is a full asset name, e.g.
-#   elchi-v1.6.15-v0.14.0-envoy1.39.0
+#   elchi-v1.6.16-v0.14.0-envoy1.39.1
 # The release tag (e.g. v1.2.5) is derived per-variant; a single install
 # can mix variants from different elchi-backend releases.
 # Component versions — defaults come from lib/versions.sh (sourced
@@ -306,7 +306,7 @@ Topology
 Versioning
   --backend-version=<csv>             one or more elchi-backend variant tags;
                                        each one is the release-asset basename, e.g.
-                                       elchi-v1.6.15-v0.14.0-envoy1.39.0
+                                       elchi-v1.6.16-v0.14.0-envoy1.39.1
                                        (release tag derived per-variant)
   --ui-version=<vX.Y.Z>               UI bundle version (default: ${ELCHI_DEFAULT_UI_VERSION})
   --envoy-version=<vX.Y.Z>            envoy proxy version (default: ${ELCHI_DEFAULT_ENVOY_VERSION})

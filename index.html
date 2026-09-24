@@ -343,8 +343,8 @@
                     | sudo bash -s -- \
                     --main-address=elchi.example.com</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.5.22</code>,
-                    backend <code>elchi-v1.6.15-v0.14.0-envoy1.39.0</code>, envoy <code>v1.39.0</code>,
+                    Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.5.23</code>,
+                    backend <code>elchi-v1.6.16-v0.14.0-envoy1.39.0</code>, envoy <code>v1.39.0</code>,
                     coredns <code>v0.1.4</code>, collector <code>v0.1.13</code>. Override any with the matching
                     <code>--ui-version=</code> / <code>--backend-version=</code> / <code>--envoy-version=</code> /
                     <code>--coredns-version=</code> / <code>--collector-version=</code> flag.
@@ -358,7 +358,7 @@
                     --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
                     --main-address=elchi.example.com \
                     --gslb-zone=gslb.example.com \
-                    --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0,elchi-v1.6.15-v0.14.0-envoy1.39.1
+                    --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0,elchi-v1.6.16-v0.14.0-envoy1.39.1
                 </div>
                 <p class="info" style="margin-top: 8px;">
                     <strong>GSLB zone:</strong> CoreDNS GSLB plugin is enabled by default. If you skip
@@ -492,7 +492,7 @@
                     <div class="flag-table">
                         <code>--backend-version=&lt;csv&gt;</code>
                         <div class="desc">One or more variant tags (release-asset basenames). Each variant runs
-                            side-by-side. <span class="default">Default: <code>elchi-v1.6.15-v0.14.0-envoy1.39.0</code>
+                            side-by-side. <span class="default">Default: <code>elchi-v1.6.16-v0.14.0-envoy1.39.0</code>
                                 (from <code>lib/versions.sh</code>). Alias: <code>--backend-variants=</code>.</span>
                         </div>
                         <code>--backend-release=&lt;tag&gt;</code>
@@ -503,14 +503,14 @@
                             public <code>elchi-archive</code> releases — mirrored from the private <code>elchi</code>
                             repo
                             by the <code>build-elchi-ui</code> workflow. <span class="default">Default:
-                                <code>v1.5.22</code>.</span>
+                                <code>v1.5.23</code>.</span>
                         </div>
                         <code>--envoy-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">Front-door Envoy proxy binary version. <span class="default">Default:
-                                <code>v1.37.0</code>.</span></div>
+                                <code>v1.39.0</code>.</span></div>
                         <code>--coredns-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">Custom CoreDNS-with-elchi-plugin version (used only with <code>--gslb</code>).
-                            <span class="default">Default: <code>v0.1.3</code>.</span> v0.1.1 shipped without the elchi
+                            <span class="default">Default: <code>v0.1.4</code>.</span> v0.1.1 shipped without the elchi
                             plugin compiled in — pinning to that version causes <code>Unknown directive 'elchi'</code>.
                         </div>
                         <code>--collector-version=&lt;vX.Y.Z&gt;</code>
@@ -804,7 +804,7 @@
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --add-backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.1</div>
+                    --add-backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.1</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     <code>--add-backend-version</code> appends to the current variant set
                     without making you re-list everything that's already deployed. The new
@@ -817,7 +817,7 @@
                 <h5>Bump just the UI (sadece UI güncelleme)</h5>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
-                    | sudo bash -s -- --upgrade --ui-version=v1.1.6</div>
+                    | sudo bash -s -- --upgrade --ui-version=v1.5.23</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     Backend / envoy / coredns are not touched — every other component's
                     fingerprint stays identical so install.sh's reconcile marks them as
@@ -833,13 +833,13 @@
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0,elchi-v1.6.15-v0.14.0-envoy1.39.1</div>
+                    --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0,elchi-v1.6.16-v0.14.0-envoy1.39.1</div>
 
                 <h5>Replace a variant + drop the old one (declarative)</h5>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.1 \
+                    --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.1 \
                     --prune-missing</div>
 
                 <h5>Bump the UI + Envoy proxy together</h5>
@@ -915,9 +915,9 @@
 
                     <h5>Add a new variant alongside existing ones</h5>
                     <div class="stdl-cmd">sudo upgrade.sh \
-                        --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0,elchi-v1.6.15-v0.14.0-envoy1.39.1</div>
+                        --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0,elchi-v1.6.16-v0.14.0-envoy1.39.1</div>
                     <p style="font-size: 13px; margin: 4px 0 12px;">
-                        KEPT=[v1.6.15/envoy1.39.0], ADDED=[v1.6.15/envoy1.39.1]. The kept variant's
+                        KEPT=[v1.6.16/envoy1.39.0], ADDED=[v1.6.16/envoy1.39.1]. The kept variant's
                         fingerprint is unchanged → noop. The added variant gets a fresh template unit
                         + per-instance envs + binary download + start. Port allocations for the kept
                         variant stay stable (deterministic offset from variant position).
@@ -925,8 +925,8 @@
 
                     <h5>Update an existing variant (replace one tag with another)</h5>
                     <div class="stdl-cmd">sudo upgrade.sh \
-                        --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0 \
-                        --prune-version=elchi-v1.6.14-v0.14.0-envoy1.38.3</div>
+                        --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0 \
+                        --prune-version=elchi-v1.6.15-v0.14.0-envoy1.39.0</div>
                     <p style="font-size: 13px; margin: 4px 0 12px;">
                         install.sh re-runs with [new]; controller's ExecStart now points at new binary →
                         fingerprint diff → restart. Then prune step removes the old variant's unit,
@@ -937,10 +937,10 @@
 
                     <h5>Both at once (declarative)</h5>
                     <div class="stdl-cmd">sudo upgrade.sh \
-                        --backend-version=elchi-v1.6.15-v0.14.0-envoy1.39.0,elchi-v1.6.15-v0.14.0-envoy1.39.1 \
+                        --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0,elchi-v1.6.16-v0.14.0-envoy1.39.1 \
                         --prune-missing</div>
                     <p style="font-size: 13px; margin: 4px 0 12px;">
-                        KEPT=∅, ADDED=[v1.6.15/envoy1.39.0, v1.6.15/envoy1.39.1], REMOVED=[everything in CUR not in new
+                        KEPT=∅, ADDED=[v1.6.16/envoy1.39.0, v1.6.16/envoy1.39.1], REMOVED=[everything in CUR not in new
                         list].
                         Same install→prune flow.
                     </p>
@@ -1586,8 +1586,8 @@
                     | sudo bash -s -- \
                     --main-address=&lt;your-dns-or-ip&gt;</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Image tags default from <code>versions.env</code>: UI <code>v1.5.22</code>, backend
-                    <code>v1.6.15-v0.14.0-envoy1.39.0</code>, coredns <code>v0.1.4</code>, collector
+                    Image tags default from <code>versions.env</code>: UI <code>v1.5.23</code>, backend
+                    <code>v1.6.16-v0.14.0-envoy1.39.0</code>, coredns <code>v0.1.4</code>, collector
                     <code>v0.1.13</code>, plus official <code>mongo:8.0</code> /
                     <code>clickhouse/clickhouse-server</code> / <code>victoriametrics</code> /
                     <code>grafana</code> / <code>otel-collector-contrib</code> / <code>envoyproxy/envoy</code>.
@@ -1602,8 +1602,8 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
-                    --backend-version=v1.6.14-v0.14.0-envoy1.38.3,v1.6.15-v0.14.0-envoy1.39.0 \
-                    --ui-version=v1.5.22</div>
+                    --backend-version=v1.6.16-v0.14.0-envoy1.39.0,v1.6.16-v0.14.0-envoy1.39.1 \
+                    --ui-version=v1.5.23</div>
 
                 <h5>Custom port / plaintext</h5>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
@@ -1655,10 +1655,10 @@
                         <div class="desc">One or more <code>jhonbrownn/elchi-backend</code> tags, comma-separated.
                             One control-plane service + Envoy cluster per variant; the embedded envoy version
                             must be unique. <span class="default">Default:
-                                <code>v1.6.15-v0.14.0-envoy1.39.0</code> (from <code>versions.env</code>).</span></div>
+                                <code>v1.6.16-v0.14.0-envoy1.39.0</code> (from <code>versions.env</code>).</span></div>
                         <code>--ui-version=&lt;tag&gt;</code>
                         <div class="desc">UI image (<code>jhonbrownn/elchi</code>) tag.
-                            <span class="default">Default: <code>v1.5.22</code>.</span>
+                            <span class="default">Default: <code>v1.5.23</code>.</span>
                         </div>
                         <code>--coredns-version=&lt;tag&gt;</code>
                         <div class="desc">CoreDNS GSLB image (<code>jhonbrownn/elchi-coredns</code>) tag.
@@ -1998,8 +1998,8 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
-                    --ui-version=v1.5.22 \
-                    --backend-version=v1.6.15-v0.14.0-envoy1.39.0</div>
+                    --ui-version=v1.5.23 \
+                    --backend-version=v1.6.16-v0.14.0-envoy1.39.0</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
                 <div class="stdl-cmd"># remove the stack, keep data volumes
@@ -2160,7 +2160,8 @@
                 </p>
 
                 <h5>Production setup (default <code>--cloud=other</code>)</h5>
-                <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
                     | sudo bash -s -- \
                     --name=web-server-01 \
                     --host=backend.elchi.io \
@@ -2169,7 +2170,8 @@
                     --token=your-auth-token</div>
 
                 <h5>OpenStack deployment (cloud name from UI)</h5>
-                <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
                     | sudo bash -s -- \
                     --name=openstack-vm \
                     --host=controller.elchi.io \
@@ -2184,7 +2186,8 @@
                 </p>
 
                 <h5>With BGP routing (FRR install)</h5>
-                <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
                     | sudo bash -s -- \
                     --enable-bgp \
                     --name=edge-router \
@@ -2200,7 +2203,8 @@
                 </p>
 
                 <h5>With elchi-shield audit + metrics sinks</h5>
-                <div class="stdl-cmd">curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
+                <div class="stdl-cmd">curl -fsSL
+                    https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/client/get.sh \
                     | sudo bash -s -- \
                     --name=web-server-01 \
                     --host=backend.elchi.io \
@@ -2281,7 +2285,7 @@
                         <code>--shield-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">Only for running <code>elchi-install.sh</code> from a source
                             checkout. A release install always takes the shield <strong>bundled with that
-                            client release</strong> (one release = one consistent pair, fetched from this
+                                client release</strong> (one release = one consistent pair, fetched from this
                             public mirror). <span class="default">To move the pair, pin
                                 <code>--client-version=</code> on get.sh instead.</span></div>
                         <code>--shield-audit-dsn=&lt;DSN&gt;</code>
@@ -2319,7 +2323,8 @@
                     When you'd rather skip the installer wrapper and just drop the binary in place
                     (e.g., from a config-management system or a custom systemd unit):
                 </p>
-                <div class="stdl-cmd">wget https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.7.0/elchi-client-linux-amd64
+                <div class="stdl-cmd">wget
+                    https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v1.7.0/elchi-client-linux-amd64
                     sudo mv elchi-client-linux-amd64 /usr/local/bin/elchi-client
                     sudo chmod +x /usr/local/bin/elchi-client</div>
                 <p style="font-size: 13px; color: #656d76; margin: 4px 0 8px;">

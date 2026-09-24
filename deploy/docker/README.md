@@ -191,7 +191,7 @@ installer's equivalent is `elchi-stack set-cert <crt> <key> [ca]`.
 ## Upgrade / uninstall
 
 ```bash
-deploy/docker/upgrade.sh   --main-address=… --ui-version=v1.5.22   # rolling update
+deploy/docker/upgrade.sh   --main-address=… --ui-version=v1.5.23   # rolling update
 deploy/docker/uninstall.sh                  # remove stack, keep data volumes
 deploy/docker/uninstall.sh --purge          # also drop volumes, configs, secrets, state
 ```
