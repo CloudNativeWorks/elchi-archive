@@ -1015,6 +1015,60 @@
   ],
   "elchi_os_releases": [
     {
+      "version": "v0.5.3",
+      "date": "2026-09-24T07:46:01Z",
+      "client_version": "v1.7.0",
+      "shield_version": "v0.4.13",
+      "files": [
+        {
+          "name": "elchi-os-0.5.3.iso",
+          "type": "iso",
+          "arch": "linux-amd64",
+          "description": "Elchi OS 0.5.3 installation image (BIOS + UEFI, bare metal and virtual)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.5.3/elchi-os-0.5.3.iso",
+          "sha256": "fffcca1408a43ae8a7ef163f1ac4364a1e02bfdb03350389e8a17e19046d2218"
+        },
+        {
+          "name": "elchi-os-0.5.3.ova",
+          "type": "ova",
+          "arch": "linux-amd64",
+          "description": "Elchi OS 0.5.3 appliance for VMware vSphere / Workstation",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.5.3/elchi-os-0.5.3.ova",
+          "sha256": "342b6538b8375709e0cda8b5eaaf3216b4d560e816060013f93ead045fc0156c"
+        },
+        {
+          "name": "elchi-os_0.5.3.qcow2",
+          "type": "image",
+          "arch": "linux-amd64",
+          "description": "Elchi OS 0.5.3 disk image for KVM / Proxmox / OpenStack",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.5.3/elchi-os_0.5.3.qcow2",
+          "sha256": "b33e5b03398136cf0d433fa0360670b3980cd8a3319c50152f824c197fd810df"
+        },
+        {
+          "name": "elchi-os_0.5.3.update.tar",
+          "type": "update",
+          "arch": "linux-amd64",
+          "description": "Elchi OS 0.5.3 in-place upgrade bundle, applied with `system upgrade` on an existing appliance",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.5.3/elchi-os_0.5.3.update.tar",
+          "sha256": "8919ce11ebccaa3b4d11a3fda33d102aa04e428aee9ee2a0479f56a002728ab6"
+        },
+        {
+          "name": "SHA256SUMS",
+          "type": "checksums",
+          "description": "Checksums for the Elchi OS 0.5.3 images",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.5.3/SHA256SUMS",
+          "sha256": "1a628a1309c26564f3a24b0776806df719addd232c539517353cba80d118c4cf"
+        },
+        {
+          "name": "SHA256SUMS.asc",
+          "type": "signature",
+          "description": "Detached signature of SHA256SUMS (Elchi release signing key)",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-os-v0.5.3/SHA256SUMS.asc",
+          "sha256": "82c90a4b7d5d67ace65274ad358ceabae45d5f80cee54b69e27f4b217acb83c2"
+        }
+      ]
+    },
+    {
       "version": "v0.5.2",
       "date": "2026-09-22T09:55:18Z",
       "client_version": "v1.6.3",
