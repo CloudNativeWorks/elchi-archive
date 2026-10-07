@@ -47,9 +47,9 @@ shipped to every other node, and applied via a recursive
 sudo bash deploy/standalone/install.sh \
   --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-  --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0,elchi-v1.6.16-v0.14.0-envoy1.39.1 \
-  --ui-version=v1.5.23 \
-  --envoy-version=v1.39.0 \
+  --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3,elchi-v1.6.17-v0.14.0-envoy1.39.1 \
+  --ui-version=v1.5.24 \
+  --envoy-version=v1.39.3 \
   --main-address=elchi.example.com \
   --hostnames=elchi.example.com,m1,m2,m3
 ```
@@ -75,9 +75,9 @@ Derive one from the private key with
 ```bash
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
-  --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0 \
-  --ui-version=v1.5.23 \
-  --envoy-version=v1.39.0 \
+  --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3 \
+  --ui-version=v1.5.24 \
+  --envoy-version=v1.39.3 \
   --main-address=$(hostname -f)
 ```
 
@@ -92,9 +92,9 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
   | sudo bash -s -- \
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-      --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0 \
-      --ui-version=v1.5.23 \
-      --envoy-version=v1.39.0 \
+      --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3 \
+      --ui-version=v1.5.24 \
+      --envoy-version=v1.39.3 \
       --main-address=elchi.example.com
 ```
 
@@ -123,9 +123,9 @@ default:
 
 | Component        | Variable                         | Default |
 |------------------|----------------------------------|---------|
-| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.16-v0.14.0-envoy1.39.0` |
-| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.23` |
-| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.39.0` |
+| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.6.17-v0.14.0-envoy1.39.3` |
+| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.5.24` |
+| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.39.3` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
 | elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.13` |
 | VictoriaMetrics  | `ELCHI_DEFAULT_VM_VERSION`       | `v1.93.5` |
@@ -298,26 +298,26 @@ complete answer to "how is this cluster configured".
 
 ```bash
 # Bump the UI only — backend / envoy / coredns are kept as-is.
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.23
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.24
 
 # Replace the backend variant set (declarative — old variants not in
 # this list are AUTO-PRUNED by install.sh's stale-variants pass).
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0
+  --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3
 
 # Additive shortcut — append a variant without re-listing existing ones.
 # Useful when you want N versions live at once.
 sudo bash deploy/standalone/upgrade.sh \
-  --add-backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.1
+  --add-backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.1
 
 # Explicit prune — same effect as dropping it from --backend-version,
 # but more visible in the plan banner.
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0 \
-  --prune-version=elchi-v1.6.14-v0.14.0-envoy1.38.3
+  --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3 \
+  --prune-version=elchi-v1.6.17-v0.14.0-envoy1.39.1
 
 # Apply OS security patches as part of this upgrade (default: skipped).
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.23 --upgrade-os
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.24 --upgrade-os
 ```
 
 ### Bootstrap (curl | bash) for upgrade
@@ -327,8 +327,8 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.5.23 --upgrade-os
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
   | sudo bash -s -- --upgrade \
-      --ui-version=v1.5.23 \
-      --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0
+      --ui-version=v1.5.24 \
+      --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3
 ```
 
 ### Behaviour notes
@@ -366,7 +366,7 @@ plan banner instead of relying on auto-prune):
 ```bash
 # Replace the entire variant set + prune anything missing
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.6.16-v0.14.0-envoy1.39.0,elchi-v1.6.16-v0.14.0-envoy1.39.1 \
+  --backend-version=elchi-v1.6.17-v0.14.0-envoy1.39.3,elchi-v1.6.17-v0.14.0-envoy1.39.1 \
   --prune-missing
 ```
 
@@ -600,7 +600,7 @@ been verified against the source at
    (`pkg/registry/controller.go:67` uses `os.Hostname()`); control-plane
    IDs are `<hostname>-controlplane-<X.Y.Z>` (`pkg/registry/identity.go:50-59`).
    `cleanVersion()` strips a leading `v`, so the version segment is
-   full semver (`1.38.3`, `1.39.0`). K8s detection uses the
+   full semver (`1.39.1`, `1.39.3`). K8s detection uses the
    `KUBERNETES_SERVICE_PORT` env; bare-metal path is active when unset.
    Our `lib/envoy.sh` cluster names + `lib/hosts.sh` /etc/hosts entries
    match these literally.

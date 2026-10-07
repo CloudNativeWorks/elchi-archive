@@ -155,7 +155,7 @@ jobs:
           EOF
           
           # Upsert + semver sort live in tools/index-upsert.py (EF-60: every
-          # workflow used to string-sort, so v1.39.0 could sit under v1.9.x).
+          # workflow used to string-sort, so v1.39.3 could sit under v1.9.x).
           python3 tools/index-upsert.py --key releases --entry temp_release.json
           rm -f temp_release.json
 

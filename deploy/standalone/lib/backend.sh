@@ -123,7 +123,7 @@ backend::_resolve_mongo_hosts() {
 }
 
 backend::_envoy_versions_list() {
-  # Helm formula: ELCHI_VERSIONS = ['v1.38.3', 'v1.39.0', ...]
+  # Helm formula: ELCHI_VERSIONS = ['v1.39.1', 'v1.39.3', ...]
   local -a items
   while IFS= read -r v; do
     [ -z "$v" ] && continue

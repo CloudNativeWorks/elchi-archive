@@ -13,22 +13,22 @@
 # Envoy cluster names, x-target-cluster routing, and the UI's
 # AVAILABLE_VERSIONS list, all of which must match what the registry emits.
 
-# topology::sanitize_version <tag> — "v1.6.16-...-envoy1.39.0" → "v1-6-16-...-envoy1-39-0"
+# topology::sanitize_version <tag> — "v1.6.17-...-envoy1.39.3" → "v1-6-17-...-envoy1-39-3"
 ver::sanitize() {
   local tag=$1
   tag=${tag%-arm64}; tag=${tag%-amd64}
   printf '%s' "${tag//./-}"
 }
 
-# ver::envoy_version <tag> — "...-envoy1.39.0" → "v1.39.0"
+# ver::envoy_version <tag> — "...-envoy1.39.3" → "v1.39.3"
 ver::envoy_version() {
   local tag=$1 match
   match=$(printf '%s' "$tag" | grep -oE 'envoy[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
-  [ -n "$match" ] || die "could not extract envoy version from tag: $tag (expected substring like envoy1.39.0)"
+  [ -n "$match" ] || die "could not extract envoy version from tag: $tag (expected substring like envoy1.39.3)"
   printf '%s' "${match/envoy/v}"
 }
 
-# ver::envoy_full <tag> — "...-envoy1.39.0" → "1.39.0" (no leading v)
+# ver::envoy_full <tag> — "...-envoy1.39.3" → "1.39.3" (no leading v)
 ver::envoy_full() {
   local tag=$1 match
   match=$(printf '%s' "$tag" | grep -oE 'envoy[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
