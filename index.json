@@ -911,6 +911,26 @@
   ],
   "backend_releases": [
     {
+      "version": "v1.6.19",
+      "date": "2026-10-09T13:46:13Z",
+      "binaries": [
+        {
+          "name": "elchi-v1.6.19-v0.14.0-envoy1.39.1",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.19-v0.14.0-envoy1.39.1",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.19/elchi-v1.6.19-v0.14.0-envoy1.39.1",
+          "sha256": "31b06a9feea0907a64f0048e9ae54a7deb5a3a6e3b43b7c09ed7556275885861"
+        },
+        {
+          "name": "elchi-v1.6.19-v0.14.0-envoy1.39.3",
+          "type": "binary",
+          "description": "elchi-backend control-plane variant elchi-v1.6.19-v0.14.0-envoy1.39.3",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-backend-v1.6.19/elchi-v1.6.19-v0.14.0-envoy1.39.3",
+          "sha256": "8659c82db65cc0b7a647719e9d126d4e432a8abf2648d5f2af6f3ab557f47329"
+        }
+      ]
+    },
+    {
       "version": "v1.6.18",
       "date": "2026-10-08T17:20:22Z",
       "binaries": [
