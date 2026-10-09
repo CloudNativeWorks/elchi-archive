@@ -28,8 +28,8 @@ COLLECTOR="v0.1.14"      # elchi-collector, e.g. v0.1.12
 SHIELD_OLD=""     # shield has NO canonical default → set BOTH old and new
 SHIELD_NEW=""     #   e.g. SHIELD_OLD="v0.4.0" SHIELD_NEW="v0.4.1"
 
-CLIENT_OLD=""             # agent release TAG in the portal's download links
-CLIENT_NEW=""             #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
+CLIENT_OLD=""                 # agent release TAG in the portal's download links
+CLIENT_NEW=""                 #   e.g. CLIENT_OLD="v1.6.3" CLIENT_NEW="v1.7.0"
 
 APPLY=0           # 0 = preview (dry-run) · 1 = write the files
 # ╚════════════════════════════════════════════════════════╝
