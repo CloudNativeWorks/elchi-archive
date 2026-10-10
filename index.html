@@ -343,7 +343,7 @@
                     | sudo bash -s -- \
                     --main-address=elchi.example.com</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.5.30</code>,
+                    Versions default from <code>deploy/standalone/lib/versions.sh</code>: UI <code>v1.5.34</code>,
                     backend <code>elchi-v1.6.20-v0.14.0-envoy1.39.3</code>, envoy <code>v1.39.3</code>,
                     coredns <code>v0.1.4</code>, collector <code>v0.1.15</code>. Override any with the matching
                     <code>--ui-version=</code> / <code>--backend-version=</code> / <code>--envoy-version=</code> /
@@ -503,7 +503,7 @@
                             public <code>elchi-archive</code> releases — mirrored from the private <code>elchi</code>
                             repo
                             by the <code>build-elchi-ui</code> workflow. <span class="default">Default:
-                                <code>v1.5.30</code>.</span>
+                                <code>v1.5.34</code>.</span>
                         </div>
                         <code>--envoy-version=&lt;vX.Y.Z&gt;</code>
                         <div class="desc">Front-door Envoy proxy binary version. <span class="default">Default:
@@ -817,7 +817,7 @@
                 <h5>Bump just the UI (sadece UI güncelleme)</h5>
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
-                    | sudo bash -s -- --upgrade --ui-version=v1.5.30</div>
+                    | sudo bash -s -- --upgrade --ui-version=v1.5.34</div>
                 <p style="font-size: 13px; margin: 4px 0 12px;">
                     Backend / envoy / coredns are not touched — every other component's
                     fingerprint stays identical so install.sh's reconcile marks them as
@@ -846,7 +846,7 @@
                 <div class="stdl-cmd">curl -fsSL
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
                     | sudo bash -s -- --upgrade \
-                    --ui-version=v1.5.30 \
+                    --ui-version=v1.5.34 \
                     --envoy-version=v1.39.3</div>
 
                 <h5>Rotate the Grafana admin password</h5>
@@ -1586,7 +1586,7 @@
                     | sudo bash -s -- \
                     --main-address=&lt;your-dns-or-ip&gt;</div>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
-                    Image tags default from <code>versions.env</code>: UI <code>v1.5.30</code>, backend
+                    Image tags default from <code>versions.env</code>: UI <code>v1.5.34</code>, backend
                     <code>v1.6.20-v0.14.0-envoy1.39.3</code>, coredns <code>v0.1.4</code>, collector
                     <code>v0.1.15</code>, plus official <code>mongo:8.0</code> /
                     <code>clickhouse/clickhouse-server</code> / <code>victoriametrics</code> /
@@ -1603,7 +1603,7 @@
                     | sudo bash -s -- \
                     --main-address=elchi.example.com \
                     --backend-version=v1.6.20-v0.14.0-envoy1.39.3,v1.6.20-v0.14.0-envoy1.39.1 \
-                    --ui-version=v1.5.30</div>
+                    --ui-version=v1.5.34</div>
 
                 <h5>Custom port / plaintext</h5>
                 <p style="margin: 4px 0 8px 0; font-size: 13px; color: #656d76;">
@@ -1658,7 +1658,7 @@
                                 <code>v1.6.20-v0.14.0-envoy1.39.3</code> (from <code>versions.env</code>).</span></div>
                         <code>--ui-version=&lt;tag&gt;</code>
                         <div class="desc">UI image (<code>jhonbrownn/elchi</code>) tag.
-                            <span class="default">Default: <code>v1.5.30</code>.</span>
+                            <span class="default">Default: <code>v1.5.34</code>.</span>
                         </div>
                         <code>--coredns-version=&lt;tag&gt;</code>
                         <div class="desc">CoreDNS GSLB image (<code>jhonbrownn/elchi-coredns</code>) tag.
@@ -1998,7 +1998,7 @@
                     https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/docker/get.sh \
                     | sudo bash -s -- --upgrade \
                     --main-address=elchi.example.com \
-                    --ui-version=v1.5.30 \
+                    --ui-version=v1.5.34 \
                     --backend-version=v1.6.20-v0.14.0-envoy1.39.3</div>
 
                 <h4>8. uninstall.sh — remove the stack</h4>
