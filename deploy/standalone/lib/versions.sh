@@ -25,11 +25,11 @@
 
 # elchi-backend — one or more full variant asset tags, comma-separated.
 # Each tag is the release-asset basename; the GitHub release tag is
-# derived per-variant (e.g. elchi-v1.6.19-... → release v1.6.19).
-ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.6.19-v0.14.0-envoy1.39.3"
+# derived per-variant (e.g. elchi-v1.6.20-... → release v1.6.20).
+ELCHI_DEFAULT_BACKEND_VARIANTS="elchi-v1.6.20-v0.14.0-envoy1.39.3"
 
 # elchi UI bundle (static web assets served by nginx).
-ELCHI_DEFAULT_UI_VERSION="v1.5.26"
+ELCHI_DEFAULT_UI_VERSION="v1.5.30"
 
 # Envoy proxy binary (served from the elchi-archive release mirror).
 ELCHI_DEFAULT_ENVOY_VERSION="v1.39.3"
@@ -38,7 +38,7 @@ ELCHI_DEFAULT_ENVOY_VERSION="v1.39.3"
 ELCHI_DEFAULT_COREDNS_VERSION="v0.1.4"
 
 # elchi-collector — Envoy ALS ingestion service.
-ELCHI_DEFAULT_COLLECTOR_VERSION="v0.1.14"
+ELCHI_DEFAULT_COLLECTOR_VERSION="v0.1.15"
 
 # VictoriaMetrics single-node (the metrics TSDB). Keep the leading "v".
 ELCHI_DEFAULT_VM_VERSION="v1.93.5"
