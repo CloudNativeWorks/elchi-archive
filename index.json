@@ -498,6 +498,20 @@
   ],
   "elchi_collector_releases": [
     {
+      "version": "v0.1.15",
+      "date": "2026-10-10T11:15:47Z",
+      "files": [
+        {
+          "name": "elchi-collector-linux-amd64",
+          "type": "binary",
+          "arch": "linux-amd64",
+          "description": "elchi-collector \u2014 Envoy ALS ingestion service \u2014 for Linux AMD64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-collector-v0.1.15/elchi-collector-linux-amd64",
+          "sha256": "25c38d03c498f1ce06c6ee8a473006f58455d5de70748ac652c6d5744c54a9b1"
+        }
+      ]
+    },
+    {
       "version": "v0.1.14",
       "date": "2026-10-08T17:24:36Z",
       "files": [
