@@ -130,14 +130,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout elchi-backend (the CRS rule-library parser)
-        uses: actions/checkout@v5
-        with:
-          repository: CloudNativeWorks/elchi-backend
-          token: ${{ secrets.GH_PAT }}
-          path: backend
-          sparse-checkout: scripts/parse_coraza_rules.py
-
       - name: Fetch the published shield binaries
         env:
           SHIELDS: ${{ needs.discover.outputs.shields }}
@@ -178,7 +170,7 @@ jobs:
           set -euo pipefail
           CORAZA=$(python3 -I -c 'import json; t=json.load(open("compat.json"))["coraza_tested"]; print(sorted(t.values())[-1] if t else "unknown")')
           mkdir -p release
-          python3 -I backend/scripts/parse_coraza_rules.py --rules-dir "work/$VERSION/rules/@owasp_crs" --crs-version "$VERSION" --coraza-version "$CORAZA" --output-dir release
+          python3 -I tools/parse_coraza_rules.py --rules-dir "work/$VERSION/rules/@owasp_crs" --crs-version "$VERSION" --coraza-version "$CORAZA" --output-dir release
           ls -la release
 
       - name: Assemble, checksum and sign the release

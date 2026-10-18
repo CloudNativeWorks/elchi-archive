@@ -120,8 +120,14 @@ PY
 
 step_library(){
   echo "== library: the backend parser reads the bundle (A-05) =="
-  local parser="$HERE/../elchi-backend/scripts/parse_coraza_rules.py"
-  [[ -f $parser ]] || { echo "  SKIP  no ../elchi-backend/scripts/parse_coraza_rules.py"; return; }
+  local parser="$HERE/tools/parse_coraza_rules.py"
+  # The parser is vendored here: elchi-backend ignores its scripts/ directory
+  # (.gitignore), so no checkout of that repo can supply it. When a backend
+  # checkout sits next to this one, the two copies must not have drifted.
+  local upstream="$HERE/../elchi-backend/scripts/parse_coraza_rules.py"
+  if [[ -f $upstream ]]; then
+    cmp -s "$parser" "$upstream" && ok "parser identical to elchi-backend/scripts copy" || bad "tools/parse_coraza_rules.py differs from ../elchi-backend/scripts/parse_coraza_rules.py"
+  fi
   local out; out="$WORK/library"; build_once "$out" >/dev/null
   python3 -I "$parser" --rules-dir "$out/$CRS_VERSION/rules/@owasp_crs" --crs-version "$CRS_VERSION" --coraza-version test --output-dir "$out" >/dev/null 2>&1 || { bad "parser run"; return; }
   python3 -I - "$out" "$CRS_VERSION" <<'PY' && ok "library ≥500 rules, metadata matches, rule links carry one v" || bad "library check"
