@@ -268,7 +268,9 @@ elchi-stack set-cert <crt> <key> [ca]
 elchi-stack add-node <ip>           extend the cluster (M1 only)
 elchi-stack init-replica-set        rs.initiate() (M1 only; idempotent)
 elchi-stack export-bundle <out>     re-package the encrypted cluster bundle
-elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart)
+elchi-stack rotate-secret <name>    rotate JWT/GSLB secret (cluster-wide restart). jwt: the
+                                    licence, ACME and HA pair stores it seals are re-encrypted
+                                    first (elchi-reencrypt); asks for confirmation
 elchi-stack net-test [--mesh]       cross-node connectivity check from this node to
                                     every peer: per-service TCP reachability + connect
                                     latency, ICMP RTT/loss, path-MTU (DF) probe —

@@ -2185,6 +2185,45 @@ cmd_show_secret() {
   esac
 }
 
+# rotate::reencrypt_jwt <new-secret> — ELCHI_JWT_SECRET is not only the
+# session-token key. The backend derives from it the licence KEK
+# (pkg/license.NewKEK: licence key + API key), the ACME encryptor
+# (pkg/acme.NewEncryptor: account keys, EAB and DNS credentials) and the HA
+# pairs' heartbeat-key encryptor (controller/ha). Rotating it and restarting
+# used to leave all three unreadable: licence invalid until re-activated,
+# ACME credentials gone, every HA pair degraded ("key sealed under a previous
+# ELCHI_JWT_SECRET") and unmanageable although its members kept failing
+# over on their pair.json. So the stores are re-sealed with the new secret
+# first (`elchi-backend elchi-reencrypt`, idempotent, conditional writes),
+# and the secret is only swapped when that went through. Secrets travel in
+# the environment, never on the command line.
+rotate::reencrypt_jwt() {
+  local new=$1 old first_variant bin conf rc
+  old=$(secrets::value ELCHI_JWT_SECRET)
+  [ -n "$old" ] || die "ELCHI_JWT_SECRET is not in /etc/elchi/secrets.env"
+  log::warn "ELCHI_JWT_SECRET also seals the licence key and API key, the ACME account keys, EAB and DNS credentials and the HA pairs' heartbeat keys in Mongo."
+  log::warn "They are re-encrypted with the new secret first, then every backend process restarts and every session is invalidated."
+  confirm "Rotate the JWT secret now?" || die "aborted; nothing changed"
+
+  first_variant=$(awk '/^  backend_variants:/{f=1; next} f && /^    -/{print $2; exit}' "${ELCHI_ETC}/topology.full.yaml")
+  bin=$(elchi_backend_binary "$first_variant")
+  conf="$(elchi_version_dir "$first_variant")/config-prod.yaml"
+  if ! "$bin" elchi-reencrypt --help >/dev/null 2>&1; then
+    log::warn "this backend (${first_variant}) has no elchi-reencrypt: after the rotation the licence must be re-activated, ACME accounts and DNS credentials re-entered and every HA pair's key rotated (PUT … rotate_secret)"
+    confirm "Continue WITHOUT re-encrypting?" || die "aborted; nothing changed"
+    return 0
+  fi
+  log::info "re-encrypting the sealed stores with the new secret (${bin} elchi-reencrypt)"
+  rc=0
+  ELCHI_REENCRYPT_OLD_SECRET="$old" ELCHI_REENCRYPT_NEW_SECRET="$new" \
+    "$bin" elchi-reencrypt --config "$conf" || rc=$?
+  case "$rc" in
+    0) log::ok "sealed stores re-encrypted" ;;
+    2) log::warn "some values open with neither secret (listed above); they were unreadable before this rotation too and stay as they are" ;;
+    *) die "re-encryption failed (exit ${rc}); the secret was NOT rotated — fix the cause and rerun" ;;
+  esac
+}
+
 cmd_rotate_secret() {
   local name=${1:?secret name required (one of: jwt, gslb, grafana)}
 
@@ -2207,6 +2246,10 @@ cmd_rotate_secret() {
     gslb) var=ELCHI_GSLB_SECRET; key=$(rand_alnum 48) ;;
     *) die "unknown secret: $name (use jwt|gslb|grafana)" ;;
   esac
+
+  if [ "$name" = jwt ]; then
+    rotate::reencrypt_jwt "$key"
+  fi
 
   log::info "rotating ${var}"
   sed -i "s|^${var}=.*|${var}=${key}|" /etc/elchi/secrets.env
