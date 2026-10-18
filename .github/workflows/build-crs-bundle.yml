@@ -1,0 +1,349 @@
+# OWASP CRS bundles for elchi-shield — built from upstream releases, proven
+# against every published shield binary, published as crs-<version> releases
+# and listed under index.json `crs_releases`.
+#
+#   schedule            every day: any CRS release newer than the floor that is
+#                       not in crs_releases yet is built and published
+#   workflow_dispatch   one version (crs_version), or `retest` the compatibility
+#                       matrix of every published bundle
+#   repository_dispatch shield-released (sent by build-elchi-client.yml once
+#                       the index lists the client release that carries the new
+#                       shield): retest, so the new shield build gets added to
+#                       the bundles' compatible_shield lists
+#
+# Until a client release at or above SHIELD_FLOOR is in the index there is no
+# binary that can prove a bundle: the daily run then plans nothing (a warning,
+# not a failure).
+#
+# The bundle bytes never change once published (the tarball sha256 is what the
+# agent verifies); a retest only rewrites manifest.json / SHA256SUMS(.asc) and
+# the index entry. Compatibility is PROVEN, not declared: each shield release's
+# own binary runs `elchi-shield crs check --compile` on the bundle
+# (tools/build-crs-bundle.py compat), and the UI refuses to activate a bundle
+# on a fleet whose shield is not in that list.
+name: Build CRS bundle
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      crs_version:
+        description: 'CRS release to build (e.g. v4.26.0); blank = every missing release newer than the floor'
+        required: false
+        type: string
+        default: ''
+      retest:
+        description: 'Re-run the shield compatibility matrix of every published bundle'
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [shield-released]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Releases older than this are what the embedded ruleset already covers.
+  CRS_FLOOR: v4.25.0
+  # Shield releases before this cannot load bundles at all (no --crs-dir): bundle support shipped in elchi-shield v1.0.0.
+  SHIELD_FLOOR: v1.0.0
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "elchi-archive-publish"
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.plan.outputs.versions }}
+      shields: ${{ steps.plan.outputs.shields }}
+      retest: ${{ steps.plan.outputs.retest }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Plan what to build
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WANT: ${{ github.event.inputs.crs_version }}
+          RETEST: ${{ github.event.inputs.retest }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          gh api repos/coreruleset/coreruleset/releases --paginate \
+            --jq '.[] | select(.draft==false and .prerelease==false) | .tag_name' > upstream.txt
+          python3 -I - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys
+          sys.path.insert(0, "tools")
+          floor = os.environ["CRS_FLOOR"]; sfloor = os.environ["SHIELD_FLOOR"]
+          def key(v):
+              v = v[1:] if v[:1] == "v" else v
+              core, _, suf = v.partition("-")
+              parts = core.split(".")
+              return (1, tuple(int(p) for p in parts), 0 if suf else 1, suf) if all(p.isdigit() for p in parts) else (0, (), 0, v)
+          idx = json.load(open("index.json"))
+          have = {e["version"] for e in idx.get("crs_releases", [])}
+          upstream = [t.strip() for t in open("upstream.txt") if re.match(r"^v4\.\d+\.\d+$", t.strip())]
+          want = os.environ.get("WANT", "").strip()
+          if want:
+              versions = [want]
+          else:
+              versions = sorted((t for t in upstream if key(t) >= key(floor) and t not in have), key=key)
+          # Every published shield at or above the floor, newest client first
+          # (the asset rides inside the client release).
+          shields, seen = [], set()
+          for c in idx.get("elchi_client_releases", []):
+              sv = c.get("shield_version", "")
+              if not sv or sv in seen or key(sv) < key(sfloor):
+                  continue
+              for f in c.get("files", []):
+                  if f["name"] == "elchi-shield-linux-amd64":
+                      shields.append({"label": sv, "url": f["download_url"], "sha256": f["sha256"]})
+                      seen.add(sv)
+          retest = os.environ.get("RETEST") == "true" or os.environ.get("EVENT") == "repository_dispatch"
+          if not shields:
+              # Nothing can prove a bundle yet (no client release carries a shield at
+              # or above the floor): a clean no-op, not a red run, until one is published.
+              print(f"::warning::no published shield at or above {sfloor}; CRS releases {versions} wait for one", file=sys.stderr)
+              versions, retest = [], False
+          print("versions=" + json.dumps(versions))
+          print("shields=" + json.dumps(shields))
+          print("retest=" + ("true" if retest else "false"))
+          print(f"plan: build {versions}, shields {[s['label'] for s in shields]}, retest {retest}", file=sys.stderr)
+          PY
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.versions != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        version: ${{ fromJson(needs.discover.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout elchi-backend (the CRS rule-library parser)
+        uses: actions/checkout@v5
+        with:
+          repository: CloudNativeWorks/elchi-backend
+          token: ${{ secrets.GH_PAT }}
+          path: backend
+          sparse-checkout: scripts/parse_coraza_rules.py
+
+      - name: Fetch the published shield binaries
+        env:
+          SHIELDS: ${{ needs.discover.outputs.shields }}
+        run: |
+          set -euo pipefail
+          mkdir -p shields
+          echo "$SHIELDS" | python3 -I -c 'import json,sys; [print(s["label"], s["url"], s["sha256"]) for s in json.load(sys.stdin)]' | while read -r label url sha; do
+            curl -fsSL -o "shields/$label" "$url"
+            echo "$sha  shields/$label" | sha256sum -c --quiet
+            chmod +x "shields/$label"
+          done
+          ls -la shields
+
+      - name: Build the bundle
+        id: build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          COMMIT=$(gh api "repos/coreruleset/coreruleset/git/ref/tags/$VERSION" --jq '.object.sha')
+          python3 -I tools/build-crs-bundle.py build --crs-version "$VERSION" --out work --commit "$COMMIT" | tee build.json
+
+      - name: Prove compatibility with every published shield
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          args=()
+          for b in shields/*; do args+=(--shield "$(basename "$b")=$b"); done
+          [[ ${#args[@]} -gt 0 ]] || { echo "::error::no shield release at or above $SHIELD_FLOOR is published; nothing can prove the bundle" >&2; exit 1; }
+          python3 -I tools/build-crs-bundle.py compat --bundle-root work --crs-version "$VERSION" "${args[@]}" | tee compat.json
+
+      - name: Generate the backend rule library
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          CORAZA=$(python3 -I -c 'import json; t=json.load(open("compat.json"))["coraza_tested"]; print(sorted(t.values())[-1] if t else "unknown")')
+          mkdir -p release
+          python3 -I backend/scripts/parse_coraza_rules.py --rules-dir "work/$VERSION/rules/@owasp_crs" --crs-version "$VERSION" --coraza-version "$CORAZA" --output-dir release
+          ls -la release
+
+      - name: Assemble, checksum and sign the release
+        env:
+          VERSION: ${{ matrix.version }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          cp "work/crs-bundle-$VERSION.tar.gz" release/
+          # entry writes release/manifest.json (bundle manifest + compatibility)
+          # and the index entry; SHA256SUMS is produced after, so it covers
+          # manifest.json too, and the entry is regenerated to carry its sha.
+          python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir release --repo "$GITHUB_REPOSITORY" --tag "crs-$VERSION" --compat compat.json --manifest "work/$VERSION/manifest.json" --out entry.json
+          (cd release && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS)
+          export GNUPGHOME; GNUPGHOME=$(mktemp -d); chmod 700 "$GNUPGHOME"
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --armor --detach-sign --output release/SHA256SUMS.asc release/SHA256SUMS
+          gpg --verify release/SHA256SUMS.asc release/SHA256SUMS
+          rm -rf "$GNUPGHOME"
+          python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir release --repo "$GITHUB_REPOSITORY" --tag "crs-$VERSION" --compat compat.json --manifest "work/$VERSION/manifest.json" --out entry.json
+          python3 -I tools/index-upsert.py --key crs_releases --entry entry.json
+          python3 -I tools/index-upsert.py --check
+
+      - name: Remove existing release (allow same-version re-publish)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "crs-${{ matrix.version }}" --yes 2>/dev/null || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: crs-${{ matrix.version }}
+          name: OWASP CRS bundle ${{ matrix.version }}
+          body: |
+            OWASP Core Rule Set ${{ matrix.version }} as an elchi-shield bundle, built from
+            https://github.com/coreruleset/coreruleset/releases/tag/${{ matrix.version }} with the
+            coraza-coreruleset transformation (tools/build-crs-bundle.py).
+
+            `manifest.json` lists the shield releases whose binary compiled this bundle
+            (`compatible_shield`). Edges download it through the control plane
+            (SHIELD_CRS) and switch with `spec.crs.version`.
+          files: |
+            release/crs-bundle-${{ matrix.version }}.tar.gz
+            release/manifest.json
+            release/crs_rules_coreruleset_${{ matrix.version }}.json
+            release/crs_rules_coreruleset_${{ matrix.version }}_metadata.json
+            release/SHA256SUMS
+            release/SHA256SUMS.asc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push index.json
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "Add CRS bundle ${{ matrix.version }}" || exit 0
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
+            echo "Push rejected (attempt $i/5), retrying after rebase..."
+            sleep $((RANDOM % 5 + 1))
+          done
+          echo "Failed to push after 5 attempts" >&2
+          exit 1
+
+  retest:
+    needs: discover
+    if: needs.discover.outputs.retest == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the published shield binaries
+        env:
+          SHIELDS: ${{ needs.discover.outputs.shields }}
+        run: |
+          set -euo pipefail
+          mkdir -p shields
+          echo "$SHIELDS" | python3 -I -c 'import json,sys; [print(s["label"], s["url"], s["sha256"]) for s in json.load(sys.stdin)]' | while read -r label url sha; do
+            curl -fsSL -o "shields/$label" "$url"
+            echo "$sha  shields/$label" | sha256sum -c --quiet
+            chmod +x "shields/$label"
+          done
+
+      - name: Re-run the matrix for every published bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME; GNUPGHOME=$(mktemp -d); chmod 700 "$GNUPGHOME"
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          changed=0
+          for VERSION in $(python3 -I -c 'import json; [print(e["version"]) for e in json.load(open("index.json")).get("crs_releases", [])]'); do
+            TAG="crs-$VERSION"; REL="retest/$VERSION/release"; ROOT="retest/$VERSION/root"
+            rm -rf "retest/$VERSION"; mkdir -p "$REL" "$ROOT/$VERSION"
+            gh release download "$TAG" --dir "$REL" --clobber
+            (cd "$REL" && gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum -c --quiet SHA256SUMS)
+            tar -xzf "$REL/crs-bundle-$VERSION.tar.gz" -C "$ROOT/$VERSION"
+            # Only shields the manifest has no verdict for yet.
+            python3 -I - "$REL/manifest.json" shields > todo.txt <<'PY'
+          import json, os, sys
+          m = json.load(open(sys.argv[1]))
+          done = set(m.get("compatible_shield", [])) | {i["shield"] for i in m.get("incompatible_shield", [])}
+          for b in sorted(os.listdir(sys.argv[2])):
+              if b not in done:
+                  print(b)
+          PY
+            [[ -s todo.txt ]] || { echo "$VERSION: matrix complete"; continue; }
+            args=(); while read -r b; do args+=(--shield "$b=shields/$b"); done < todo.txt
+            python3 -I tools/build-crs-bundle.py compat --bundle-root "$ROOT" --crs-version "$VERSION" "${args[@]}" > new.json
+            python3 -I - "$REL/manifest.json" new.json <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1])); n = json.load(open(sys.argv[2]))
+          m["compatible_shield"] = sorted(set(m.get("compatible_shield", [])) | set(n["compatible_shield"]))
+          m["incompatible_shield"] = m.get("incompatible_shield", []) + n["incompatible_shield"]
+          m.setdefault("coraza_tested", {}).update(n["coraza_tested"])
+          json.dump(m, open(sys.argv[1], "w"), indent=2); open(sys.argv[1], "a").write("\n")
+          PY
+            python3 -I -c 'import json; m=json.load(open("'"$REL"'/manifest.json")); json.dump({"compatible_shield": m["compatible_shield"], "incompatible_shield": m["incompatible_shield"], "coraza_tested": m["coraza_tested"]}, open("compat.json","w"))'
+            (cd "$REL" && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS && gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS)
+            # The tarball is never re-uploaded: its sha256 must stay what every edge verified.
+            python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir "$REL" --repo "$GITHUB_REPOSITORY" --tag "$TAG" --compat compat.json --manifest "$REL/manifest.json" --out entry.json
+            python3 -I -c 'import json; e=json.load(open("entry.json")); old=[x for x in json.load(open("index.json"))["crs_releases"] if x["version"]=="'"$VERSION"'"][0]; a={f["name"]:f["sha256"] for f in e["files"]}; b={f["name"]:f["sha256"] for f in old["files"]}; assert a["crs-bundle-'"$VERSION"'.tar.gz"]==b["crs-bundle-'"$VERSION"'.tar.gz"], "tarball sha changed"'
+            gh release upload "$TAG" "$REL/manifest.json" "$REL/SHA256SUMS" "$REL/SHA256SUMS.asc" --clobber
+            python3 -I tools/index-upsert.py --key crs_releases --entry entry.json
+            changed=1
+          done
+          rm -rf "$GNUPGHOME"
+          python3 -I tools/index-upsert.py --check
+          echo "changed=$changed" >> "$GITHUB_ENV"
+
+      - name: Commit and push index.json
+        if: env.changed == '1'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add index.json
+          git commit -m "CRS bundles: shield compatibility retest" || exit 0
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
+            sleep $((RANDOM % 5 + 1))
+          done
+          exit 1
+
+  deploy:
+    needs: [build, retest]
+    if: always() && (needs.build.result == 'success' || needs.retest.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - name: Sign index.json
+        uses: ./.github/actions/sign-index
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: '.'
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -339,3 +339,16 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+      # The shield binary rides inside this release, so a new shield is only
+      # "published" once this index is live: tell build-crs-bundle.yml to
+      # re-prove every CRS bundle against it (its daily cron would otherwise
+      # catch up within a day). The default GITHUB_TOKEN cannot start another
+      # workflow run, hence the PAT.
+      - name: Re-prove the CRS bundles against the new shield
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=shield-released \
+            || echo "::warning::could not dispatch shield-released; the daily CRS job will re-prove the bundles"

@@ -1,0 +1,40 @@
+# Proves tools/build-crs-bundle.py on every change: the bundle it builds from
+# an upstream CRS release is byte-equal to the coraza-coreruleset Go module
+# (what elchi-shield embeds), the manifest describes the tree exactly, two
+# builds give one sha256, a real shield binary compiles the bundle, a broken
+# one is recorded incompatible, and the index entry passes index-upsert --check.
+name: Check CRS tools
+
+on:
+  pull_request:
+    paths:
+      - 'tools/build-crs-bundle.py'
+      - 'tools/crs-test.sh'
+      - '.github/workflows/build-crs-bundle.yml'
+      - '.github/workflows/check-crs-tools.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/build-crs-bundle.py'
+      - 'tools/crs-test.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crs-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout elchi-shield (module pin + a shield build for the compat step)
+        uses: actions/checkout@v5
+        with:
+          repository: CloudNativeWorks/elchi-shield
+          token: ${{ secrets.GH_PAT }}
+          path: elchi-shield
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: elchi-shield/go.mod
+      - name: Run the proof
+        run: SHIELD_DIR="$PWD/elchi-shield" bash tools/crs-test.sh all
