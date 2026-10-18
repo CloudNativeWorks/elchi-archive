@@ -123,6 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 1
+      fail-fast: false
       matrix:
         version: ${{ fromJson(needs.discover.outputs.versions) }}
     steps:
@@ -224,14 +225,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Commit and push index.json
+        env:
+          VERSION: ${{ matrix.version }}
         run: |
+          set -euo pipefail
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add index.json
-          git commit -m "Add CRS bundle ${{ matrix.version }}" || exit 0
+          # Every matrix job starts from the run's commit while its siblings
+          # push their own entries in between, so a commit made here and
+          # rebased conflicts on index.json (run 7266841 lost v4.25.1 that
+          # way). Instead: take the branch tip, re-apply this entry on it
+          # (index-upsert is idempotent), push; on a rejected push repeat.
+          BR="${GITHUB_REF_NAME:-main}"
           for i in 1 2 3 4 5; do
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
-            echo "Push rejected (attempt $i/5), retrying after rebase..."
+            git fetch -q origin "$BR"
+            git reset -q --hard "origin/$BR"
+            python3 -I tools/index-upsert.py --key crs_releases --entry entry.json
+            python3 -I tools/index-upsert.py --check
+            git add index.json
+            if git diff --cached --quiet; then echo "index.json already carries $VERSION"; exit 0; fi
+            git commit -q -m "Add CRS bundle $VERSION"
+            git push origin "HEAD:$BR" && exit 0
+            echo "Push rejected (attempt $i/5), retrying on the new tip..."
             sleep $((RANDOM % 5 + 1))
           done
           echo "Failed to push after 5 attempts" >&2
@@ -297,10 +312,11 @@ jobs:
             python3 -I -c 'import json; m=json.load(open("'"$REL"'/manifest.json")); json.dump({"compatible_shield": m["compatible_shield"], "incompatible_shield": m["incompatible_shield"], "coraza_tested": m["coraza_tested"]}, open("compat.json","w"))'
             (cd "$REL" && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS && gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS)
             # The tarball is never re-uploaded: its sha256 must stay what every edge verified.
-            python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir "$REL" --repo "$GITHUB_REPOSITORY" --tag "$TAG" --compat compat.json --manifest "$REL/manifest.json" --out entry.json
-            python3 -I -c 'import json; e=json.load(open("entry.json")); old=[x for x in json.load(open("index.json"))["crs_releases"] if x["version"]=="'"$VERSION"'"][0]; a={f["name"]:f["sha256"] for f in e["files"]}; b={f["name"]:f["sha256"] for f in old["files"]}; assert a["crs-bundle-'"$VERSION"'.tar.gz"]==b["crs-bundle-'"$VERSION"'.tar.gz"], "tarball sha changed"'
+            mkdir -p entries
+            python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir "$REL" --repo "$GITHUB_REPOSITORY" --tag "$TAG" --compat compat.json --manifest "$REL/manifest.json" --out "entries/$VERSION.json"
+            python3 -I -c 'import json; e=json.load(open("entries/'"$VERSION"'.json")); old=[x for x in json.load(open("index.json"))["crs_releases"] if x["version"]=="'"$VERSION"'"][0]; a={f["name"]:f["sha256"] for f in e["files"]}; b={f["name"]:f["sha256"] for f in old["files"]}; assert a["crs-bundle-'"$VERSION"'.tar.gz"]==b["crs-bundle-'"$VERSION"'.tar.gz"], "tarball sha changed"'
             gh release upload "$TAG" "$REL/manifest.json" "$REL/SHA256SUMS" "$REL/SHA256SUMS.asc" --clobber
-            python3 -I tools/index-upsert.py --key crs_releases --entry entry.json
+            python3 -I tools/index-upsert.py --key crs_releases --entry "entries/$VERSION.json"
             changed=1
           done
           rm -rf "$GNUPGHOME"
@@ -310,12 +326,22 @@ jobs:
       - name: Commit and push index.json
         if: env.changed == '1'
         run: |
+          set -euo pipefail
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add index.json
-          git commit -m "CRS bundles: shield compatibility retest" || exit 0
+          # Same as the build job: a build of a new version may push while
+          # this runs, so the retested entries are re-applied on the tip.
+          BR="${GITHUB_REF_NAME:-main}"
           for i in 1 2 3 4 5; do
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME:-main}" && git push && exit 0
+            git fetch -q origin "$BR"
+            git reset -q --hard "origin/$BR"
+            for e in entries/*.json; do python3 -I tools/index-upsert.py --key crs_releases --entry "$e"; done
+            python3 -I tools/index-upsert.py --check
+            git add index.json
+            if git diff --cached --quiet; then echo "index.json already up to date"; exit 0; fi
+            git commit -q -m "CRS bundles: shield compatibility retest"
+            git push origin "HEAD:$BR" && exit 0
+            echo "Push rejected (attempt $i/5), retrying on the new tip..."
             sleep $((RANDOM % 5 + 1))
           done
           exit 1
