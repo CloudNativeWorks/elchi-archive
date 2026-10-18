@@ -2444,6 +2444,59 @@
   ],
   "crs_releases": [
     {
+      "version": "v4.29.0",
+      "date": "2026-10-18T17:41:36Z",
+      "built_from": {
+        "tag": "v4.29.0",
+        "commit": "c4b534fe57d772cbf84959c5ae4e7daab7d2020e"
+      },
+      "compatible_shield": [
+        "v1.0.0"
+      ],
+      "incompatible_shield": [],
+      "coraza_tested": {
+        "v1.0.0": "v3.8.1"
+      },
+      "files": [
+        {
+          "name": "SHA256SUMS",
+          "type": "checksums",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/SHA256SUMS",
+          "sha256": "4e9e9e82850786370989165e93c968be0457458545154304f18de49c7806aedf"
+        },
+        {
+          "name": "SHA256SUMS.asc",
+          "type": "signature",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/SHA256SUMS.asc",
+          "sha256": "63c8feb8a779d63c31e528fdf5fc66ce6186500b70063fee0443780e6d2399a6"
+        },
+        {
+          "name": "crs-bundle-v4.29.0.tar.gz",
+          "type": "bundle",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/crs-bundle-v4.29.0.tar.gz",
+          "sha256": "9b24df753e1b0307c2a03a9e1a546ca2a54b9f70d48808e04c895488bd768489"
+        },
+        {
+          "name": "crs_rules_coreruleset_v4.29.0.json",
+          "type": "library",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/crs_rules_coreruleset_v4.29.0.json",
+          "sha256": "4a58c155471ef5212e1a785c19e166acff8947763421d6ecf7971f289862e54d"
+        },
+        {
+          "name": "crs_rules_coreruleset_v4.29.0_metadata.json",
+          "type": "library_metadata",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/crs_rules_coreruleset_v4.29.0_metadata.json",
+          "sha256": "3bc5853289ab5287e1655361ef537dd1b51eee995573cac682e2cc813c198b6a"
+        },
+        {
+          "name": "manifest.json",
+          "type": "manifest",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/manifest.json",
+          "sha256": "5090328d5941033189fd245f885d5f79a872b14a5b56b1b249767fbb5d55749c"
+        }
+      ]
+    },
+    {
       "version": "v4.28.0",
       "date": "2026-10-18T17:41:22Z",
       "built_from": {
