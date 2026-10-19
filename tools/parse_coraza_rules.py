@@ -313,8 +313,9 @@ class ModSecurityRuleParser:
                         result['description'] = '\n'.join([c.strip() for c in comments[i+1:] if c.strip()])
                     break
 
-        # Deduplicate references
-        result['references'] = list(set(result['references']))
+        # Deduplicate references — sorted, so two parses of one rule set
+        # produce identical JSON (a set's order is not stable across runs).
+        result['references'] = sorted(set(result['references']))
 
         return result
 

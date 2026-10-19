@@ -100,6 +100,16 @@ def check(index):
         want_versions = [e.get("version") for e in want]
         if versions != want_versions:
             problems.append(f"{key}: not newest-first — is {versions[:4]}…, want {want_versions[:4]}…")
+        if key == "crs_releases":
+            # A published bundle must carry the fingerprint edges are compared
+            # against (sha256 of the manifest.json inside the tar); without it
+            # the control plane can only report "unverified".
+            for e in lst:
+                if not any(f.get("type") == "bundle" for f in e.get("files", [])):
+                    continue
+                sha = e.get("bundle_manifest_sha256") or ""
+                if not re.fullmatch(r"[0-9a-f]{64}", sha):
+                    problems.append(f"{key}: {e.get('version')} has no 64-hex bundle_manifest_sha256")
     return problems
 
 

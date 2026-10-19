@@ -2537,6 +2537,7 @@
         "tag": "v4.30.0",
         "commit": "0e6e598a818c613cec4e13d3ecf16b19af6a002f"
       },
+      "bundle_manifest_sha256": "d196930df282e4dfb3e425942e69cf5dc334a324631328d601af099a42ab0bec",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2590,6 +2591,7 @@
         "tag": "v4.29.0",
         "commit": "c4b534fe57d772cbf84959c5ae4e7daab7d2020e"
       },
+      "bundle_manifest_sha256": "47058f478e3024d3b7cbe566d83b26ac69209e110a69b59667937d988a5bee7c",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2643,6 +2645,7 @@
         "tag": "v4.28.0",
         "commit": "5d2bd9a1ad7e607813f9e19cc73fa44dd5dd2ceb"
       },
+      "bundle_manifest_sha256": "c3d6cd220d649d49ef20ae1ab257399a64cae6aa7a86f4150e6ebcb6a29dd6c9",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2696,6 +2699,7 @@
         "tag": "v4.27.0",
         "commit": "f40767c78658d69dc1158e32bfbcfd1ea3bc69ca"
       },
+      "bundle_manifest_sha256": "eb5a79369041a26347e5d93543bef0d3fc02fa892ca595758cd7ec54fcc1705b",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2749,6 +2753,7 @@
         "tag": "v4.26.0",
         "commit": "c9de82e285400d98604b618bf5e310da54714b57"
       },
+      "bundle_manifest_sha256": "7fce737dfcd2501353437ab4685d3fc379ed119968b92b75af2c771528e7eefd",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2802,6 +2807,7 @@
         "tag": "v4.25.2",
         "commit": "89e969123cd14ed1cdb68c49735145d48ebcb931"
       },
+      "bundle_manifest_sha256": "71846334bf8529033060426ae429aba6e9344f77ce3ec979ef390a87bf3e33f2",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2855,6 +2861,7 @@
         "tag": "v4.25.1",
         "commit": "85d2ebd0beeea0b422a4c9cadba85a05dd7955eb"
       },
+      "bundle_manifest_sha256": "59375466b29784585e440b178c5f29a6beca7f3a13545eaad10f8c1eb760bb73",
       "compatible_shield": [
         "v1.0.0"
       ],
@@ -2908,6 +2915,7 @@
         "tag": "v4.25.0",
         "commit": "d334352f47ad312d8a9f8ae2e42b2f13a108d2c7"
       },
+      "bundle_manifest_sha256": "04e05d1f3e7b8e45fe42096f73dbe6e59f091e9f5a578bc57023f02190042f1e",
       "compatible_shield": [
         "v1.0.0"
       ],

@@ -71,6 +71,22 @@ def sha256_file(p):
     return h.hexdigest()
 
 
+def tar_manifest_sha(tar_path):
+    """sha256 of the manifest.json INSIDE the bundle tar: the fingerprint an
+    edge reports for the bundle it runs (elchi-shield /configz
+    crs_manifest_sha256 hashes exactly these bytes). It is stable for the
+    life of a version — the tar never changes — unlike the standalone
+    manifest.json asset, which gains compatibility fields on every retest."""
+    with tarfile.open(tar_path, "r:gz") as tar:
+        try:
+            member = tar.extractfile(MANIFEST)
+        except KeyError:
+            member = None
+        if member is None:
+            sys.exit(f"{tar_path}: no {MANIFEST} member")
+        return sha256_bytes(member.read())
+
+
 def strip_comments(data):
     """The module's filter: first 9 lines verbatim, then no blank/# lines.
     Works on bytes line by line like bufio.Scanner (lines end with \\n; the
@@ -163,6 +179,7 @@ def build(args):
     tar_path = os.path.join(args.out, f"crs-bundle-{version}.tar.gz")
     write_tar(tar_path, mbytes, files)
     print(json.dumps({"version": version, "bundle_dir": bdir, "tarball": tar_path, "sha256": sha256_file(tar_path),
+                      "manifest_sha256": sha256_bytes(mbytes),
                       "files": len(files), "source": source}))
 
 
@@ -210,7 +227,8 @@ def derive(args):
         f.write(mbytes)
     tar_path = os.path.join(args.out, f"crs-bundle-{version}.tar.gz")
     write_tar(tar_path, mbytes, files)
-    print(json.dumps({"version": version, "bundle_dir": bdir, "tarball": tar_path, "sha256": sha256_file(tar_path), "files": len(files)}))
+    print(json.dumps({"version": version, "bundle_dir": bdir, "tarball": tar_path, "sha256": sha256_file(tar_path),
+                      "manifest_sha256": sha256_bytes(mbytes), "files": len(files)}))
 
 
 def write_tar(tar_path, mbytes, files):
@@ -278,10 +296,17 @@ def entry(args):
     version = args.crs_version
     compat_data = json.load(open(args.compat))
     bundle_manifest = json.load(open(args.manifest))
+    # The bundle is the one mandatory asset: its in-tar manifest is the
+    # fingerprint every edge is compared against (crs_releases[].bundle_manifest_sha256).
+    tar_path = os.path.join(args.release_dir, f"crs-bundle-{version}.tar.gz")
+    if not os.path.isfile(tar_path):
+        sys.exit(f"{tar_path}: the bundle tarball is missing; an entry without it would publish nothing an edge can verify")
+    bundle_manifest_sha = tar_manifest_sha(tar_path)
     standalone = dict(bundle_manifest)
     standalone["compatible_shield"] = compat_data.get("compatible_shield", [])
     standalone["incompatible_shield"] = compat_data.get("incompatible_shield", [])
     standalone["coraza_tested"] = compat_data.get("coraza_tested", {})
+    standalone["bundle_manifest_sha256"] = bundle_manifest_sha
     with open(os.path.join(args.release_dir, MANIFEST), "w") as f:
         json.dump(standalone, f, indent=2)
         f.write("\n")
@@ -308,6 +333,7 @@ def entry(args):
         "version": version,
         "date": args.date or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "built_from": bundle_manifest.get("built_from", {}),
+        "bundle_manifest_sha256": bundle_manifest_sha,
         "compatible_shield": standalone["compatible_shield"],
         "incompatible_shield": standalone["incompatible_shield"],
         "coraza_tested": standalone["coraza_tested"],

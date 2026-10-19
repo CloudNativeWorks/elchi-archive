@@ -10,6 +10,9 @@ on:
     paths:
       - 'tools/build-crs-bundle.py'
       - 'tools/crs-test.sh'
+      - 'tools/crs-retest.sh'
+      - 'tools/index-upsert.py'
+      - 'tools/parse_coraza_rules.py'
       - '.github/workflows/build-crs-bundle.yml'
       - '.github/workflows/check-crs-tools.yml'
   push:
@@ -17,6 +20,9 @@ on:
     paths:
       - 'tools/build-crs-bundle.py'
       - 'tools/crs-test.sh'
+      - 'tools/crs-retest.sh'
+      - 'tools/index-upsert.py'
+      - 'tools/parse_coraza_rules.py'
   workflow_dispatch:
 
 permissions:

@@ -8,6 +8,7 @@
 #   tools/crs-test.sh compat              # A-04: a real shield compiles it; a broken bundle is recorded incompatible
 #   tools/crs-test.sh library             # A-05: the backend parser reads the bundle
 #   tools/crs-test.sh entry               # A-07: index entry + index-upsert --check on a scratch copy
+#   tools/crs-test.sh backfill            # A-08: crs-retest.sh backfills bundle_manifest_sha256 (noop after)
 #
 # Needs: python3, go (for the module cache + a shield build), the sibling
 # elchi-shield checkout (SHIELD_DIR), network for the upstream zip (cached in
@@ -80,6 +81,17 @@ for f in m["files"]:
 init = open(os.path.join(d, "rules/@owasp_crs/REQUEST-901-INITIALIZATION.conf")).read()
 assert f'SecComponentSignature "OWASP_CRS/{ver[1:]}"' in init
 assert not any(p.endswith("@coraza.conf-recommended") for p in paths)
+PY
+  # The fingerprint an edge reports (elchi-shield hashes the manifest bytes it
+  # loads) is the sha256 of the manifest INSIDE the tar, and it equals the
+  # tree's manifest.json byte for byte.
+  python3 -I - "$out" "$CRS_VERSION" <<'PY' && ok "in-tar manifest.json sha256 == tree manifest.json sha256 (the edge fingerprint)" || bad "in-tar manifest differs from the tree's"
+import hashlib, os, sys, tarfile
+out, ver = sys.argv[1], sys.argv[2]
+with tarfile.open(os.path.join(out, f"crs-bundle-{ver}.tar.gz"), "r:gz") as t:
+    intar = hashlib.sha256(t.extractfile("manifest.json").read()).hexdigest()
+ondisk = hashlib.sha256(open(os.path.join(out, ver, "manifest.json"), "rb").read()).hexdigest()
+assert intar == ondisk, (intar, ondisk)
 PY
 }
 
@@ -163,11 +175,71 @@ for f in e["files"]:
 m = json.load(open(os.path.join(rel, "manifest.json")))
 assert m["compatible_shield"] == ["v0.6.0"] and m["crs_version"] == ver and m["files"]
 PY
+  # bundle_manifest_sha256: the in-tar manifest's sha — present, 64 hex, equal
+  # on the entry and the standalone manifest, and NOT the standalone asset's
+  # own sha (that one carries the compatibility fields and changes on retest).
+  python3 -I - "$WORK/entry.json" "$rel" "$CRS_VERSION" <<'PY' && ok "entry carries bundle_manifest_sha256 = in-tar manifest sha (≠ standalone manifest asset sha)" || bad "bundle_manifest_sha256 check failed"
+import hashlib, json, os, re, sys, tarfile
+e = json.load(open(sys.argv[1])); rel = sys.argv[2]; ver = sys.argv[3]
+with tarfile.open(os.path.join(rel, f"crs-bundle-{ver}.tar.gz"), "r:gz") as t:
+    intar = hashlib.sha256(t.extractfile("manifest.json").read()).hexdigest()
+got = e.get("bundle_manifest_sha256")
+assert got == intar and re.fullmatch(r"[0-9a-f]{64}", got), (got, intar)
+m = json.load(open(os.path.join(rel, "manifest.json")))
+assert m.get("bundle_manifest_sha256") == intar, m.get("bundle_manifest_sha256")
+standalone_sha = {f["name"]: f["sha256"] for f in e["files"]}["manifest.json"]
+assert standalone_sha != intar, "standalone manifest asset must differ from the in-tar manifest (it carries compat fields)"
+PY
+  # Without the tarball there is nothing an edge can verify: entry refuses.
+  mkdir -p "$WORK/notar" && cp "$rel/crs_rules_coreruleset_$CRS_VERSION.json" "$WORK/notar/"
+  builder entry --crs-version "$CRS_VERSION" --release-dir "$WORK/notar" --repo CloudNativeWorks/elchi-archive --tag "crs-$CRS_VERSION" --compat "$WORK/compat.json" --manifest "$out/$CRS_VERSION/manifest.json" --out "$WORK/notar.json" >/dev/null 2>&1 && bad "entry accepted a release dir without the tarball" || ok "entry refuses a release dir without the tarball"
   # The entry merges into a scratch copy of index.json and passes the checker.
   mkdir -p "$WORK/idx" && cp "$HERE/index.json" "$WORK/idx/index.json" && cp "$HERE/tools/index-upsert.py" "$WORK/idx/"
   (cd "$WORK/idx" && python3 -I index-upsert.py --key crs_releases --entry "$WORK/entry.json" >/dev/null && python3 -I index-upsert.py --check >/dev/null) && ok "index-upsert: crs_releases entry merges and --check passes" || bad "index-upsert"
+  # An entry whose fingerprint is missing fails --check (a published bundle
+  # without one leaves every edge "unverified").
+  python3 -I -c 'import json; e=json.load(open("'"$WORK"'/entry.json")); e.pop("bundle_manifest_sha256"); json.dump(e, open("'"$WORK"'/entry-nosha.json","w"))'
+  (cd "$WORK/idx" && python3 -I index-upsert.py --key crs_releases --entry "$WORK/entry-nosha.json" >/dev/null; python3 -I index-upsert.py --check >/dev/null 2>&1) && bad "--check accepted an entry without bundle_manifest_sha256" || ok "--check refuses an entry without bundle_manifest_sha256"
+  (cd "$WORK/idx" && python3 -I index-upsert.py --key crs_releases --entry "$WORK/entry.json" >/dev/null)
   # A second upsert of the same version replaces, never duplicates.
   (cd "$WORK/idx" && python3 -I index-upsert.py --key crs_releases --entry "$WORK/entry.json" >/dev/null && python3 -I -c 'import json; d=json.load(open("index.json")); vs=[e["version"] for e in d["crs_releases"]]; assert vs.count("'"$CRS_VERSION"'")==1, vs') && ok "re-upsert replaces the entry" || bad "re-upsert duplicated"
+}
+
+step_backfill(){
+  echo "== backfill: tools/crs-retest.sh adds bundle_manifest_sha256 to an entry that lacks it (A-08) =="
+  local out rel root idx; out="$WORK/bf"; build_once "$out" >/dev/null
+  rel="$WORK/bf-release"; root="$WORK/bf-root"; idx="$WORK/bf-idx"; mkdir -p "$rel" "$root" "$idx" "$WORK/bf-shields"
+  cp "$out/crs-bundle-$CRS_VERSION.tar.gz" "$rel/"
+  echo '[]' > "$rel/crs_rules_coreruleset_$CRS_VERSION.json"; echo '{}' > "$rel/crs_rules_coreruleset_${CRS_VERSION}_metadata.json"
+  # A published release as the retest finds it: standalone manifest with the
+  # compat fields, an index entry WITHOUT the fingerprint and with its own date.
+  python3 -I - "$out/$CRS_VERSION/manifest.json" "$rel/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1])); m["compatible_shield"] = ["v1.0.0"]; m["incompatible_shield"] = []; m["coraza_tested"] = {"v1.0.0": "v3.8.1"}
+json.dump(m, open(sys.argv[2], "w"), indent=2); open(sys.argv[2], "a").write("\n")
+PY
+  echo '{"compatible_shield":["v1.0.0"],"incompatible_shield":[],"coraza_tested":{"v1.0.0":"v3.8.1"}}' > "$WORK/bf-compat.json"
+  (cd "$rel" && shasum -a 256 crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS && cp SHA256SUMS SHA256SUMS.asc)
+  builder entry --crs-version "$CRS_VERSION" --release-dir "$rel" --repo CloudNativeWorks/elchi-archive --tag "crs-$CRS_VERSION" --compat "$WORK/bf-compat.json" --manifest "$out/$CRS_VERSION/manifest.json" --out "$WORK/bf-entry.json" --date 2025-12-24T00:00:00Z >/dev/null
+  python3 -I -c 'import json; e=json.load(open("'"$WORK"'/bf-entry.json")); e.pop("bundle_manifest_sha256"); json.dump({"crs_releases":[e]}, open("'"$idx"'/index.json","w"), indent=2)'
+  local res
+  res=$(cd "$idx" && bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$WORK/bf-shields" index.json entries) || { bad "crs-retest.sh backfill run: $res"; return; }
+  [[ $res == *"mode=backfill"* ]] && ok "retest on a complete matrix without the fingerprint runs in backfill mode" || bad "mode: $res"
+  python3 -I - "$idx/entries/$CRS_VERSION.json" "$idx/index.json" "$rel" "$CRS_VERSION" <<'PY' && ok "backfill: fingerprint added, date and tarball sha unchanged, compat untouched, nothing to upload" || bad "backfill entry check"
+import hashlib, json, os, sys, tarfile
+e = json.load(open(sys.argv[1])); old = json.load(open(sys.argv[2]))["crs_releases"][0]; rel = sys.argv[3]; ver = sys.argv[4]
+with tarfile.open(os.path.join(rel, f"crs-bundle-{ver}.tar.gz"), "r:gz") as t:
+    intar = hashlib.sha256(t.extractfile("manifest.json").read()).hexdigest()
+assert e["bundle_manifest_sha256"] == intar
+assert e["date"] == old["date"] == "2025-12-24T00:00:00Z"
+a = {f["name"]: f["sha256"] for f in e["files"]}; b = {f["name"]: f["sha256"] for f in old["files"]}
+assert a[f"crs-bundle-{ver}.tar.gz"] == b[f"crs-bundle-{ver}.tar.gz"]
+assert e["compatible_shield"] == ["v1.0.0"] and e["coraza_tested"] == {"v1.0.0": "v3.8.1"}
+PY
+  [[ $res != *"upload="* ]] && ok "backfill uploads nothing" || bad "backfill wanted to upload: $res"
+  # With the fingerprint present and the matrix complete: noop.
+  (cd "$idx" && python3 -I "$HERE/tools/index-upsert.py" --key crs_releases --entry "entries/$CRS_VERSION.json" >/dev/null)
+  res=$(cd "$idx" && bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$WORK/bf-shields" index.json entries) && [[ $res == *"mode=noop"* ]] && ok "second run is a noop" || bad "second run: $res"
 }
 
 case "${1:-all}" in
@@ -177,8 +249,9 @@ case "${1:-all}" in
   compat) step_compat;;
   library) step_library;;
   entry) step_entry;;
-  all) step_equiv; step_manifest; step_determinism; step_compat; step_library; step_entry;;
-  *) echo "usage: $0 {all|equiv|manifest|determinism|compat|library|entry}" >&2; exit 2;;
+  backfill) step_backfill;;
+  all) step_equiv; step_manifest; step_determinism; step_compat; step_library; step_entry; step_backfill;;
+  *) echo "usage: $0 {all|equiv|manifest|determinism|compat|library|entry|backfill}" >&2; exit 2;;
 esac
 echo "RESULT: $pass passed, $fail failed"
 [[ $fail == 0 ]]

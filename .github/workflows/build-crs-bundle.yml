@@ -285,37 +285,22 @@ jobs:
           changed=0
           for VERSION in $(python3 -I -c 'import json; [print(e["version"]) for e in json.load(open("index.json")).get("crs_releases", [])]'); do
             TAG="crs-$VERSION"; REL="retest/$VERSION/release"; ROOT="retest/$VERSION/root"
-            rm -rf "retest/$VERSION"; mkdir -p "$REL" "$ROOT/$VERSION"
+            rm -rf "retest/$VERSION"; mkdir -p "$REL" "$ROOT"
             gh release download "$TAG" --dir "$REL" --clobber
             (cd "$REL" && gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum -c --quiet SHA256SUMS)
-            tar -xzf "$REL/crs-bundle-$VERSION.tar.gz" -C "$ROOT/$VERSION"
-            # Only shields the manifest has no verdict for yet.
-            python3 -I - "$REL/manifest.json" shields > todo.txt <<'PY'
-          import json, os, sys
-          m = json.load(open(sys.argv[1]))
-          done = set(m.get("compatible_shield", [])) | {i["shield"] for i in m.get("incompatible_shield", [])}
-          for b in sorted(os.listdir(sys.argv[2])):
-              if b not in done:
-                  print(b)
-          PY
-            [[ -s todo.txt ]] || { echo "$VERSION: matrix complete"; continue; }
-            args=(); while read -r b; do args+=(--shield "$b=shields/$b"); done < todo.txt
-            python3 -I tools/build-crs-bundle.py compat --bundle-root "$ROOT" --crs-version "$VERSION" "${args[@]}" > new.json
-            python3 -I - "$REL/manifest.json" new.json <<'PY'
-          import json, sys
-          m = json.load(open(sys.argv[1])); n = json.load(open(sys.argv[2]))
-          m["compatible_shield"] = sorted(set(m.get("compatible_shield", [])) | set(n["compatible_shield"]))
-          m["incompatible_shield"] = m.get("incompatible_shield", []) + n["incompatible_shield"]
-          m.setdefault("coraza_tested", {}).update(n["coraza_tested"])
-          json.dump(m, open(sys.argv[1], "w"), indent=2); open(sys.argv[1], "a").write("\n")
-          PY
-            python3 -I -c 'import json; m=json.load(open("'"$REL"'/manifest.json")); json.dump({"compatible_shield": m["compatible_shield"], "incompatible_shield": m["incompatible_shield"], "coraza_tested": m["coraza_tested"]}, open("compat.json","w"))'
-            (cd "$REL" && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS && gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS)
-            # The tarball is never re-uploaded: its sha256 must stay what every edge verified.
-            mkdir -p entries
-            python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir "$REL" --repo "$GITHUB_REPOSITORY" --tag "$TAG" --compat compat.json --manifest "$REL/manifest.json" --out "entries/$VERSION.json"
-            python3 -I -c 'import json; e=json.load(open("entries/'"$VERSION"'.json")); old=[x for x in json.load(open("index.json"))["crs_releases"] if x["version"]=="'"$VERSION"'"][0]; a={f["name"]:f["sha256"] for f in e["files"]}; b={f["name"]:f["sha256"] for f in old["files"]}; assert a["crs-bundle-'"$VERSION"'.tar.gz"]==b["crs-bundle-'"$VERSION"'.tar.gz"], "tarball sha changed"'
-            gh release upload "$TAG" "$REL/manifest.json" "$REL/SHA256SUMS" "$REL/SHA256SUMS.asc" --clobber
+            # The per-version body lives in tools/crs-retest.sh (proven by
+            # tools/crs-test.sh): retest (new shields → matrix, re-sign,
+            # upload three assets), backfill (matrix complete but the entry
+            # lacks bundle_manifest_sha256 → entry only), or noop. The
+            # tarball is never re-uploaded: its sha256 must stay what every
+            # edge verified; the entry keeps the publish date.
+            bash tools/crs-retest.sh "$VERSION" "$REL" "$ROOT" shields index.json entries | tee "retest/$VERSION/out.txt"
+            mode=$(sed -n 's/^mode=//p' "retest/$VERSION/out.txt")
+            [[ $mode == noop ]] && { echo "$VERSION: matrix complete, fingerprint present"; continue; }
+            if [[ $mode == retest ]]; then
+              # shellcheck disable=SC2046
+              gh release upload "$TAG" $(sed -n 's/^upload=//p' "retest/$VERSION/out.txt") --clobber
+            fi
             python3 -I tools/index-upsert.py --key crs_releases --entry "entries/$VERSION.json"
             changed=1
           done
