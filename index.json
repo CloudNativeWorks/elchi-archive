@@ -137,6 +137,32 @@
   ],
   "elchi_client_releases": [
     {
+      "version": "v2.1.0",
+      "date": "2026-10-20T07:26:23Z",
+      "shield_version": "v1.0.0",
+      "files": [
+        {
+          "name": "elchi-client-linux-amd64",
+          "type": "binary",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-client-linux-amd64",
+          "sha256": "bbbff2d9514e8e98bb05ee98e8263bd803a3812ec8f26bf1b4e25964a765c3a2"
+        },
+        {
+          "name": "elchi-install.sh",
+          "type": "script",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-install.sh",
+          "sha256": "f0ce3ea83cd7a9b960c3c63cfda6dc1eb092e6f4b8974730418265e84c0387bf"
+        },
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield v1.0.0 (Envoy ext_proc WAF sidecar) bundled with this client release",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-shield-linux-amd64",
+          "sha256": "16d810ff5a7c2fbad3f2d774e1674c775cd46577c9cc3128d32f6d3f8a634cdf"
+        }
+      ]
+    },
+    {
       "version": "v2.0.0",
       "date": "2026-10-18T17:20:26Z",
       "shield_version": "v1.0.0",
@@ -691,13 +717,13 @@
   "elchi_shield_releases": [
     {
       "version": "v1.0.0",
-      "date": "2026-10-18T17:20:26Z",
+      "date": "2026-10-20T07:26:23Z",
       "files": [
         {
           "name": "elchi-shield-linux-amd64",
           "type": "binary",
-          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v2.0.0",
-          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.0.0/elchi-shield-linux-amd64",
+          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v2.1.0",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-shield-linux-amd64",
           "sha256": "16d810ff5a7c2fbad3f2d774e1674c775cd46577c9cc3128d32f6d3f8a634cdf"
         }
       ]
