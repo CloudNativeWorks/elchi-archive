@@ -138,8 +138,8 @@
   "elchi_client_releases": [
     {
       "version": "v2.1.0",
-      "date": "2026-10-20T17:17:55Z",
-      "shield_version": "v1.1.0",
+      "date": "2026-10-20T20:16:12Z",
+      "shield_version": "v1.2.0",
       "files": [
         {
           "name": "elchi-client-linux-amd64",
@@ -151,14 +151,14 @@
           "name": "elchi-install.sh",
           "type": "script",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-install.sh",
-          "sha256": "94cfefa4361a52470cef89f071f80678ab76b1d0db9f5095f45636e5e6af9c00"
+          "sha256": "d5d7ba55bd13e2bed80c7666b9c8b99f4f82f79b0f8d496d167688339afbb600"
         },
         {
           "name": "elchi-shield-linux-amd64",
           "type": "binary",
-          "description": "elchi-shield v1.1.0 (Envoy ext_proc WAF sidecar) bundled with this client release",
+          "description": "elchi-shield v1.2.0 (Envoy ext_proc WAF sidecar) bundled with this client release",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-shield-linux-amd64",
-          "sha256": "001d0cead6789d50965e485b6460c4c9fd67979ceebe8787228be48a63583723"
+          "sha256": "462553f9ab1de93336a60f466e3fa6feb4beb270d62f12265a68281a36e55a30"
         }
       ]
     },
@@ -716,15 +716,15 @@
   ],
   "elchi_shield_releases": [
     {
-      "version": "v1.1.0",
-      "date": "2026-10-20T17:17:55Z",
+      "version": "v1.2.0",
+      "date": "2026-10-20T20:16:12Z",
       "files": [
         {
           "name": "elchi-shield-linux-amd64",
           "type": "binary",
           "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v2.1.0",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.0/elchi-shield-linux-amd64",
-          "sha256": "001d0cead6789d50965e485b6460c4c9fd67979ceebe8787228be48a63583723"
+          "sha256": "462553f9ab1de93336a60f466e3fa6feb4beb270d62f12265a68281a36e55a30"
         }
       ]
     },
