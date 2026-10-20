@@ -222,20 +222,33 @@ and have no knob: **mongodb** (canonical major `8.0`), **clickhouse**
   any network-level ACLs / security groups remain the operator's
   responsibility.
 
-  > **elchi-shield audit → ClickHouse.** The `elchi-shield` sidecar runs on
-  > the **data-plane / edge hosts** (next to the client, never here on the
-  > control plane), but when its audit sink is enabled
-  > (`elchi-install.sh --shield-audit-dsn=…`) it writes audit events into this
-  > same ClickHouse, alongside the collector's `api_events` (this is why the
-  > `keep_free_space_bytes` disk guard mentions "shield audit"). Edge hosts are
-  > **not** part of this installer's `--nodes` topology, so the standalone
-  > firewall does **not** open `9000` to them. If you use shield audit you must,
-  > on your own: (1) make ClickHouse `9000` reachable from the edge hosts
-  > (firewall / security-group rule), and (2) ensure the DSN's ClickHouse user
-  > has `CREATE DATABASE` / `CREATE TABLE` / `INSERT` — shield auto-creates its
-  > `elchi_shield_audit` table on first connect. Shield's metrics push (OTLP)
-  > likewise targets an OTel Collector endpoint you provide via
-  > `--shield-metrics-otlp=`; it is not auto-wired from the control plane.
+  > **elchi-shield audit → ClickHouse (via Envoy `:19000`).** The
+  > `elchi-shield` sidecar runs on the **data-plane / edge hosts** (next to
+  > the client, never here on the control plane), but when its audit sink is
+  > enabled (`elchi-install.sh --shield-audit-dsn=…`) it writes audit events
+  > into this same ClickHouse, alongside the collector's `api_events` (this is
+  > why the `keep_free_space_bytes` disk guard mentions "shield audit"). Edge
+  > hosts are not cluster members, and on a single VM ClickHouse listens on
+  > loopback only — so every node's Envoy carries a **plain TCP proxy on
+  > `0.0.0.0:19000`** to the ClickHouse native port (127.0.0.1 on a single
+  > VM; the ClickHouse node(s) by hostname, round-robin across the 3 replicas,
+  > on 2+ VMs). Point the edge at any node:
+  >
+  > ```
+  > --shield-audit-dsn='clickhouse://elchi:<password>@<any-node>:19000/elchi'
+  > ```
+  >
+  > (`elchi-stack show-secret clickhouse` prints the password.) The proxy is
+  > not TLS — keep `:19000` on a trusted network. It exists only when
+  > ClickHouse is local (off for `--no-collector` / `--clickhouse=external`),
+  > and the installer opens `19000` on an active ufw / firewalld regardless of
+  > cluster size; network ACLs / security groups between the edges and the
+  > nodes remain yours. Re-running `install.sh` (or `elchi-stack
+  > reload-envoy`) adds it to an existing install. Shield auto-creates its
+  > `elchi_shield_audit` table on first connect, so the DSN's user needs
+  > `CREATE TABLE` / `INSERT` (the installer's `elchi` user has them).
+  > Shield's metrics push (OTLP) is separate: it targets an OTel Collector
+  > endpoint you provide via `--shield-metrics-otlp=`.
 
 ### Optional, every node
 

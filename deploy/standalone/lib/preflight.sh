@@ -671,6 +671,9 @@ preflight::check_basic_ports() {
   preflight::check_port "${ELCHI_PORT_ENVOY_INTERNAL:-8080}"    "envoy-internal"
   preflight::check_port "${ELCHI_PORT_NGINX_UI:-8081}"          "nginx-ui"
   preflight::check_port "${ELCHI_PORT_ENVOY_ADMIN:-9901}"       "envoy-admin"
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] && [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ]; then
+    preflight::check_port "${ELCHI_PORT_CLICKHOUSE_PROXY:-19000}" "envoy-clickhouse"
+  fi
   preflight::check_port "${ELCHI_PORT_REGISTRY_GRPC:-1870}"     "registry-grpc"
   preflight::check_port "${ELCHI_PORT_REGISTRY_METRICS:-9091}"  "registry-metrics"
 }

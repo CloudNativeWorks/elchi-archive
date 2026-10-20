@@ -12,6 +12,14 @@
 #       - this is what Helm's `ELCHI_INTERNAL_ADDRESS_PORT` and the CoreDNS
 #         GSLB plugin's `endpoint http://envoy-service:8080` connect to
 #         (backend's internal-to-internal calls must NOT cross TLS)
+#   * One CLICKHOUSE listener (0.0.0.0:${ELCHI_PORT_CLICKHOUSE_PROXY}, fixed 19000)
+#       - plain tcp_proxy to the ClickHouse native port — no TLS, no HTTP
+#       - only when the cluster runs a LOCAL ClickHouse (topology
+#         `runs_clickhouse: true`; off for --no-collector / --clickhouse=external)
+#       - the endpoint edge hosts give elchi-shield's audit DSN
+#         (clickhouse://user:pass@<any node>:19000/elchi): on a single VM
+#         ClickHouse listens on loopback only, so without this proxy
+#         the edge has no way in
 #   * Cluster set is identical for both listeners — concrete host:port
 #     tuples from /etc/elchi/ports.full.json. Same on every node so the
 #     registry's ext_proc routing decisions reference cluster names that
@@ -131,6 +139,10 @@ EOF
     || die "envoy did not come up on :${ELCHI_PORT:-443}"
   wait_for_tcp 127.0.0.1 "${ELCHI_PORT_ENVOY_INTERNAL}" 30 \
     || die "envoy internal listener did not come up on :${ELCHI_PORT_ENVOY_INTERNAL}"
+  if [ -n "$(topology::clickhouse_hostnames)" ]; then
+    wait_for_tcp 127.0.0.1 "${ELCHI_PORT_CLICKHOUSE_PROXY}" 30 \
+      || die "envoy clickhouse listener did not come up on :${ELCHI_PORT_CLICKHOUSE_PROXY}"
+  fi
   log::ok "Envoy running on :${ELCHI_PORT:-443} (public) + 127.0.0.1:${ELCHI_PORT_ENVOY_INTERNAL} (internal)"
 }
 
@@ -167,6 +179,11 @@ envoy::render_bootstrap() {
     die "topology hostnames (${#hostnames[@]}) don't match host count (${#hosts[@]}) — re-run install"
   fi
 
+  # ClickHouse nodes, from topology (not from the ELCHI_* flags) so
+  # `elchi-stack reload-envoy` renders the same proxy an install does.
+  local -a ch_hostnames
+  mapfile -t ch_hostnames < <(topology::clickhouse_hostnames)
+
   local out="${ENVOY_CONFIG}.tmp"
   : > "$out"
 
@@ -184,9 +201,15 @@ envoy::render_bootstrap() {
 
   envoy::_emit_listener_public "$port" "${variants[@]}" >> "$out"
   envoy::_emit_listener_internal "${variants[@]}" >> "$out"
+  if [ "${#ch_hostnames[@]}" -gt 0 ]; then
+    envoy::_emit_listener_clickhouse >> "$out"
+  fi
 
   envoy::_emit_clusters \
     "${hosts[@]/#/host:}" "--names" "${hostnames[@]/#/name:}" "--variants" "${variants[@]}" >> "$out"
+  if [ "${#ch_hostnames[@]}" -gt 0 ]; then
+    envoy::_emit_cluster_clickhouse "${#hosts[@]}" "${ch_hostnames[@]}" >> "$out"
+  fi
 
   envoy::_emit_admin >> "$out"
 
@@ -879,6 +902,86 @@ EOF
               socket_address: {address: 127.0.0.1, port_value: ${ELCHI_PORT_COLLECTOR_GRPC}}
 EOF
   fi
+}
+
+# ----- ClickHouse proxy (plain TCP) --------------------------------------
+# Edge hosts (elchi-shield audit sink) are not cluster members, and a
+# single-VM ClickHouse listens on loopback only — so they reach
+# ClickHouse through this listener instead of :9000. Plain tcp_proxy:
+# the native protocol passes through untouched, the DSN only changes
+# its port.
+envoy::_emit_listener_clickhouse() {
+  cat <<EOF
+  - name: listener_clickhouse
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: ${ELCHI_PORT_CLICKHOUSE_PROXY}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: clickhouse_proxy
+          cluster: clickhouse-cluster
+          max_connect_attempts: 3
+EOF
+}
+
+# envoy::_emit_cluster_clickhouse <node-count> <ch-hostname>...
+# Single VM: 127.0.0.1 — ClickHouse binds loopback only there. 2+ VMs:
+# ClickHouse binds 0.0.0.0, so every node's Envoy reaches the ClickHouse
+# node(s) by hostname (/etc/hosts), round-robin across the 3 replicas of
+# a cluster. The render is node-independent, which `elchi-stack
+# reload-envoy` relies on (it renders once and pushes to every node).
+envoy::_emit_cluster_clickhouse() {
+  local node_count=$1
+  shift
+  local -a ch_hosts=("$@")
+
+  if [ "$node_count" -le 1 ] 2>/dev/null; then
+    cat <<EOF
+
+  - name: clickhouse-cluster
+    connect_timeout: 2s
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: clickhouse-cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: {address: 127.0.0.1, port_value: ${ELCHI_PORT_CLICKHOUSE_NATIVE}}
+EOF
+    return
+  fi
+
+  cat <<EOF
+
+  - name: clickhouse-cluster
+    connect_timeout: 2s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    health_checks:
+    - timeout: 2s
+      interval: 10s
+      unhealthy_threshold: 2
+      healthy_threshold: 1
+      tcp_health_check: {}
+    load_assignment:
+      cluster_name: clickhouse-cluster
+      endpoints:
+      - lb_endpoints:
+EOF
+  local hn
+  for hn in "${ch_hosts[@]}"; do
+    cat <<EOF
+        - endpoint:
+            address:
+              socket_address: {address: ${hn}, port_value: ${ELCHI_PORT_CLICKHOUSE_NATIVE}}
+EOF
+  done
 }
 
 envoy::_emit_admin() {

@@ -25,6 +25,9 @@
 #
 # Conditional:
 #   53/tcp + 53/udp                 CoreDNS GSLB (when --gslb)
+#   19000                           Envoy ClickHouse proxy — every node, any
+#                                   size, when ClickHouse is local (edge hosts
+#                                   write elchi-shield audit through it)
 #
 # The "registry binary publishes 9090" assumption baked into older
 # revisions was wrong: the binary binds 1870 (ELCHI_PORT_REGISTRY_GRPC).
@@ -129,6 +132,12 @@ firewall::_open_firewalld() {
     firewall-cmd --quiet --zone="$zone" --add-port=9234/tcp --permanent || true
   fi
 
+  # Envoy ClickHouse proxy — edge hosts are outside the cluster, so
+  # this is opened regardless of cluster size.
+  if [ -n "$(topology::clickhouse_hostnames)" ]; then
+    firewall-cmd --quiet --zone="$zone" --add-port="${ELCHI_PORT_CLICKHOUSE_PROXY}/tcp" --permanent || true
+  fi
+
   if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
     firewall-cmd --quiet --zone="$zone" --add-port=53/tcp --permanent || true
     firewall-cmd --quiet --zone="$zone" --add-port=53/udp --permanent || true
@@ -161,6 +170,10 @@ firewall::_open_ufw() {
     ufw allow 9009/tcp >/dev/null 2>&1 || true
     ufw allow 9181/tcp >/dev/null 2>&1 || true
     ufw allow 9234/tcp >/dev/null 2>&1 || true
+  fi
+
+  if [ -n "$(topology::clickhouse_hostnames)" ]; then
+    ufw allow "${ELCHI_PORT_CLICKHOUSE_PROXY}/tcp" >/dev/null 2>&1 || true
   fi
 
   if [ "${ELCHI_INSTALL_GSLB:-0}" = "1" ]; then
@@ -253,7 +266,7 @@ firewall::_close_firewalld() {
   # install opened it on this host).
   local p
   for p in "${public_port}/tcp" 27017/tcp 9090/tcp 1870/tcp 1960/tcp 1980/tcp \
-           9000/tcp 9009/tcp 9181/tcp 9234/tcp 53/tcp 53/udp; do
+           9000/tcp 9009/tcp 9181/tcp 9234/tcp 19000/tcp 53/tcp 53/udp; do
     firewall-cmd --quiet --zone="$zone" --remove-port="$p" --permanent 2>/dev/null || true
   done
   # Control-plane variant slots — close a generous window so previously
@@ -272,7 +285,7 @@ firewall::_close_ufw() {
   local cp_base=${ELCHI_PORT_CONTROL_PLANE_BASE:-1990}
   local p
   for p in "${public_port}/tcp" 27017/tcp 9090/tcp 1870/tcp 1960/tcp 1980/tcp \
-           9000/tcp 9009/tcp 9181/tcp 9234/tcp 53/tcp 53/udp; do
+           9000/tcp 9009/tcp 9181/tcp 9234/tcp 19000/tcp 53/tcp 53/udp; do
     ufw delete allow "$p" >/dev/null 2>&1 || true
   done
   local i

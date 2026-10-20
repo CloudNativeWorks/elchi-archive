@@ -278,6 +278,14 @@ verify::deep_health() {
       else
         log::ok "envoy: internal listener :${ELCHI_PORT_ENVOY_INTERNAL:-8080} bound"
       fi
+      if [ -n "$(topology::clickhouse_hostnames)" ]; then
+        if ! printf '%s' "$lst" | grep -q "0.0.0.0:${ELCHI_PORT_CLICKHOUSE_PROXY:-19000}"; then
+          log::err "envoy: clickhouse listener :${ELCHI_PORT_CLICKHOUSE_PROXY:-19000} not bound"
+          fails=$(( fails + 1 ))
+        else
+          log::ok "envoy: clickhouse listener :${ELCHI_PORT_CLICKHOUSE_PROXY:-19000} bound"
+        fi
+      fi
     fi
   fi
 

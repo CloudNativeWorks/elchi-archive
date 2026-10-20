@@ -61,6 +61,7 @@ readonly ELCHI_PORT_CLICKHOUSE_HTTP=8123           # HTTP (used only for the /pi
 readonly ELCHI_PORT_CLICKHOUSE_INTERSERVER=9009    # interserver replication fetch (cluster)
 readonly ELCHI_PORT_CLICKHOUSE_KEEPER=9181         # embedded ClickHouse Keeper client port (cluster)
 readonly ELCHI_PORT_CLICKHOUSE_RAFT=9234           # embedded ClickHouse Keeper Raft port (cluster)
+readonly ELCHI_PORT_CLICKHOUSE_PROXY=19000         # Envoy tcp_proxy → ClickHouse native, every node (edge shield audit)
 # elchi-collector — Envoy ALS ingestion.
 readonly ELCHI_PORT_COLLECTOR_GRPC=18090           # Envoy ALS StreamAccessLogs gRPC
 readonly ELCHI_PORT_COLLECTOR_HTTP=18091           # health / readiness / metrics, loopback
@@ -467,6 +468,9 @@ topology::print_plan() {
   printf '  main address: %s\n' "${ELCHI_MAIN_ADDRESS:-(unset)}"
   printf '  public port:  %s (TLS=%s)\n' "${ELCHI_PORT:-443}" "${ELCHI_TLS_ENABLED:-true}"
   printf '  envoy internal listener: 127.0.0.1:%s (plaintext)\n' "${ELCHI_PORT_ENVOY_INTERNAL}"
+  if [ "${ELCHI_INSTALL_COLLECTOR:-1}" = "1" ] && [ "${ELCHI_CLICKHOUSE_MODE:-local}" != "external" ]; then
+    printf '  envoy clickhouse proxy:  0.0.0.0:%s (plain TCP → ClickHouse native)\n' "${ELCHI_PORT_CLICKHOUSE_PROXY}"
+  fi
   # GSLB has two states now that the zone has a default fallback:
   #   * enabled — flag on (default), zone is either operator-supplied
   #     or the elchi.local fallback (admin defaults to hostmaster@<zone>
@@ -697,6 +701,16 @@ topology::registry_host() {
 topology::node_hostnames() {
   local file=${1:-${ELCHI_ETC}/topology.full.yaml}
   awk '/^    hostname:/{print $2}' "$file"
+}
+
+# topology::clickhouse_hostnames — hostnames of the nodes that run a
+# LOCAL ClickHouse (`runs_clickhouse: true`). Empty for --no-collector
+# and --clickhouse=external, which is what keeps the Envoy ClickHouse
+# proxy (lib/envoy.sh) and its firewall rule off in those installs.
+topology::clickhouse_hostnames() {
+  local file=${1:-${ELCHI_ETC}/topology.full.yaml}
+  [ -f "$file" ] || return 0
+  awk '/^    hostname:/{hn=$2} /^    runs_clickhouse: true/{print hn}' "$file"
 }
 
 # topology::iter_nodes — iterate over the node list, calling a function
