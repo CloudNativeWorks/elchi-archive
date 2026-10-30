@@ -1,6 +1,22 @@
 {
   "releases": [
     {
+      "version": "v1.40.2",
+      "date": "2026-10-30T19:56:01Z",
+      "binaries": [
+        {
+          "arch": "linux-amd64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/v1.40.2/envoy-linux-amd64",
+          "sha256": "1d64506e25c1844f146162ddb2ece7010fa4e784faddb40a079021491f1f03cc"
+        },
+        {
+          "arch": "linux-arm64",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/v1.40.2/envoy-linux-arm64",
+          "sha256": "b9d6d1e06dd5838a3506de9f4deebad3de9a2ce6cadb87cd76222ca286213baf"
+        }
+      ]
+    },
+    {
       "version": "v1.39.4",
       "date": "2026-10-13T06:01:51Z",
       "binaries": [
