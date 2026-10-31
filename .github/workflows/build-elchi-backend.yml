@@ -14,7 +14,7 @@ name: Download Elchi Backend
 #
 # A single source release (e.g. v1.6.20) carries ONE binary per
 # control-plane / Envoy variant, each asset named after the full variant
-# tag (elchi-v1.7.4-v0.14.0-envoy1.39.4) plus a matching .sha256. This
+# tag (elchi-v1.7.9-v0.14.0-envoy1.39.4) plus a matching .sha256. This
 # workflow mirrors ALL of them into one elchi-archive release tagged
 # `elchi-backend-<version>`, keeping the asset names byte-for-byte
 # identical so lib/topology.sh::backend_asset_basename needs no change.
