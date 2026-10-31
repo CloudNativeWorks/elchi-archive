@@ -454,6 +454,10 @@ EOF
               # the one-time ticket in the path is its authorization.
               - match: {prefix: "/api/download/"}
                 route: {cluster: controller-rest-cluster, timeout: 0s, idle_timeout: 0s}
+              # The automation API: scripts and pipelines send no from-elchi;
+              # an API token authorizes them.
+              - match: {prefix: "/api/public/"}
+                route: {cluster: controller-rest-cluster, timeout: 0s, idle_timeout: 0s}
               - match:
                   prefix: "/"
                   headers:

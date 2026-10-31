@@ -508,6 +508,8 @@ verify::print_summary() {
   printf '  %bGrafana:%b      %s://%s/grafana/   (admin: %s)\n' \
     "$C_CYAN" "$C_RESET" "$proto" "$main" "${ELCHI_GRAFANA_USER:-admin}"
   printf '  %bAPI:%b          %s://%s/api/...\n' "$C_CYAN" "$C_RESET" "$proto" "$main"
+  printf '  %bFirst sign-in:%b admin / admin (temporary: the UI asks for a new password,\n' "$C_CYAN" "$C_RESET"
+  printf '                 12+ characters with upper, lower, digit and symbol)\n'
   printf '\n'
 
   # Show the credentials operators actually need to log in / federate.

@@ -12,9 +12,9 @@
 #         --nodes=10.10.10.2,10.10.10.3,10.10.10.4 \
 #         --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
 #         --main-address=elchi.example.com \
-#         --ui-version=v1.6.2 \
-#         --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3,elchi-v1.6.20-v0.14.0-envoy1.39.1 \
-#         --envoy-version=v1.39.3
+#         --ui-version=v1.6.6 \
+#         --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4,elchi-v1.7.4-v0.14.0-envoy1.39.3 \
+#         --envoy-version=v1.39.4
 #
 # What this script does:
 #   1. Downloads the elchi-archive `main` branch as a tarball from

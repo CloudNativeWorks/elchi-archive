@@ -124,9 +124,12 @@ grafana,ui}.sh`, but with these deliberate Docker divergences:
 
 - **Appliance downloads** are routed by the `/api/download/` prefix, like
   `/dns/`, because a browser download carries no `from-elchi` header. It is
-  the one unauthenticated edge path; the single-use 60-second ticket in the
-  URL authorizes it. Without the route the request would reach the UI and
+  the one edge path with no credential; the single-use 60-second ticket in
+  the URL authorizes it. Without the route the request would reach the UI and
   return index.html with HTTP 200.
+- **The automation API** is routed by the `/api/public/` prefix for the same
+  reason: scripts call it with a project API token, not the UI's header. The
+  controller checks the token on every request.
 - **Service discovery** is Swarm DNS, not `/etc/hosts`. Envoy clusters are
   `STRICT_DNS` over `tasks.<service>`; the getaddrinfo resolver block is dropped.
 - **Backend identity** (`CONTROLLER_ID` / `CONTROL_PLANE_ID`) is pinned in
@@ -191,7 +194,7 @@ installer's equivalent is `elchi-stack set-cert <crt> <key> [ca]`.
 ## Upgrade / uninstall
 
 ```bash
-deploy/docker/upgrade.sh   --main-address=… --ui-version=v1.6.2   # rolling update
+deploy/docker/upgrade.sh   --main-address=… --ui-version=v1.6.6   # rolling update
 deploy/docker/uninstall.sh                  # remove stack, keep data volumes
 deploy/docker/uninstall.sh --purge          # also drop volumes, configs, secrets, state
 ```

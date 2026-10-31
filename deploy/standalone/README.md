@@ -47,9 +47,9 @@ shipped to every other node, and applied via a recursive
 sudo bash deploy/standalone/install.sh \
   --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
   --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-  --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3,elchi-v1.6.20-v0.14.0-envoy1.39.1 \
-  --ui-version=v1.6.2 \
-  --envoy-version=v1.39.3 \
+  --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4,elchi-v1.7.4-v0.14.0-envoy1.39.3 \
+  --ui-version=v1.6.6 \
+  --envoy-version=v1.39.4 \
   --main-address=elchi.example.com \
   --hostnames=elchi.example.com,m1,m2,m3
 ```
@@ -75,9 +75,9 @@ Derive one from the private key with
 ```bash
 sudo bash deploy/standalone/install.sh \
   --nodes=$(hostname -I | awk '{print $1}') \
-  --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3 \
-  --ui-version=v1.6.2 \
-  --envoy-version=v1.39.3 \
+  --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4 \
+  --ui-version=v1.6.6 \
+  --envoy-version=v1.39.4 \
   --main-address=$(hostname -f)
 ```
 
@@ -92,9 +92,9 @@ curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main
   | sudo bash -s -- \
       --nodes=10.0.0.10,10.0.0.11,10.0.0.12 \
       --ssh-user=ubuntu --ssh-key=/root/.ssh/cluster_key \
-      --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3 \
-      --ui-version=v1.6.2 \
-      --envoy-version=v1.39.3 \
+      --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4 \
+      --ui-version=v1.6.6 \
+      --envoy-version=v1.39.4 \
       --main-address=elchi.example.com
 ```
 
@@ -123,9 +123,9 @@ default:
 
 | Component        | Variable                         | Default |
 |------------------|----------------------------------|---------|
-| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.7.1-v0.14.0-envoy1.39.3` |
-| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.6.2` |
-| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.39.3` |
+| elchi-backend    | `ELCHI_DEFAULT_BACKEND_VARIANTS` | `elchi-v1.7.4-v0.14.0-envoy1.39.4` |
+| elchi UI         | `ELCHI_DEFAULT_UI_VERSION`       | `v1.6.6` |
+| Envoy            | `ELCHI_DEFAULT_ENVOY_VERSION`    | `v1.39.4` |
 | CoreDNS (GSLB)   | `ELCHI_DEFAULT_COREDNS_VERSION`  | `v0.1.4` |
 | elchi-collector  | `ELCHI_DEFAULT_COLLECTOR_VERSION`| `v0.1.15` |
 | VictoriaMetrics  | `ELCHI_DEFAULT_VM_VERSION`       | `v1.93.5` |
@@ -313,26 +313,26 @@ complete answer to "how is this cluster configured".
 
 ```bash
 # Bump the UI only — backend / envoy / coredns are kept as-is.
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.6.2
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.6.6
 
 # Replace the backend variant set (declarative — old variants not in
 # this list are AUTO-PRUNED by install.sh's stale-variants pass).
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3
+  --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4
 
 # Additive shortcut — append a variant without re-listing existing ones.
 # Useful when you want N versions live at once.
 sudo bash deploy/standalone/upgrade.sh \
-  --add-backend-version=elchi-v1.6.20-v0.14.0-envoy1.39.1
+  --add-backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.3
 
 # Explicit prune — same effect as dropping it from --backend-version,
 # but more visible in the plan banner.
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3 \
-  --prune-version=elchi-v1.6.20-v0.14.0-envoy1.39.1
+  --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4 \
+  --prune-version=elchi-v1.7.4-v0.14.0-envoy1.39.3
 
 # Apply OS security patches as part of this upgrade (default: skipped).
-sudo bash deploy/standalone/upgrade.sh --ui-version=v1.6.2 --upgrade-os
+sudo bash deploy/standalone/upgrade.sh --ui-version=v1.6.6 --upgrade-os
 ```
 
 ### Bootstrap (curl | bash) for upgrade
@@ -342,8 +342,8 @@ sudo bash deploy/standalone/upgrade.sh --ui-version=v1.6.2 --upgrade-os
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CloudNativeWorks/elchi-archive/main/deploy/standalone/get.sh \
   | sudo bash -s -- --upgrade \
-      --ui-version=v1.6.2 \
-      --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3
+      --ui-version=v1.6.6 \
+      --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4
 ```
 
 ### Behaviour notes
@@ -381,7 +381,7 @@ plan banner instead of relying on auto-prune):
 ```bash
 # Replace the entire variant set + prune anything missing
 sudo bash deploy/standalone/upgrade.sh \
-  --backend-version=elchi-v1.7.1-v0.14.0-envoy1.39.3,elchi-v1.6.20-v0.14.0-envoy1.39.1 \
+  --backend-version=elchi-v1.7.4-v0.14.0-envoy1.39.4,elchi-v1.7.4-v0.14.0-envoy1.39.3 \
   --prune-missing
 ```
 
@@ -508,13 +508,16 @@ definition. Adding/removing a node or variant is a re-render of the
 bootstrap on every node — `elchi-stack reload-envoy` handles it.
 
 Requests reach the controller's REST API when they carry the UI's
-`from-elchi: yes` header, and on two prefixes that cannot: `/dns/` (the
-GSLB snapshot a resolver fetches) and **`/api/download/`** (an appliance
+`from-elchi: yes` header, and on three prefixes that cannot: `/dns/` (the
+GSLB snapshot a resolver fetches), **`/api/download/`** (an appliance
 support bundle or configuration archive, saved by the browser itself, so
-no header can be added). `/api/download/` is therefore the one path the
-edge forwards unauthenticated: what authorizes it is the single-use,
-60-second ticket in the URL, which the control plane issues to an admin
-and destroys on first use. A missing route does not fail loudly — the
+no header can be added) and **`/api/public/`** (the automation API, which
+scripts call with a project API token). `/api/download/` is the one path
+the edge forwards with no credential at all: what authorizes it is the
+single-use, 60-second ticket in the URL, which the control plane issues to
+an admin and destroys on first use. `/api/public/` is authorized by the
+API token the controller checks on every request (`elchi-stack
+endpoint-test` probes both routes). A missing route does not fail loudly — the
 request falls through to the UI and returns index.html with HTTP 200 —
 so `elchi-stack endpoint-test` probes it with an invented ticket and
 expects the controller's 404.
