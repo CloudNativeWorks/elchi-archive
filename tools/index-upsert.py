@@ -110,6 +110,12 @@ def check(index):
                 sha = e.get("bundle_manifest_sha256") or ""
                 if not re.fullmatch(r"[0-9a-f]{64}", sha):
                     problems.append(f"{key}: {e.get('version')} has no 64-hex bundle_manifest_sha256")
+            # The impact report is looked up by name (crs_impact_<version>.json)
+            # by the control plane: any other name would never be served.
+            for e in lst:
+                for f in e.get("files", []):
+                    if f.get("type") == "impact" and f.get("name") != f"crs_impact_{e.get('version')}.json":
+                        problems.append(f"{key}: {e.get('version')} impact asset is named {f.get('name')!r}, want crs_impact_{e.get('version')}.json")
     return problems
 
 

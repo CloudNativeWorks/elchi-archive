@@ -9,6 +9,8 @@
 #   tools/crs-test.sh library             # A-05: the backend parser reads the bundle
 #   tools/crs-test.sh entry               # A-07: index entry + index-upsert --check on a scratch copy
 #   tools/crs-test.sh backfill            # A-08: crs-retest.sh backfills bundle_manifest_sha256 (noop after)
+#   tools/crs-test.sh impact              # A-09: crs-impact.sh picks the newest shield ≥ the floor, measures, compares; entry type impact
+#   tools/crs-test.sh impact-retest       # A-10: crs-retest.sh publishes a missing / changed impact report, re-signed; noop after
 #
 # Needs: python3, go (for the module cache + a shield build), the sibling
 # elchi-shield checkout (SHIELD_DIR), network for the upstream zip (cached in
@@ -242,6 +244,144 @@ PY
   res=$(cd "$idx" && bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$WORK/bf-shields" index.json entries) && [[ $res == *"mode=noop"* ]] && ok "second run is a noop" || bad "second run: $res"
 }
 
+# fake_shield PATH LABEL — a published shield as crs-impact.sh drives it:
+# `crs impact --crs-dir D --version V --generated-at T --out O` writes a
+# report (one case; its score from FAKE_SCORE, a wrong crs_version with
+# FAKE_BAD=1) after checking the bundle is unpacked as D/V; every call is
+# appended to $FAKE_CALLS. `crs check` (the compat matrix) answers compiled.
+# A shield without `crs impact` answers 2.
+fake_shield(){
+  cat > "$1" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$2" >> "\${FAKE_CALLS:?}"
+if [[ \${1:-} == crs && \${2:-} == check ]]; then echo '{"ok":true,"compiled":true,"coraza_version":"v3.8.1"}'; exit 0; fi
+[[ \${1:-} == crs && \${2:-} == impact ]] || { echo "unknown command" >&2; exit 2; }
+shift 2
+while [[ \$# -gt 0 ]]; do case \$1 in --crs-dir) d=\$2;; --version) v=\$2;; --generated-at) g=\$2;; --out) o=\$2;; esac; shift 2; done
+[[ -s \$d/\$v/manifest.json ]] || { echo "no bundle at \$d/\$v" >&2; exit 1; }
+python3 -I - "\$o" "\$v" "\$g" "$2" "\${FAKE_SCORE:-5}" "\${FAKE_BAD:-0}" <<'PY'
+import json, sys
+o, v, g, label, score, bad = sys.argv[1:7]
+lvl = {"action": "block", "score": int(score), "threshold": 5, "rules": [{"id": "942100", "score": int(score)}]}
+r = {"crs_version": "v0.0.0" if bad == "1" else v, "shield_version": label, "coraza_version": "v3.8.1", "generated_at": g,
+     "corpus_sha256": "a" * 64, "cases": [{"id": "sqli", "category": "attack", "title": "t", "who": "w", "direction": "request",
+     "method": "GET", "path": "/", "levels": {k: lvl for k in ("1", "2", "3", "4")}}]}
+json.dump(r, open(o, "w"), indent=2)
+PY
+EOF
+  chmod +x "$1"
+}
+old_shield(){ printf '#!/usr/bin/env bash\necho %s >> "${FAKE_CALLS:?}"; echo "unknown subcommand" >&2; exit 2\n' "$2" > "$1"; chmod +x "$1"; }
+
+step_impact(){
+  echo "== impact: tools/crs-impact.sh measures the published tarball with the newest shield ≥ the floor (A-09) =="
+  local out sh tar res; out="$WORK/imp"; build_once "$out" >/dev/null
+  tar="$out/crs-bundle-$CRS_VERSION.tar.gz"; sh="$WORK/imp-shields"; mkdir -p "$sh"
+  export FAKE_CALLS="$WORK/imp-calls"; : > "$FAKE_CALLS"
+  old_shield "$sh/v1.2.2" v1.2.2; fake_shield "$sh/v1.3.0" v1.3.0; fake_shield "$sh/v1.10.0" v1.10.0
+  res=$(IMPACT_GENERATED_AT=2026-01-01T00:00:00Z bash "$HERE/tools/crs-impact.sh" "$CRS_VERSION" "$tar" "$sh" v1.3.0 "$WORK/imp1.json") || { bad "crs-impact.sh run: $res"; return; }
+  [[ $res == *"mode=new"* && $res == *"shield=v1.10.0"* ]] && ok "newest by version (v1.10.0 over v1.3.0), mode=new" || bad "selection: $res"
+  [[ $(cat "$FAKE_CALLS") == v1.10.0 ]] && ok "only that shield ran; v1.2.2 (below the floor) never did" || bad "calls: $(tr '\n' ' ' < "$FAKE_CALLS")"
+  python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["crs_version"]==sys.argv[2] and r["shield_version"]=="v1.10.0" and r["generated_at"]=="2026-01-01T00:00:00Z"' "$WORK/imp1.json" "$CRS_VERSION" \
+    && ok "report written for the bundle version, by that shield" || bad "report content"
+  # The same measurement by a newer shield, at another time: nothing new.
+  fake_shield "$sh/v1.11.0" v1.11.0
+  res=$(IMPACT_GENERATED_AT=2026-02-02T00:00:00Z bash "$HERE/tools/crs-impact.sh" "$CRS_VERSION" "$tar" "$sh" v1.3.0 "$WORK/imp2.json" "$WORK/imp1.json")
+  [[ $res == *"mode=same"* && ! -e $WORK/imp2.json ]] && ok "same measurement (other time, other shield) → mode=same, nothing written" || bad "same: $res"
+  res=$(FAKE_SCORE=4 bash "$HERE/tools/crs-impact.sh" "$CRS_VERSION" "$tar" "$sh" v1.3.0 "$WORK/imp3.json" "$WORK/imp1.json")
+  [[ $res == *"mode=changed"* && -s $WORK/imp3.json ]] && ok "a changed measurement → mode=changed, written" || bad "changed: $res"
+  # Nothing at or above the floor: skip, no shield runs.
+  rm -rf "$WORK/imp-old" && mkdir -p "$WORK/imp-old" && old_shield "$WORK/imp-old/v1.2.2" v1.2.2; : > "$FAKE_CALLS"
+  res=$(bash "$HERE/tools/crs-impact.sh" "$CRS_VERSION" "$tar" "$WORK/imp-old" v1.3.0 "$WORK/imp4.json")
+  [[ $res == *"mode=skip"* && ! -e $WORK/imp4.json && ! -s $FAKE_CALLS ]] && ok "no shield ≥ the floor → mode=skip, nothing runs" || bad "skip: $res"
+  # A report the control plane would refuse is never published.
+  FAKE_BAD=1 bash "$HERE/tools/crs-impact.sh" "$CRS_VERSION" "$tar" "$sh" v1.3.0 "$WORK/imp5.json" >/dev/null 2>&1 \
+    && bad "a report for another crs_version was accepted" || { [[ ! -e $WORK/imp5.json ]] && ok "a report for another crs_version fails the run, nothing written" || bad "bad report written"; }
+  # The entry lists it as type impact; index-upsert --check wants its name.
+  local rel; rel="$WORK/imp-release"; mkdir -p "$rel"
+  cp "$tar" "$rel/"; cp "$WORK/imp1.json" "$rel/crs_impact_$CRS_VERSION.json"
+  echo '[]' > "$rel/crs_rules_coreruleset_$CRS_VERSION.json"
+  echo '{"compatible_shield":["v1.3.0"],"incompatible_shield":[],"coraza_tested":{"v1.3.0":"v3.8.1"}}' > "$WORK/imp-compat.json"
+  builder entry --crs-version "$CRS_VERSION" --release-dir "$rel" --repo CloudNativeWorks/elchi-archive --tag "crs-$CRS_VERSION" --compat "$WORK/imp-compat.json" --manifest "$out/$CRS_VERSION/manifest.json" --out "$WORK/imp-entry.json" --date 2026-01-01T00:00:00Z >/dev/null
+  python3 -I - "$WORK/imp-entry.json" "$rel" "$CRS_VERSION" <<'PY' && ok "entry: crs_impact_<v>.json as type impact with its sha256" || bad "entry impact asset"
+import hashlib, json, os, sys
+e = json.load(open(sys.argv[1])); rel = sys.argv[2]; ver = sys.argv[3]
+f = [x for x in e["files"] if x["type"] == "impact"]
+assert len(f) == 1 and f[0]["name"] == f"crs_impact_{ver}.json", f
+assert f[0]["sha256"] == hashlib.sha256(open(os.path.join(rel, f[0]["name"]), "rb").read()).hexdigest()
+PY
+  mkdir -p "$WORK/imp-idx" && cp "$HERE/index.json" "$HERE/tools/index-upsert.py" "$WORK/imp-idx/"
+  (cd "$WORK/imp-idx" && python3 -I index-upsert.py --key crs_releases --entry "$WORK/imp-entry.json" >/dev/null && python3 -I index-upsert.py --check >/dev/null) && ok "index-upsert --check accepts it" || bad "index-upsert with impact"
+  python3 -I -c 'import json,sys; e=json.load(open(sys.argv[1])); [f.update(name="impact.json") for f in e["files"] if f["type"]=="impact"]; json.dump(e, open(sys.argv[2],"w"))' "$WORK/imp-entry.json" "$WORK/imp-entry-bad.json"
+  (cd "$WORK/imp-idx" && python3 -I index-upsert.py --key crs_releases --entry "$WORK/imp-entry-bad.json" >/dev/null; python3 -I index-upsert.py --check >/dev/null 2>&1) && bad "--check accepted a misnamed impact asset" || ok "--check refuses an impact asset not named crs_impact_<version>.json"
+}
+
+step_impact_retest(){
+  echo "== impact-retest: tools/crs-retest.sh publishes a missing or changed impact report (A-10) =="
+  local out rel root idx sh res; out="$WORK/ir"; build_once "$out" >/dev/null
+  rel="$WORK/ir-release"; root="$WORK/ir-root"; idx="$WORK/ir-idx"; sh="$WORK/ir-shields"; mkdir -p "$rel" "$root" "$idx" "$sh"
+  export FAKE_CALLS="$WORK/ir-calls"; : > "$FAKE_CALLS"
+  fake_shield "$sh/v1.3.0" v1.3.0
+  export GNUPGHOME; GNUPGHOME=$(mktemp -d); chmod 700 "$GNUPGHOME"; export GPG_PASSPHRASE=crs-test
+  gpg --batch --quiet --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --quick-gen-key "crs-test <crs-test@example.invalid>" default default never 2>/dev/null
+  # A published release with a complete matrix (v1.3.0 has its verdict), the
+  # fingerprint in the entry, and no impact report yet.
+  cp "$out/crs-bundle-$CRS_VERSION.tar.gz" "$rel/"
+  echo '[]' > "$rel/crs_rules_coreruleset_$CRS_VERSION.json"; echo '{}' > "$rel/crs_rules_coreruleset_${CRS_VERSION}_metadata.json"
+  python3 -I - "$out/$CRS_VERSION/manifest.json" "$rel/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1])); m["compatible_shield"] = ["v1.3.0"]; m["incompatible_shield"] = []; m["coraza_tested"] = {"v1.3.0": "v3.8.1"}
+json.dump(m, open(sys.argv[2], "w"), indent=2); open(sys.argv[2], "a").write("\n")
+PY
+  echo '{"compatible_shield":["v1.3.0"],"incompatible_shield":[],"coraza_tested":{"v1.3.0":"v3.8.1"}}' > "$WORK/ir-compat.json"
+  (cd "$rel" && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS && gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS)
+  builder entry --crs-version "$CRS_VERSION" --release-dir "$rel" --repo CloudNativeWorks/elchi-archive --tag "crs-$CRS_VERSION" --compat "$WORK/ir-compat.json" --manifest "$out/$CRS_VERSION/manifest.json" --out "$WORK/ir-entry.json" --date 2025-12-24T00:00:00Z >/dev/null
+  python3 -I -c 'import json,sys; json.dump({"crs_releases":[json.load(open(sys.argv[1]))]}, open(sys.argv[2],"w"), indent=2)' "$WORK/ir-entry.json" "$idx/index.json"
+  res=$(cd "$idx" && bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$sh" index.json entries) || { bad "crs-retest.sh impact run: $res"; return; }
+  [[ $res == *"mode=impact"* ]] && ok "complete matrix, no report → mode=impact" || bad "mode: $res"
+  [[ $res == *"upload=$rel/crs_impact_$CRS_VERSION.json $rel/SHA256SUMS $rel/SHA256SUMS.asc"* && $res != *"manifest.json"* ]] && ok "uploads the report and the checksums (not the manifest, not the tarball)" || bad "upload: $res"
+  (cd "$rel" && sha256sum -c --quiet SHA256SUMS && gpg --batch --quiet --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null && grep -q "crs_impact_$CRS_VERSION.json" SHA256SUMS) && ok "SHA256SUMS covers the report, verifies and is signed" || bad "checksums/signature"
+  python3 -I - "$idx/entries/$CRS_VERSION.json" "$idx/index.json" "$rel" "$CRS_VERSION" <<'PY' && ok "entry: impact asset with its sha, tarball sha and publish date unchanged" || bad "impact entry check"
+import hashlib, json, os, sys
+e = json.load(open(sys.argv[1])); old = json.load(open(sys.argv[2]))["crs_releases"][0]; rel = sys.argv[3]; ver = sys.argv[4]
+a = {f["name"]: f for f in e["files"]}; b = {f["name"]: f["sha256"] for f in old["files"]}
+imp = a[f"crs_impact_{ver}.json"]
+assert imp["type"] == "impact" and imp["sha256"] == hashlib.sha256(open(os.path.join(rel, imp["name"]), "rb").read()).hexdigest()
+assert a[f"crs-bundle-{ver}.tar.gz"]["sha256"] == b[f"crs-bundle-{ver}.tar.gz"]
+assert e["date"] == old["date"] == "2025-12-24T00:00:00Z"
+PY
+  # Published: the same measurement again is a noop.
+  (cd "$idx" && python3 -I "$HERE/tools/index-upsert.py" --key crs_releases --entry "entries/$CRS_VERSION.json" >/dev/null)
+  res=$(cd "$idx" && bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$sh" index.json entries)
+  [[ $res == *"mode=noop"* ]] && ok "same measurement again → noop" || bad "second run: $res"
+  # A new shield release: its compat verdict AND a changed measurement — one
+  # retest publishes both (manifest, report, checksums).
+  fake_shield "$sh/v1.4.0" v1.4.0
+  local before; before=$(sha256sum "$rel/crs_impact_$CRS_VERSION.json" | cut -d' ' -f1)
+  res=$(cd "$idx" && FAKE_SCORE=4 bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$sh" index.json entries)
+  [[ $res == *"mode=retest"* && $res == *"upload=$rel/manifest.json $rel/crs_impact_$CRS_VERSION.json $rel/SHA256SUMS $rel/SHA256SUMS.asc"* ]] \
+    && ok "new shield + changed measurement → mode=retest uploads manifest, report and checksums" || bad "retest+impact: $res"
+  [[ $(sha256sum "$rel/crs_impact_$CRS_VERSION.json" | cut -d' ' -f1) != "$before" ]] && grep -q '"shield_version": "v1.4.0"' "$rel/crs_impact_$CRS_VERSION.json" \
+    && python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); assert "v1.4.0" in m["compatible_shield"]' "$rel/manifest.json" \
+    && (cd "$rel" && sha256sum -c --quiet SHA256SUMS && gpg --batch --quiet --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null) \
+    && ok "report measured by v1.4.0, its verdict in the manifest, checksums re-signed" || bad "retest+impact content"
+  # Another new shield that measures the same: the retest uploads no report.
+  fake_shield "$sh/v1.5.0" v1.5.0
+  (cd "$idx" && python3 -I "$HERE/tools/index-upsert.py" --key crs_releases --entry "entries/$CRS_VERSION.json" >/dev/null)
+  res=$(cd "$idx" && FAKE_SCORE=4 bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$sh" index.json entries)
+  [[ $res == *"mode=retest"* && $res != *"crs_impact_"* ]] && grep -q '"shield_version": "v1.4.0"' "$rel/crs_impact_$CRS_VERSION.json" \
+    && ok "new shield, same measurement → retest without the report (v1.4.0's is kept)" || bad "retest same: $res"
+  (cd "$rel" && sha256sum -c --quiet SHA256SUMS && grep -q "crs_impact_$CRS_VERSION.json" SHA256SUMS) \
+    && ok "the re-signed checksums still cover the kept report" || bad "kept report dropped from SHA256SUMS"
+  # Before any shield can measure, the published report stays as it is.
+  before=$(sha256sum "$rel/crs_impact_$CRS_VERSION.json" | cut -d' ' -f1)
+  (cd "$idx" && python3 -I "$HERE/tools/index-upsert.py" --key crs_releases --entry "entries/$CRS_VERSION.json" >/dev/null)
+  res=$(cd "$idx" && IMPACT_SHIELD_FLOOR=v9.0.0 FAKE_SCORE=3 bash "$HERE/tools/crs-retest.sh" "$CRS_VERSION" "$rel" "$root" "$sh" index.json entries)
+  [[ $res == *"mode=noop"* && $(sha256sum "$rel/crs_impact_$CRS_VERSION.json" | cut -d' ' -f1) == "$before" ]] && ok "no shield ≥ the floor → noop, report untouched" || bad "floor: $res"
+  rm -rf "$GNUPGHOME"; unset GNUPGHOME
+}
+
 case "${1:-all}" in
   equiv) step_equiv;;
   manifest) step_manifest;;
@@ -250,8 +390,10 @@ case "${1:-all}" in
   library) step_library;;
   entry) step_entry;;
   backfill) step_backfill;;
-  all) step_equiv; step_manifest; step_determinism; step_compat; step_library; step_entry; step_backfill;;
-  *) echo "usage: $0 {all|equiv|manifest|determinism|compat|library|entry|backfill}" >&2; exit 2;;
+  impact) step_impact;;
+  impact-retest) step_impact_retest;;
+  all) step_equiv; step_manifest; step_determinism; step_compat; step_library; step_entry; step_backfill; step_impact; step_impact_retest;;
+  *) echo "usage: $0 {all|equiv|manifest|determinism|compat|library|entry|backfill|impact|impact-retest}" >&2; exit 2;;
 esac
 echo "RESULT: $pass passed, $fail failed"
 [[ $fail == 0 ]]

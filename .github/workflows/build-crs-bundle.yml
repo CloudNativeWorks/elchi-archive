@@ -47,6 +47,10 @@ env:
   CRS_FLOOR: v4.25.0
   # Shield releases before this cannot load bundles at all (no --crs-dir): bundle support shipped in elchi-shield v1.0.0.
   SHIELD_FLOOR: v1.0.0
+  # The first shield release with `crs impact` (the per-level impact report the
+  # WAF Studio shows, crs_impact_<v>.json). Without one published the report is
+  # skipped with a warning; tools/crs-impact.sh picks the newest at or above it.
+  IMPACT_SHIELD_FLOOR: v1.3.0
 
 permissions:
   contents: write
@@ -174,6 +178,18 @@ jobs:
           python3 -I tools/parse_coraza_rules.py --rules-dir "work/$VERSION/rules/@owasp_crs" --crs-version "$VERSION" --coraza-version "$CORAZA" --output-dir release
           ls -la release
 
+      - name: Measure the CRS impact
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          # The published tarball is measured (tools/crs-impact.sh unpacks it),
+          # with the newest shield at or above IMPACT_SHIELD_FLOOR.
+          bash tools/crs-impact.sh "$VERSION" "work/crs-bundle-$VERSION.tar.gz" shields "$IMPACT_SHIELD_FLOOR" "release/crs_impact_$VERSION.json" | tee impact.txt
+          if grep -q '^mode=skip' impact.txt; then
+            echo "::warning::no shield at or above $IMPACT_SHIELD_FLOOR is published; $VERSION ships without crs_impact_$VERSION.json (a retest adds it once one is)"
+          fi
+
       - name: Assemble, checksum and sign the release
         env:
           VERSION: ${{ matrix.version }}
@@ -186,7 +202,7 @@ jobs:
           # and the index entry; SHA256SUMS is produced after, so it covers
           # manifest.json too, and the entry is regenerated to carry its sha.
           python3 -I tools/build-crs-bundle.py entry --crs-version "$VERSION" --release-dir release --repo "$GITHUB_REPOSITORY" --tag "crs-$VERSION" --compat compat.json --manifest "work/$VERSION/manifest.json" --out entry.json
-          (cd release && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS)
+          (cd release && shopt -s nullglob && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* crs_impact_* > SHA256SUMS)
           export GNUPGHOME; GNUPGHOME=$(mktemp -d); chmod 700 "$GNUPGHOME"
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
           gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --armor --detach-sign --output release/SHA256SUMS.asc release/SHA256SUMS
@@ -219,6 +235,7 @@ jobs:
             release/manifest.json
             release/crs_rules_coreruleset_${{ matrix.version }}.json
             release/crs_rules_coreruleset_${{ matrix.version }}_metadata.json
+            release/crs_impact_*.json
             release/SHA256SUMS
             release/SHA256SUMS.asc
         env:
@@ -290,14 +307,16 @@ jobs:
             (cd "$REL" && gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum -c --quiet SHA256SUMS)
             # The per-version body lives in tools/crs-retest.sh (proven by
             # tools/crs-test.sh): retest (new shields → matrix, re-sign,
-            # upload three assets), backfill (matrix complete but the entry
-            # lacks bundle_manifest_sha256 → entry only), or noop. The
-            # tarball is never re-uploaded: its sha256 must stay what every
-            # edge verified; the entry keeps the publish date.
+            # upload the changed assets), impact (the impact report is
+            # missing or measures something else with the newest shield →
+            # upload it and the checksums), backfill (matrix complete but
+            # the entry lacks bundle_manifest_sha256 → entry only), or noop.
+            # The tarball is never re-uploaded: its sha256 must stay what
+            # every edge verified; the entry keeps the publish date.
             bash tools/crs-retest.sh "$VERSION" "$REL" "$ROOT" shields index.json entries | tee "retest/$VERSION/out.txt"
             mode=$(sed -n 's/^mode=//p' "retest/$VERSION/out.txt")
             [[ $mode == noop ]] && { echo "$VERSION: matrix complete, fingerprint present"; continue; }
-            if [[ $mode == retest ]]; then
+            if [[ $mode == retest || $mode == impact ]]; then
               # shellcheck disable=SC2046
               gh release upload "$TAG" $(sed -n 's/^upload=//p' "retest/$VERSION/out.txt") --clobber
             fi

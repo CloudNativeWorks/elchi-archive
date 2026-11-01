@@ -315,6 +315,7 @@ def entry(args):
         MANIFEST: "manifest",
         f"crs_rules_coreruleset_{version}.json": "library",
         f"crs_rules_coreruleset_{version}_metadata.json": "library_metadata",
+        f"crs_impact_{version}.json": "impact",
         "SHA256SUMS": "checksums",
         "SHA256SUMS.asc": "signature",
     }

@@ -12,11 +12,17 @@
 #   INDEX     index.json (default ./index.json)
 #   ENTRIES   where the regenerated entry is written (default ./entries)
 #
-# Two modes, decided per version:
+# Modes, decided per version:
 #   retest    shields the manifest has no verdict for yet exist → run the
 #             matrix, merge the verdicts into the standalone manifest, re-sign
-#             SHA256SUMS, regenerate the entry; the caller uploads the three
-#             changed assets (printed as `upload=...`).
+#             SHA256SUMS, regenerate the entry; the caller uploads the
+#             changed assets (printed as `upload=...`), the impact report too
+#             when its measurement changed.
+#   impact    the matrix is complete but the CRS impact report
+#             (crs_impact_<v>.json, tools/crs-impact.sh with the newest shield
+#             at or above IMPACT_SHIELD_FLOOR) is missing or measures something
+#             else now → write it, re-sign SHA256SUMS, regenerate the entry;
+#             upload the report and the checksums.
 #   backfill  the matrix is complete but the index entry lacks
 #             bundle_manifest_sha256 → regenerate the entry only (no compat
 #             run, no signing, nothing to upload).
@@ -24,8 +30,11 @@
 #
 # In every mode the entry keeps the OLD `date` (the publish date is not a
 # retest date) and the tarball's sha256 must stay what every edge verified.
-# Prints `mode=<retest|backfill|noop>` and, for retest, `upload=<paths>`.
-# Needs: python3, gpg (retest mode only; GPG_PASSPHRASE in the environment).
+# Prints `mode=<retest|impact|backfill|noop>` and, for retest and impact,
+# `upload=<paths>`.
+# Needs: python3, gpg (retest and impact modes; GPG_PASSPHRASE in the
+# environment). IMPACT_SHIELD_FLOOR: the first shield with `crs impact`
+# (default v1.3.0); without one published the report is left as it is.
 set -euo pipefail
 VERSION=$1; REL=$2; ROOT=$3; SHIELDS=$4; INDEX=${5:-index.json}; ENTRIES=${6:-entries}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -60,6 +69,17 @@ for b in sorted(os.listdir(sys.argv[2])) if os.path.isdir(sys.argv[2]) else []:
 PY
 )
 
+# The impact report: measured with the newest shield that can; only a changed
+# measurement is re-published (tools/crs-impact.sh compares the content).
+IMPACT="crs_impact_$VERSION.json"
+impact_mode=$(bash "$HERE/tools/crs-impact.sh" "$VERSION" "$REL/crs-bundle-$VERSION.tar.gz" "$SHIELDS" \
+  "${IMPACT_SHIELD_FLOOR:-v1.3.0}" "$ROOT/$IMPACT" "$REL/$IMPACT" | sed -n 's/^mode=//p')
+impact_changed=no
+if [[ $impact_mode == new || $impact_mode == changed ]]; then
+  cp "$ROOT/$IMPACT" "$REL/$IMPACT"
+  impact_changed=yes
+fi
+
 mode=noop
 if [[ -n $todo ]]; then
   mode=retest
@@ -74,6 +94,8 @@ m["incompatible_shield"] = m.get("incompatible_shield", []) + [i for i in n["inc
 m.setdefault("coraza_tested", {}).update(n["coraza_tested"])
 json.dump(m, open(sys.argv[1], "w"), indent=2); open(sys.argv[1], "a").write("\n")
 PY
+elif [[ $impact_changed == yes ]]; then
+  mode=impact
 elif [[ $has_sha == no ]]; then
   mode=backfill
 fi
@@ -84,9 +106,10 @@ date_args=(); [[ -n $old_date ]] && date_args=(--date "$old_date")
 # entry reads the fingerprint from the tar itself; --manifest only feeds built_from/files.
 python3 -I "$HERE/tools/build-crs-bundle.py" entry --crs-version "$VERSION" --release-dir "$REL" --repo "$REPO" --tag "$TAG" \
   --compat "$ROOT/compat.json" --manifest "$ROOT/$VERSION/manifest.json" --out "$ENTRIES/$VERSION.json" "${date_args[@]}" >/dev/null
-if [[ $mode == retest ]]; then
-  # The standalone manifest and the checksums change; the tarball never does.
-  (cd "$REL" && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* > SHA256SUMS \
+if [[ $mode == retest || $mode == impact ]]; then
+  # The standalone manifest, the impact report and the checksums change; the
+  # tarball never does.
+  (cd "$REL" && shopt -s nullglob && sha256sum crs-bundle-*.tar.gz manifest.json crs_rules_coreruleset_* crs_impact_* > SHA256SUMS \
     && gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:?}" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS)
   # SHA256SUMS(.asc) were rewritten after the entry: regenerate so their shas are current.
   python3 -I "$HERE/tools/build-crs-bundle.py" entry --crs-version "$VERSION" --release-dir "$REL" --repo "$REPO" --tag "$TAG" \
@@ -102,5 +125,8 @@ assert a[tar] == b[tar], "tarball sha changed"
 assert e["date"] == old.get("date", e["date"]), ("date changed", e["date"], old.get("date"))
 PY
 echo "mode=$mode"
-[[ $mode == retest ]] && echo "upload=$REL/manifest.json $REL/SHA256SUMS $REL/SHA256SUMS.asc"
+up=""
+[[ $mode == retest ]] && up="$REL/manifest.json"
+[[ $impact_changed == yes && ( $mode == retest || $mode == impact ) ]] && up="$up $REL/$IMPACT"
+[[ $mode == retest || $mode == impact ]] && echo "upload=${up# } $REL/SHA256SUMS $REL/SHA256SUMS.asc"
 exit 0
