@@ -513,7 +513,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -522,20 +523,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.30.0/SHA256SUMS",
-          "sha256": "2c2cc07956a2f02dd1bcf78bd6fc9ba2e14025069bc962f403970ddb84d2ef6c"
+          "sha256": "b734943d7470f955d2f35f35d49f282a2d1ac596893beb58777d0ef5e3f09632"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.30.0/SHA256SUMS.asc",
-          "sha256": "191e5595889af3957d92fcded95cee04963c3f25d82abc845678a9fd7e3fcc75"
+          "sha256": "bda4e98c7a7ca7d25539898b09b67ba5fdf1031e425209b69a4e9a75fffeada6"
         },
         {
           "name": "crs-bundle-v4.30.0.tar.gz",
@@ -547,7 +549,7 @@
           "name": "crs_impact_v4.30.0.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.30.0/crs_impact_v4.30.0.json",
-          "sha256": "03685b42d050e9d299d22d640803703af878a0cb8eda9fb5e0c00004b12fa93a"
+          "sha256": "dd987a92f79cb95d88c06186c6d8dafcf93f0f3d2ad1c805f40f60d9f0eee527"
         },
         {
           "name": "crs_rules_coreruleset_v4.30.0.json",
@@ -565,7 +567,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.30.0/manifest.json",
-          "sha256": "c67a438c8f44612e257d6b6cdcb6f39101b27cfe9d4c165e06d89a86ca5881a2"
+          "sha256": "20a0cfa8349e13a2d4aefbf3e4205c97fff9efe54cb430629357839a65f371ba"
         }
       ]
     },
@@ -583,7 +585,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -592,20 +595,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/SHA256SUMS",
-          "sha256": "5b81019d617435dc90b3555903801c802a4ddbc4d30155fa05c0b58091e967eb"
+          "sha256": "e9acf3dbebcaa097ed8782a08ac21d95e95dc1f951d4934afd22f695f0e7b9a9"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/SHA256SUMS.asc",
-          "sha256": "eb6b28541794e1f53f86439ba3c710b7445a16b68add8e30f33c53bbc7abd81b"
+          "sha256": "ec22021f19e28c4f07d466696f1ca51e8737a3e56d416fe25450f4aeef65b8b8"
         },
         {
           "name": "crs-bundle-v4.29.0.tar.gz",
@@ -617,7 +621,7 @@
           "name": "crs_impact_v4.29.0.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/crs_impact_v4.29.0.json",
-          "sha256": "8b23404a74c3af15d0df9cbc9b01b93806c32bb196adeabbe3bacaa49e0cf803"
+          "sha256": "934db08469983010d334954e56db6804d5e12407224469713ecbad2a61ef8ee3"
         },
         {
           "name": "crs_rules_coreruleset_v4.29.0.json",
@@ -635,7 +639,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.29.0/manifest.json",
-          "sha256": "3c53998a17f3e4fb5ba57fbb5c55835c95bf06ae93e2222620d2caf1f75f66d5"
+          "sha256": "00d9302b3c9e857f3fecc71f5236c8a65b9e3099c30ff668789ba4a309219c0f"
         }
       ]
     },
@@ -653,7 +657,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -662,20 +667,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.28.0/SHA256SUMS",
-          "sha256": "4297ac5c1bf1945be3c83b165240546e8e791938698dab6311a41a474a00168a"
+          "sha256": "67c58e438543f4bcffd19c54fdc61da1722d4b19e70a8cd2c5fcc5afa3ad0b87"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.28.0/SHA256SUMS.asc",
-          "sha256": "d4097a112bacf04de3a91b1b8190437f711fc8b9f309dcd9ca11d454da32733e"
+          "sha256": "58a58b31a4675b6c449d7497bf1485e4f3b877505475abd81f0cdcc6da9e9d10"
         },
         {
           "name": "crs-bundle-v4.28.0.tar.gz",
@@ -687,7 +693,7 @@
           "name": "crs_impact_v4.28.0.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.28.0/crs_impact_v4.28.0.json",
-          "sha256": "bfe604c5a11f0efabc47ca220003edd2481177c2915d144ebe248019fc8f5e8c"
+          "sha256": "db7c7533c3f7d7a13e545d1eedbecef014bf6ca42a28ed288f7bdba0183ecb1f"
         },
         {
           "name": "crs_rules_coreruleset_v4.28.0.json",
@@ -705,7 +711,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.28.0/manifest.json",
-          "sha256": "e6544295c0a7076e0ccbb1378b20bdacc0f45ba86cce6dbd18c350acc561290e"
+          "sha256": "cb05cdf515a3e89e0cd858f5c2c7cf3780068ec873df266438d390fe84c94bb7"
         }
       ]
     },
@@ -723,7 +729,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -732,20 +739,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.27.0/SHA256SUMS",
-          "sha256": "b0bcae047cad6e77658bf577d7184bf663ffc874dcea69216bf85c6b348f8bd5"
+          "sha256": "b65932018b484a3799ceeffacd5d76a2261c39a63f0ec106f7f9081854924694"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.27.0/SHA256SUMS.asc",
-          "sha256": "a5f21b5eebc772e15dc53fca2ca25988184a940d9fbe7f20ac36adc736163afd"
+          "sha256": "e165f7a32d22f88e350acd6ff88b84c084723fd1b57f8ee1100d958fa22ec5e9"
         },
         {
           "name": "crs-bundle-v4.27.0.tar.gz",
@@ -757,7 +765,7 @@
           "name": "crs_impact_v4.27.0.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.27.0/crs_impact_v4.27.0.json",
-          "sha256": "10181281fd8693e9c81d5573f69b89d69cce472348c5928f37965032d63c0064"
+          "sha256": "13d22ee3eff6827ceb290a69d8eb54d06f3b097cd6bd4f349d65ce99850189b6"
         },
         {
           "name": "crs_rules_coreruleset_v4.27.0.json",
@@ -775,7 +783,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.27.0/manifest.json",
-          "sha256": "5c7740e967851cef7dcf5fba880f86ec33c56256cee20f5f0bd2da6004f89afa"
+          "sha256": "cb4c70e6d765ecd8a1ed13ec63d464f46221e26b68c6d29cb37a0dd86ae14152"
         }
       ]
     },
@@ -793,7 +801,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -802,20 +811,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.26.0/SHA256SUMS",
-          "sha256": "bbd801787a039860dc6e7d37b5cece6617561bd58fe81d5cdd923867ff21caa9"
+          "sha256": "97cb00427a325664d2aabb18391fff926c87a8ee96423cb165c5eeb73a043034"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.26.0/SHA256SUMS.asc",
-          "sha256": "13b9db4a548322856e956150aa173362f0741c487ce3a60456cf1d20d84727aa"
+          "sha256": "5b1899fac91411d4f8ed097a6175d5355cc45adbd1e48e9a835b95abc07f963e"
         },
         {
           "name": "crs-bundle-v4.26.0.tar.gz",
@@ -827,7 +837,7 @@
           "name": "crs_impact_v4.26.0.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.26.0/crs_impact_v4.26.0.json",
-          "sha256": "8e6d090efb9c4edbe0af82b8cf7f6a154b5554534849a3cfe0e1498a8f7d3af4"
+          "sha256": "97452e2ed677c1a6086a3b930b95559e17fa561dc0feba512e47669cf2a14d03"
         },
         {
           "name": "crs_rules_coreruleset_v4.26.0.json",
@@ -845,7 +855,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.26.0/manifest.json",
-          "sha256": "f425eb3618a40e0a138e6831b31c254889dd9c525e828cf58626abd3a28dbbc7"
+          "sha256": "af86c06a74c3bd7f8ede9080c543e62c9eca86a946a258111fbdf74edf91386c"
         }
       ]
     },
@@ -863,7 +873,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -872,20 +883,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.2/SHA256SUMS",
-          "sha256": "58c134fc09ce14ab5858f946ada9ec4daca9062ef8ff2d9c35ea9cfef86cac16"
+          "sha256": "ca0ece66da6824d88b594e09e5344193cd6b8e4462813745bdf6b895b5ed03a7"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.2/SHA256SUMS.asc",
-          "sha256": "1319fee0b2aff53f4cf2f1ddcafe5bb1536e4ffa5d4e1e644c46b745cf12c0bc"
+          "sha256": "33a3345f1ce7cfb7988ae69a256bdeb8a9aa9e36c49e0e645f645064e0dc3a70"
         },
         {
           "name": "crs-bundle-v4.25.2.tar.gz",
@@ -897,7 +909,7 @@
           "name": "crs_impact_v4.25.2.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.2/crs_impact_v4.25.2.json",
-          "sha256": "1972e77a645c3885f0d6d36c6933c4082f7741dcf9dbe444ec2fb46f4b5e7217"
+          "sha256": "262a701234fccdb39ff9c9ac7f5e5b5479237bcf3ad14115949d11dbac214389"
         },
         {
           "name": "crs_rules_coreruleset_v4.25.2.json",
@@ -915,7 +927,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.2/manifest.json",
-          "sha256": "bbe3333fd1e2d7abdbf4fb5169350c428785c1e9f2c4edc512cce7c8e35f5f0a"
+          "sha256": "899d79ae834d1f9cba96e6e9c3dfe2ccdb29e0233f9a74c5bde50282802f71be"
         }
       ]
     },
@@ -933,7 +945,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -942,20 +955,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.1/SHA256SUMS",
-          "sha256": "2663475119408fcdfca091e0e6bb29f377fcf686f665ee88fc33efa1f20b935f"
+          "sha256": "d5f294034fff62cf6a796f44c9c6a2b6b283d2b0c4431d8e73db539d6614a6f1"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.1/SHA256SUMS.asc",
-          "sha256": "cfdfed7186dc240abdc5a4eb2f3c6ac42eb8282d6c643ef1b6be800dbbb5bb7b"
+          "sha256": "f2146ccb5996ab68769202641f8f493c585909409ecd2560474178533d3b9477"
         },
         {
           "name": "crs-bundle-v4.25.1.tar.gz",
@@ -967,7 +981,7 @@
           "name": "crs_impact_v4.25.1.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.1/crs_impact_v4.25.1.json",
-          "sha256": "326f81b94b421ff6fe663c9cb191230d7621a5f359dba8a694ee1563ff8589d9"
+          "sha256": "234ed36fa929bc91b38cfebe3becf99d9fe153abf1eacf9e31edbe960bca2351"
         },
         {
           "name": "crs_rules_coreruleset_v4.25.1.json",
@@ -985,7 +999,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.1/manifest.json",
-          "sha256": "b840da5d17e71c7040f9a4ad3bc69debe67f89e3345dbcda19167296141cc766"
+          "sha256": "5a0eea0a4659d9cf1f6ad91dd12741e7926fe9c99f38ff01ae0da93486b7c874"
         }
       ]
     },
@@ -1003,7 +1017,8 @@
         "v1.2.0",
         "v1.2.1",
         "v1.2.2",
-        "v1.3.0"
+        "v1.3.0",
+        "v1.3.1"
       ],
       "incompatible_shield": [],
       "coraza_tested": {
@@ -1012,20 +1027,21 @@
         "v1.2.0": "v3.8.1",
         "v1.2.1": "v3.8.1",
         "v1.2.2": "v3.8.1",
-        "v1.3.0": "v3.8.1"
+        "v1.3.0": "v3.8.1",
+        "v1.3.1": "v3.8.1"
       },
       "files": [
         {
           "name": "SHA256SUMS",
           "type": "checksums",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.0/SHA256SUMS",
-          "sha256": "78a487a674417ba1b9effc4f029d6af889909b239be089b0c95190caeae93053"
+          "sha256": "76f41b3c97d86f9a8c5535c06a8c3e39a26062cbd3c4ddbbff534ba1cbbe71bf"
         },
         {
           "name": "SHA256SUMS.asc",
           "type": "signature",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.0/SHA256SUMS.asc",
-          "sha256": "2b5a617f5870e8540ccfcff935d26c720a7a87be9d55279aaf2259b9734d5935"
+          "sha256": "e710e8f5b910be91870ad2d3282709438d15c49dc9803724f8039b6c11f59e4b"
         },
         {
           "name": "crs-bundle-v4.25.0.tar.gz",
@@ -1037,7 +1053,7 @@
           "name": "crs_impact_v4.25.0.json",
           "type": "impact",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.0/crs_impact_v4.25.0.json",
-          "sha256": "ffd3dc8d0ae172729fc08e72b473339f7e92acd9a9b450a776864153fdbbd54f"
+          "sha256": "8808bbaade323d5782259d9d61b35ca6bf054cc2c6c78151603dbcf640ccc25e"
         },
         {
           "name": "crs_rules_coreruleset_v4.25.0.json",
@@ -1055,7 +1071,7 @@
           "name": "manifest.json",
           "type": "manifest",
           "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/crs-v4.25.0/manifest.json",
-          "sha256": "843ec1256d6a351b704d21bb3b9713f3055da6caf2b8405934b5d43e22e89480"
+          "sha256": "6718e6649a14b4e0b95db2f1bb9032dce55904360bee824d9dbe522459b42560"
         }
       ]
     }
