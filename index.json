@@ -51,6 +51,32 @@
   ],
   "elchi_client_releases": [
     {
+      "version": "v2.1.6",
+      "date": "2026-11-05T15:25:58Z",
+      "shield_version": "v1.3.2",
+      "files": [
+        {
+          "name": "elchi-client-linux-amd64",
+          "type": "binary",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.6/elchi-client-linux-amd64",
+          "sha256": "9304dba8af58a829c9ca89d37e438f1ca69cbd8563b3cb22059e976b353498ca"
+        },
+        {
+          "name": "elchi-install.sh",
+          "type": "script",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.6/elchi-install.sh",
+          "sha256": "978da9cfecf50bf0a7b0eace9b6fa33bb0671a933dfbcf1618a18bf8d7675f33"
+        },
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield v1.3.2 (Envoy ext_proc WAF sidecar) bundled with this client release",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.6/elchi-shield-linux-amd64",
+          "sha256": "2c2aefce5c3e55e0b10ac51ce1adfa555c6452eb6f09ccb42ce5f9659525563a"
+        }
+      ]
+    },
+    {
       "version": "v2.1.5",
       "date": "2026-11-04T09:42:42Z",
       "shield_version": "v1.3.1",
@@ -295,6 +321,19 @@
     }
   ],
   "elchi_shield_releases": [
+    {
+      "version": "v1.3.2",
+      "date": "2026-11-05T15:25:58Z",
+      "files": [
+        {
+          "name": "elchi-shield-linux-amd64",
+          "type": "binary",
+          "description": "elchi-shield (Envoy ext_proc API-security / WAF sidecar) bundled with Elchi Client v2.1.6",
+          "download_url": "https://github.com/CloudNativeWorks/elchi-archive/releases/download/elchi-client-v2.1.6/elchi-shield-linux-amd64",
+          "sha256": "2c2aefce5c3e55e0b10ac51ce1adfa555c6452eb6f09ccb42ce5f9659525563a"
+        }
+      ]
+    },
     {
       "version": "v1.3.1",
       "date": "2026-11-04T09:42:42Z",
