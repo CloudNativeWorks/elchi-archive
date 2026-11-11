@@ -232,6 +232,9 @@ EOF
 
     MAIN_ADDRESS="$1"
     PORT="$2"
+    # The gateway's TLS listener gets one of the two extra ports kind maps to
+    # the host (30001/30002), so https://<mainAddress>:<port> works too.
+    if [ "$PORT" = "30001" ]; then HTTPS_PORT=30002; else HTTPS_PORT=30001; fi
 
     # Validate port number
     if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
@@ -600,8 +603,8 @@ install_elchi_stack() {
         --set-string global.mainAddress="$MAIN_ADDRESS" \
         --set-string global.port="$PORT" \
         --set global.envoy.service.httpNodePort="$PORT" \
-        --set-string mongodb.persistence.storageClass="standard" \
-        --set-string victoriametrics.persistence.storageClass="standard" || error_exit "Failed to install Elchi stack"
+        --set global.envoy.service.httpsNodePort="$HTTPS_PORT" \
+        --set-string global.storageClass="standard" || error_exit "Failed to install Elchi stack"
 
     log_success "Elchi stack installation initiated"
     log_info "Helm chart deployed. Pods are starting in the background..."
@@ -651,6 +654,8 @@ print_summary() {
     echo "  Main Address:       ${MAIN_ADDRESS}"
     echo "  Port:               ${PORT}"
     echo "  Access URL:         http://${MAIN_ADDRESS}:${PORT}"
+    echo "  HTTPS (self-signed): https://${MAIN_ADDRESS}:${HTTPS_PORT}"
+    echo "  elchi-client:       --host=${MAIN_ADDRESS} --port=${PORT} --tls=false"
     echo ""
     echo -e "${COLOR_CYAN}Useful Commands:${COLOR_RESET}"
     echo "  # View all resources"
@@ -668,8 +673,8 @@ print_summary() {
     echo "  # List Helm releases"
     echo "  helm list -n ${CLUSTER_NAMESPACE}"
     echo ""
-    echo "  # Port forward (if needed)"
-    echo "  kubectl port-forward -n ${CLUSTER_NAMESPACE} svc/elchi-service ${PORT}:${PORT}"
+    echo "  # Port forward (if needed), then open http://localhost:8080"
+    echo "  kubectl port-forward -n ${CLUSTER_NAMESPACE} svc/envoy-service 8080:8080"
     echo ""
     echo "  # Delete cluster"
     echo "  kind delete cluster --name ${CLUSTER_NAME}"
@@ -677,7 +682,7 @@ print_summary() {
     echo -e "${COLOR_CYAN}Next Steps:${COLOR_RESET}"
     echo -e "  1. Access Elchi UI at: ${COLOR_GREEN}http://${MAIN_ADDRESS}:${PORT}${COLOR_RESET}"
     echo "  2. Configure your proxies through the web interface"
-    echo "  3. Monitor logs: kubectl logs -n ${CLUSTER_NAMESPACE} -l app=elchi --tail=100 -f"
+    echo "  3. Monitor logs: kubectl logs -n ${CLUSTER_NAMESPACE} -l app.kubernetes.io/name=elchi --tail=100 -f"
     echo ""
     echo -e "${COLOR_YELLOW}Note:${COLOR_RESET} If you added your user to the docker group, you may need to"
     echo "      log out and back in for the changes to take effect."

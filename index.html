@@ -2534,10 +2534,10 @@ sudo chmod +x /usr/local/bin/elchi-client</div>
             }
 
             document.getElementById('install-command').textContent =
-                `curl -fsSL ${installFile.download_url} | bash -s -- <mainAddress> <port>`;
+                `curl -fsSL ${installFile.download_url} | bash -s -- <mainAddress> <port: 30000-32767>`;
 
             document.getElementById('install-example').textContent =
-                `curl -fsSL ${installFile.download_url} | bash -s -- elchi.example.com 8080`;
+                `curl -fsSL ${installFile.download_url} | bash -s -- elchi.example.com 30080`;
 
             let downloadHtml = `
                 <a href="${installFile.download_url}" download style="display: inline-block; background: #238636; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; margin-right: 8px;">
